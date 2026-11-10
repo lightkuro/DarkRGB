@@ -14,9 +14,10 @@ controllers.
 
 ## Status
 
-Version 0.1.0, in development. The first mode, audio-reactive, works end to end against simulated devices and
-has been tested on Linux only. It has not yet been run on Windows or against real WLED hardware; see
-[docs/roadmap.md](docs/roadmap.md) for what is proven and what is not. Live and timeline modes are not started.
+Version 0.1.0, in development. The first mode, audio-reactive, works end to end against simulated devices on
+Linux. The automated tests also pass on Windows, but nobody has run the app there yet, and it has never driven
+real WLED hardware; see [docs/roadmap.md](docs/roadmap.md) for what is proven and what is not. Live and
+timeline modes are not started.
 
 What works today:
 

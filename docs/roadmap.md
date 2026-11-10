@@ -11,7 +11,7 @@ The plan rests on a few assumptions. Each has a check; the app's own diagnostics
 | Check | Done when | Status on 2026-11-10 |
 |---|---|---|
 | System audio on Linux | Live levels from whatever is playing, with no setup, following the default output | Passed in a container with virtual outputs, on PulseAudio 16.1 and PipeWire 1.0.5: all audio received, a burst detected within about 30 ms, default-output changes followed. Not yet run on a desktop with real speakers. |
-| System audio on Windows | The same, through WASAPI loopback | Code written and compiles for Windows. **Not run.** `openlightshow audio-test` |
+| System audio on Windows | The same, through WASAPI loopback | Code written. The automated tests pass on Windows in CI, but that machine has no sound device, so capture itself is **not run.** `openlightshow audio-test` |
 | DDP to a real WLED | 60 fps to a physical ESP32 for 10 minutes without visible stutter, on WiFi and on Ethernet | Passed against the simulator (60 fps, under 1 ms jitter on one machine). **Not run on hardware.** `openlightshow ddp-test IP` |
 | Preview speed in WebKitGTK | 10,000 points at 30 fps or better in a Linux webview | **Not run.** Chromium shows 466 points at 60 fps with software rendering. |
 | Key handling | Key down and up arrive reliably in the webview, several keys held | **Not run.** Belongs to live mode. |
@@ -34,8 +34,9 @@ Built:
 Left before 0.1 is done:
 
 - Run the hardware checks above and fix what they find.
-- Tune the effects and the audio levelling against real music and real LEDs. So far they have only met a
-  synthetic test song.
+- Tune the effects and the audio levelling against real music and real LEDs. So far they have only met
+  synthetic test songs. `cargo run --release -p ols-audio --example spread` prints how much each audio feature
+  moves, which is the number to watch.
 - Desktop window (Tauri) and installers. Today the UI opens in the browser.
 - Warn when a WLED setting fights the stream (its own brightness or gamma on realtime data).
 - Rename fixtures in the UI (devices can be renamed); split one device into several fixtures.

@@ -1,9 +1,12 @@
 name: CI
 
+# Changes that only touch documentation do not start a build.
 on:
   push:
     branches: [main, "claude/**"]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   workflow_dispatch:
 
 # A newer push to the same branch replaces the run in progress.
