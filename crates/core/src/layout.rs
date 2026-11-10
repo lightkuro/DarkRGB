@@ -7,12 +7,30 @@ use serde::{Deserialize, Serialize};
 /// claiming billions cannot exhaust memory.
 pub const MAX_PIXELS: u32 = 100_000;
 
-/// Something on the network that receives pixel data.
+/// What a device is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    /// A WLED controller on the network.
+    #[default]
+    Wled,
+    /// Exists only in the preview. Nothing is ever sent for it. Used for
+    /// the demo lights and for planning a layout before owning hardware.
+    Virtual,
+}
+
+/// Something that shows pixels: a controller on the network, or a
+/// virtual light that exists only in the preview.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Device {
     pub id: u32,
     pub name: String,
-    /// IP address or host name.
+    #[serde(default)]
+    pub kind: DeviceKind,
+    /// True for the built-in demo lights, so they can be removed as a set.
+    #[serde(default)]
+    pub demo: bool,
+    /// IP address or host name. Empty for a virtual light.
     pub address: String,
     /// UDP port for DDP. Real WLED devices always use 4048.
     #[serde(default = "default_ddp_port")]
@@ -33,6 +51,40 @@ pub struct Device {
     /// Firmware version reported by the device, for display.
     #[serde(default)]
     pub version: Option<String>,
+}
+
+impl Device {
+    /// A WLED device with default settings. `id` is assigned when the
+    /// device is added to a show.
+    pub fn wled(name: &str, address: &str, port: u16, pixel_count: u32) -> Self {
+        Self {
+            id: 0,
+            name: name.to_string(),
+            kind: DeviceKind::Wled,
+            demo: false,
+            address: address.to_string(),
+            port,
+            pixel_count,
+            enabled: true,
+            gamma: default_gamma(),
+            brightness: 1.0,
+            mac: None,
+            version: None,
+        }
+    }
+
+    /// A light that exists only in the preview.
+    pub fn virtual_light(name: &str, pixel_count: u32) -> Self {
+        Self {
+            kind: DeviceKind::Virtual,
+            ..Self::wled(name, "", default_ddp_port(), pixel_count)
+        }
+    }
+
+    /// Whether frames should be sent over the network for this device.
+    pub fn sends(&self) -> bool {
+        self.kind == DeviceKind::Wled && self.enabled
+    }
 }
 
 pub fn default_ddp_port() -> u16 {

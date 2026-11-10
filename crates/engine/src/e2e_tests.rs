@@ -61,7 +61,7 @@ fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
 }
 
 /// Replaces the default layer with a solid colour, which is easy to check.
-fn make_solid(shared: &Shared, colour: &str) {
+fn make_solid(shared: &Arc<Shared>, colour: &str) {
     let layer = shared.show.lock().unwrap().layers[0].id;
     shared
         .execute(&Command::UpdateLayer {
@@ -374,4 +374,84 @@ async fn a_web_page_from_another_site_is_refused() {
         .headers_mut()
         .insert("Origin", format!("http://127.0.0.1:{port}").parse().unwrap());
     assert!(tokio_tungstenite::connect_async(request).await.is_ok());
+}
+
+#[test]
+fn a_scan_finds_devices_that_answer_and_skips_the_rest() {
+    use std::net::Ipv4Addr;
+    use std::sync::Mutex;
+
+    let sim = Sim::start(SimConfig {
+        name: "Found by scan".into(),
+        leds: 42,
+        ..SimConfig::default()
+    })
+    .unwrap();
+    let found = Arc::new(Mutex::new(Vec::new()));
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let (f, p) = (found.clone(), progress.clone());
+    // 127.0.0.1 answers on the simulator's port; 127.0.0.2 has nothing there.
+    darkrgb_output::scan::scan_hosts(
+        vec![Ipv4Addr::new(127, 0, 0, 2), Ipv4Addr::LOCALHOST],
+        sim.http_port,
+        Duration::from_millis(800),
+        move |ip, info| f.lock().unwrap().push((ip, info.name, info.led_count)),
+        move |done| p.lock().unwrap().push(done),
+    );
+    assert_eq!(
+        *found.lock().unwrap(),
+        [(Ipv4Addr::LOCALHOST, "Found by scan".to_string(), 42)]
+    );
+    let mut progress = progress.lock().unwrap().clone();
+    progress.sort_unstable();
+    assert_eq!(progress, [1, 2]);
+}
+
+#[test]
+fn a_scan_is_refused_outside_local_networks_and_while_one_runs() {
+    let engine = Engine::start();
+    let scan = |prefix: &str| engine.shared.execute(&Command::ScanNetwork { prefix: prefix.into() });
+    assert!(scan("8.8.8.").unwrap_err().contains("only local networks"));
+    assert!(scan("nonsense").is_err());
+    assert!(!engine.shared.scan.lock().unwrap().running);
+    // A link-local network nobody is on: starts, and a second one is refused meanwhile.
+    scan("169.254.77.").unwrap();
+    {
+        let status = engine.shared.scan.lock().unwrap().clone();
+        assert!(status.running);
+        assert_eq!((status.prefix.as_str(), status.total), ("169.254.77.", 254));
+    }
+    assert!(scan("169.254.78.").unwrap_err().contains("already running"));
+    wait_for("the scan to finish", || !engine.shared.scan.lock().unwrap().running);
+    assert_eq!(engine.shared.scan.lock().unwrap().done, 254);
+}
+
+#[test]
+fn demo_lights_are_previewed_but_never_sent_anywhere() {
+    let sim = Sim::start(SimConfig {
+        leds: 10,
+        ..SimConfig::default()
+    })
+    .unwrap();
+    let engine = Engine::start();
+    engine.shared.execute(&Command::SetDemo { enabled: true }).unwrap();
+    engine
+        .shared
+        .execute(&Command::AddDevice {
+            address: format!("127.0.0.1:{}", sim.http_port),
+        })
+        .unwrap();
+    wait_for("frames at the real device", || sim.stats().frames > 10);
+    // The real device gets its ten LEDs and nothing more.
+    assert_eq!(sim.stats().rejected, 0);
+    wait_for("send statistics", || {
+        !engine.shared.stats.lock().unwrap().devices.is_empty()
+    });
+    let stats = engine.shared.stats.lock().unwrap().clone();
+    let show = engine.shared.show.lock().unwrap().clone();
+    assert_eq!(show.devices.len(), 4);
+    // Only the real device has send statistics at all.
+    let real = show.devices.iter().find(|d| !d.demo).unwrap().id;
+    assert_eq!(stats.devices.keys().copied().collect::<Vec<_>>(), [real]);
+    assert_eq!(show.pixel_count(), 120 + 90 + 256 + 10);
 }

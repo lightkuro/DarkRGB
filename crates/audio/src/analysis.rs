@@ -18,16 +18,10 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use darkrgb_core::audio::{BAND_MAX_HZ, band_edge_hz, group_of_band};
 use darkrgb_core::{AudioFeatures, BANDS};
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
-
-/// Lowest and highest frequencies covered by the bands, in Hz.
-const BAND_MIN_HZ: f32 = 40.0;
-const BAND_MAX_HZ: f32 = 16_000.0;
-/// Bands centred below this are "bass", above the next are "treble".
-const BASS_MAX_HZ: f32 = 250.0;
-const TREBLE_MIN_HZ: f32 = 2_500.0;
 
 /// A band this far below its own recent peak shows as zero, at most.
 const BAND_RANGE_DB: f32 = 24.0;
@@ -37,6 +31,9 @@ const BAND_RANGE_DB: f32 = 24.0;
 const MIN_RANGE_DB: f32 = 9.0;
 /// Seconds for the quiet end of the range to drift up to a sustained level.
 const FLOOR_RISE_S: f32 = 3.0;
+/// A group quieter than this, relative to the loudest group (-22 dB), is
+/// treated as spill when looking for hits in it.
+const GROUP_SPILL: f32 = 0.08;
 /// A band is never levelled up by more than this relative to the loudest
 /// band (30 dB), so bands holding only noise stay dark.
 const BAND_FLOOR: f32 = 0.03;
@@ -82,6 +79,8 @@ pub struct Analyzer {
     /// The same pair for bass, mid and treble as whole groups.
     group_peaks: [f32; 3],
     group_floors: [f32; 3],
+    prev_group_log: [f32; 3],
+    prev_group_rise: [f32; 3],
     level_ref: f32,
     level_floor: f32,
     prev_log: [f32; BANDS],
@@ -90,8 +89,11 @@ pub struct Analyzer {
     prev_log_natural: [f32; BANDS],
     quiet_steps: usize,
 
-    flux_history: VecDeque<f32>,
-    steps_since_onset: usize,
+    /// Finds hits in the whole spectrum.
+    onsets: OnsetDetector,
+    /// Finds hits in the bass, the mids and the treble separately, so a
+    /// layer that listens only to highs can flash on hi-hats alone.
+    group_onsets: [OnsetDetector; 3],
     /// How many steps ago each recent onset happened is derived from this
     /// running step counter.
     step_index: u64,
@@ -111,14 +113,6 @@ pub struct Analyzer {
     out: AudioFeatures,
 }
 
-fn hz_to_mel(hz: f32) -> f32 {
-    2595.0 * (1.0 + hz / 700.0).log10()
-}
-
-fn mel_to_hz(mel: f32) -> f32 {
-    700.0 * (10f32.powf(mel / 2595.0) - 1.0)
-}
-
 impl Analyzer {
     pub fn new(sample_rate: u32) -> Self {
         let sample_rate = sample_rate.max(8_000) as f32;
@@ -135,8 +129,7 @@ impl Analyzer {
 
         let nyquist = sample_rate / 2.0;
         let top = BAND_MAX_HZ.min(nyquist * 0.95);
-        let (mel_lo, mel_hi) = (hz_to_mel(BAND_MIN_HZ), hz_to_mel(top));
-        let edge_hz = |i: usize| mel_to_hz(mel_lo + (mel_hi - mel_lo) * i as f32 / BANDS as f32);
+        let edge_hz = |i: usize| band_edge_hz(i, top);
         let hz_per_bin = sample_rate / n as f32;
         let mut band_bins = [(0usize, 0usize); BANDS];
         let mut band_class = [1u8; BANDS];
@@ -144,14 +137,7 @@ impl Analyzer {
             let lo = ((edge_hz(b) / hz_per_bin).round() as usize).clamp(1, n / 2 - 1);
             let hi = ((edge_hz(b + 1) / hz_per_bin).round() as usize).clamp(lo + 1, n / 2);
             band_bins[b] = (lo, hi);
-            let centre = (edge_hz(b) + edge_hz(b + 1)) / 2.0;
-            band_class[b] = if centre < BASS_MAX_HZ {
-                0
-            } else if centre > TREBLE_MIN_HZ {
-                2
-            } else {
-                1
-            };
+            band_class[b] = group_of_band(b) as u8;
         }
 
         Self {
@@ -173,13 +159,15 @@ impl Analyzer {
             band_floors: [0.0; BANDS],
             group_peaks: [0.0; 3],
             group_floors: [0.0; 3],
+            prev_group_log: [0.0; 3],
+            prev_group_rise: [0.0; 3],
             level_ref: MIN_REFERENCE,
             level_floor: 0.0,
             prev_log: [0.0; BANDS],
             prev_log_natural: [0.0; BANDS],
             quiet_steps: usize::MAX / 2,
-            flux_history: VecDeque::new(),
-            steps_since_onset: usize::MAX / 2,
+            onsets: OnsetDetector::new(0.5),
+            group_onsets: [0, 1, 2].map(|_| OnsetDetector::new(0.4)),
             step_index: 0,
             recent_onsets: VecDeque::new(),
             onset_strength: VecDeque::new(),
@@ -332,6 +320,11 @@ impl Analyzer {
             energy[self.band_class[b] as usize] += bands[b] * bands[b];
         }
         let mut groups = [0.0f32; 3];
+        // How far each group's energy rose this step, for hits in that group.
+        let mut group_rise = [0.0f32; 3];
+        // A group whose energy is far below the loudest group's is only
+        // hearing spill from it (a hi-hat's trace of bass, a kick's click).
+        let spill = self.group_peaks.iter().copied().fold(0.0f32, f32::max) * GROUP_SPILL;
         for g in 0..3 {
             let value = energy[g].sqrt();
             let peak = &mut self.group_peaks[g];
@@ -341,6 +334,14 @@ impl Analyzer {
                 *peak * release
             };
             let reference = peak.max(floor);
+            // Hits are measured against the group's own recent peak, so
+            // quiet hi-hats under a loud kick still count, but never
+            // against less than the spill level. Squaring makes anything
+            // well under that count for almost nothing.
+            let relative = value / peak.max(spill).max(1e-9);
+            let log = (1.0 + 10.0 * relative * relative).ln();
+            group_rise[g] = (log - self.prev_group_log[g]).max(0.0);
+            self.prev_group_log[g] = log;
             let quiet = follow_floor(&mut self.group_floors[g], value, self.step_rate, reference);
             let target = if active {
                 (within(value, quiet, reference).powf(1.2) * self.sensitivity).min(1.0)
@@ -354,7 +355,7 @@ impl Analyzer {
         [self.out.bass, self.out.mid, self.out.treble] = groups;
         self.out.active = active;
 
-        let onset = active && self.detect_onset(flux);
+        let onset = self.onsets.step(flux, self.step_rate) && active;
         self.step_index += 1;
         if onset {
             self.recent_onsets.push_back(self.step_index);
@@ -369,6 +370,16 @@ impl Analyzer {
         }
         let fade = (-1.0 / (self.step_rate * 0.10)).exp();
         self.out.onset = if onset { 1.0 } else { self.out.onset * fade };
+        // The index reaches into four arrays at once; a plain range reads best.
+        #[allow(clippy::needless_range_loop)]
+        for g in 0..3 {
+            // A hit takes a few steps to climb through the analysis window,
+            // so judge the rise over two steps, not one.
+            let rise = group_rise[g] + self.prev_group_rise[g];
+            self.prev_group_rise[g] = group_rise[g];
+            let hit = self.group_onsets[g].step(rise, self.step_rate) && active;
+            self.out.onsets[g] = if hit { 1.0 } else { self.out.onsets[g] * fade };
+        }
 
         // Beats are carried mostly by kick and bass, while hi-hats tick on
         // the off-beats too. Weighting the groups keeps a busy hi-hat from
@@ -376,28 +387,6 @@ impl Analyzer {
         let per_band = |g: usize| group_flux[g] / group_size[g].max(1) as f32;
         let rhythm = 2.0 * per_band(0) + per_band(1) + 0.4 * per_band(2);
         self.track_beat(if active { rhythm } else { 0.0 }, onset, fade);
-    }
-
-    /// True when this step's flux stands out from the last second and a
-    /// half, and the previous onset was not a moment ago.
-    fn detect_onset(&mut self, flux: f32) -> bool {
-        let history = (self.step_rate * 1.5) as usize;
-        let n = self.flux_history.len().max(1) as f32;
-        let mean = self.flux_history.iter().sum::<f32>() / n;
-        let var = self.flux_history.iter().map(|f| (f - mean) * (f - mean)).sum::<f32>() / n;
-        self.flux_history.push_back(flux);
-        while self.flux_history.len() > history {
-            self.flux_history.pop_front();
-        }
-        self.steps_since_onset = self.steps_since_onset.saturating_add(1);
-        let threshold = mean + 2.0 * var.sqrt() + 0.5;
-        let rested = self.steps_since_onset as f32 > self.step_rate * 0.06;
-        if flux > threshold && rested {
-            self.steps_since_onset = 0;
-            true
-        } else {
-            false
-        }
     }
 
     fn track_beat(&mut self, strength: f32, onset: bool, fade: f32) {
@@ -584,6 +573,45 @@ impl Analyzer {
             }
         }
         (best.0 as f32 / self.period).rem_euclid(1.0)
+    }
+}
+
+/// Spots the moments when the rise in energy stands out from the last
+/// second and a half, with a short rest after each one.
+struct OnsetDetector {
+    history: VecDeque<f32>,
+    steps_since: usize,
+    /// Smallest rise that can count, so near-silence does not trigger.
+    floor: f32,
+}
+
+impl OnsetDetector {
+    fn new(floor: f32) -> Self {
+        Self {
+            history: VecDeque::new(),
+            steps_since: usize::MAX / 2,
+            floor,
+        }
+    }
+
+    fn step(&mut self, flux: f32, step_rate: f32) -> bool {
+        let keep = (step_rate * 1.5) as usize;
+        let n = self.history.len().max(1) as f32;
+        let mean = self.history.iter().sum::<f32>() / n;
+        let var = self.history.iter().map(|f| (f - mean) * (f - mean)).sum::<f32>() / n;
+        self.history.push_back(flux);
+        while self.history.len() > keep {
+            self.history.pop_front();
+        }
+        self.steps_since = self.steps_since.saturating_add(1);
+        let threshold = mean + 2.0 * var.sqrt() + self.floor;
+        let rested = self.steps_since as f32 > step_rate * 0.06;
+        if flux > threshold && rested {
+            self.steps_since = 0;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -826,6 +854,75 @@ mod tests {
         feed(&mut a, &samples);
         assert_eq!(a.features().beat_count, 3);
         assert_eq!(a.features().bpm, 0.0);
+    }
+
+    /// Counts how often each group's onset fires across a signal.
+    fn count_hits(samples: &[f32]) -> [u32; 3] {
+        let mut a = Analyzer::new(SR);
+        let mut hits = [0u32; 3];
+        let mut armed = [true; 3];
+        for chunk in samples.chunks(256) {
+            a.push(chunk);
+            let f = a.features();
+            for g in 0..3 {
+                if armed[g] && f.onsets[g] > 0.9 {
+                    hits[g] += 1;
+                    armed[g] = false;
+                } else if f.onsets[g] < 0.5 {
+                    armed[g] = true;
+                }
+            }
+        }
+        hits
+    }
+
+    #[test]
+    fn kicks_are_bass_hits_and_hi_hats_are_treble_hits() {
+        let seconds = 6.0;
+        let n = (seconds * SR as f32) as usize;
+        let beat = SR as usize / 2;
+        // Kicks only: a low thump twice a second.
+        let kicks: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = (i % beat) as f32 / SR as f32;
+                0.6 * (std::f32::consts::TAU * 60.0 * t).sin() * (-t * 18.0).exp()
+            })
+            .collect();
+        let [bass, _, treble] = count_hits(&kicks);
+        assert!(
+            (10..=13).contains(&bass),
+            "12 kicks should give about 12 bass hits, got {bass}"
+        );
+        assert!(treble <= 1, "kicks must not count as treble hits, got {treble}");
+        // A much quieter source is heard the same way.
+        let quiet: Vec<f32> = kicks.iter().map(|s| s * 0.02).collect();
+        let [bass, _, treble] = count_hits(&quiet);
+        assert!(
+            (10..=13).contains(&bass),
+            "quiet kicks should still be found, got {bass}"
+        );
+        assert!(treble <= 1, "quiet kicks must not count as treble hits, got {treble}");
+
+        // Hi-hats only: short bursts of high-passed noise, twice a second.
+        let mut noise = 0x1234_5678u32;
+        let mut previous = 0.0f32;
+        let hats: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = (i % beat) as f32 / SR as f32;
+                noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let white = (noise >> 8) as f32 / (1u32 << 23) as f32 - 1.0;
+                // A first difference removes the low end.
+                let high = white - previous;
+                previous = white;
+                0.3 * high * (-t * 90.0).exp()
+            })
+            .collect();
+        let [bass, _, treble] = count_hits(&hats);
+        assert!(
+            (10..=13).contains(&treble),
+            "12 hats should give about 12 treble hits, got {treble}"
+        );
+        assert!(bass <= 1, "hi-hats must not count as bass hits, got {bass}");
     }
 
     #[test]

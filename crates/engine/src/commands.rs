@@ -3,14 +3,16 @@
 
 use darkrgb_core::color;
 use darkrgb_core::effects;
+use darkrgb_core::layout::MAX_PIXELS;
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::show::Blend;
-use darkrgb_core::{Rgb, Shape, Show};
+use darkrgb_core::{Band, Rgb, Shape, Show};
 use serde::Deserialize;
 
 const MAX_NAME: usize = 80;
 const MAX_LAYERS: usize = 32;
 const MAX_SCENES: usize = 200;
+const MAX_DEVICES: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -19,6 +21,20 @@ pub enum Command {
     /// app because it needs the network; see `Shared::execute`.
     AddDevice {
         address: String,
+    },
+    /// Asks every address on a local network whether it is a WLED device.
+    /// Handled by the app, like `AddDevice`.
+    ScanNetwork {
+        prefix: String,
+    },
+    /// Adds or removes the built-in demo lights.
+    SetDemo {
+        enabled: bool,
+    },
+    /// Adds a light that exists only in the preview.
+    AddVirtual {
+        name: String,
+        shape: VirtualShape,
     },
     RemoveDevice {
         id: u32,
@@ -54,6 +70,22 @@ pub enum Command {
         enabled: Option<bool>,
         targets: Option<Vec<u32>>,
     },
+    /// Gives a layer a label. An empty name goes back to the effect's own.
+    RenameLayer {
+        id: u32,
+        name: String,
+    },
+    /// Copies a layer, settings and all, and puts the copy just above it.
+    DuplicateLayer {
+        id: u32,
+    },
+    /// Changes what a layer hears and how strongly it responds.
+    SetSound {
+        layer: u32,
+        band: Option<Band>,
+        gain: Option<f32>,
+        pulse: Option<f32>,
+    },
     /// Moves a layer to a position in the stack; 0 is the bottom.
     MoveLayer {
         id: u32,
@@ -87,6 +119,14 @@ pub enum Command {
     RenameShow {
         name: String,
     },
+}
+
+/// The shape of a virtual light, as the UI's form sends it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VirtualShape {
+    Strip { count: u32 },
+    Matrix { cols: u32, rows: u32 },
 }
 
 fn finite(value: f32, what: &str) -> Result<f32, String> {
@@ -139,7 +179,47 @@ fn checked_param(effect: &str, param: &str, value: &ParamValue) -> Result<ParamV
 /// Applies a command to the show. On error the show is unchanged.
 pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
     match command {
-        Command::AddDevice { .. } => Err("adding a device needs the network".into()),
+        Command::AddDevice { .. } | Command::ScanNetwork { .. } => Err("that command needs the network".into()),
+
+        Command::SetDemo { enabled } => {
+            if *enabled && show.devices.len() + 3 > MAX_DEVICES {
+                return Err(format!("a show can have at most {MAX_DEVICES} devices"));
+            }
+            show.set_demo(*enabled);
+            Ok(())
+        }
+
+        Command::AddVirtual {
+            name: light_name,
+            shape,
+        } => {
+            let light_name = name(light_name, "The name")?;
+            if show.devices.len() >= MAX_DEVICES {
+                return Err(format!("a show can have at most {MAX_DEVICES} devices"));
+            }
+            let shape = match *shape {
+                VirtualShape::Strip { count } if (1..=MAX_PIXELS).contains(&count) => {
+                    Shape::Strip { count, reverse: false }
+                }
+                VirtualShape::Strip { .. } => return Err(format!("a strip needs between 1 and {MAX_PIXELS} LEDs")),
+                VirtualShape::Matrix { cols, rows }
+                    if cols >= 2 && rows >= 2 && cols.checked_mul(rows).is_some_and(|n| n <= MAX_PIXELS) =>
+                {
+                    Shape::Matrix {
+                        cols,
+                        rows,
+                        serpentine: false,
+                    }
+                }
+                VirtualShape::Matrix { .. } => {
+                    return Err(format!(
+                        "a matrix needs at least 2 by 2 LEDs and at most {MAX_PIXELS} in total"
+                    ));
+                }
+            };
+            show.add_virtual(&light_name, &shape, false);
+            Ok(())
+        }
 
         Command::RemoveDevice { id } => {
             if show.device(*id).is_none() {
@@ -298,6 +378,64 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
+        Command::RenameLayer { id, name: label } => {
+            // Empty means "use the effect's name again".
+            let label = if label.trim().is_empty() {
+                None
+            } else {
+                Some(name(label, "The name")?)
+            };
+            show.layer_mut(*id).ok_or("that layer no longer exists")?.name = label;
+            Ok(())
+        }
+
+        Command::DuplicateLayer { id } => {
+            let at = show
+                .layers
+                .iter()
+                .position(|l| l.id == *id)
+                .ok_or("that layer no longer exists")?;
+            if show.layers.len() >= MAX_LAYERS {
+                return Err(format!("a show can have at most {MAX_LAYERS} layers"));
+            }
+            let mut copy = show.layers[at].clone();
+            copy.id = show.alloc_id();
+            show.layers.insert(at + 1, copy);
+            Ok(())
+        }
+
+        Command::SetSound {
+            layer,
+            band,
+            gain,
+            pulse,
+        } => {
+            let gain = gain.map(|g| finite(g, "Sensitivity")).transpose()?;
+            let pulse = pulse.map(|p| finite(p, "Brightness follows sound")).transpose()?;
+            let band = match band {
+                Some(Band::Range { low, high }) => {
+                    let (low, high) = (finite(*low, "The range")?, finite(*high, "The range")?);
+                    let (low, high) = (low.clamp(0.0, 1.0), high.clamp(0.0, 1.0));
+                    Some(Band::Range {
+                        low: low.min(high),
+                        high: low.max(high),
+                    })
+                }
+                other => *other,
+            };
+            let sound = &mut show.layer_mut(*layer).ok_or("that layer no longer exists")?.sound;
+            if let Some(b) = band {
+                sound.band = b;
+            }
+            if let Some(g) = gain {
+                sound.gain = g.clamp(0.25, 4.0);
+            }
+            if let Some(p) = pulse {
+                sound.pulse = p.clamp(0.0, 1.0);
+            }
+            Ok(())
+        }
+
         Command::MoveLayer { id, to } => {
             let from = show
                 .layers
@@ -404,21 +542,7 @@ mod tests {
 
     fn show_with_device() -> Show {
         let mut show = Show::default();
-        show.add_device(
-            Device {
-                id: 0,
-                name: "Strip".into(),
-                address: "127.0.0.1".into(),
-                port: 4048,
-                pixel_count: 30,
-                enabled: true,
-                gamma: 2.2,
-                brightness: 1.0,
-                mac: None,
-                version: None,
-            },
-            None,
-        );
+        show.add_device(Device::wled("Strip", "127.0.0.1", 4048, 30), None);
         show
     }
 
@@ -456,7 +580,7 @@ mod tests {
     #[test]
     fn params_are_checked_against_the_effect() {
         let mut show = show_with_device();
-        let layer = show.add_layer("solid");
+        let layer = show.add_layer("sparkle");
         let set = |show: &mut Show, param: &str, value: ParamValue| {
             apply(
                 show,
@@ -475,9 +599,12 @@ mod tests {
         assert!(set(&mut show, "colour", ParamValue::Text("green".into())).is_err());
         assert!(set(&mut show, "colour", ParamValue::Number(1.0)).is_err());
         assert!(set(&mut show, "no_such", ParamValue::Number(1.0)).is_err());
-        assert!(set(&mut show, "pulse", ParamValue::Number(f32::NAN)).is_err());
-        assert!(set(&mut show, "pulse", ParamValue::Number(50.0)).is_ok());
-        assert_eq!(show.layer_mut(layer).unwrap().params["pulse"], ParamValue::Number(1.0));
+        assert!(set(&mut show, "density", ParamValue::Number(f32::NAN)).is_err());
+        assert!(set(&mut show, "density", ParamValue::Number(50.0)).is_ok());
+        assert_eq!(
+            show.layer_mut(layer).unwrap().params["density"],
+            ParamValue::Number(1.0)
+        );
     }
 
     #[test]
@@ -514,12 +641,12 @@ mod tests {
     #[test]
     fn changing_a_layers_effect_clears_its_settings() {
         let mut show = show_with_device();
-        let layer = show.add_layer("solid");
+        let layer = show.add_layer("flow");
         apply(
             &mut show,
             &Command::SetParam {
                 layer,
-                param: "pulse".into(),
+                param: "speed".into(),
                 value: ParamValue::Number(0.5),
             },
         )
@@ -533,7 +660,7 @@ mod tests {
             targets: None,
         };
         // Same effect: settings stay.
-        apply(&mut show, &update("solid")).unwrap();
+        apply(&mut show, &update("flow")).unwrap();
         assert_eq!(show.layer_mut(layer).unwrap().params.len(), 1);
         apply(&mut show, &update("spectrum")).unwrap();
         assert!(show.layer_mut(layer).unwrap().params.is_empty());
@@ -619,6 +746,148 @@ mod tests {
         apply(&mut show, &rename("Desk 2")).unwrap();
         assert_eq!(show.devices[0].name, "Desk 2");
         assert_eq!(show.fixtures[0].name, "Left half");
+    }
+
+    #[test]
+    fn new_commands_parse_from_what_the_ui_sends() {
+        assert_eq!(
+            parse(r#"{"type":"set_demo","enabled":true}"#),
+            Command::SetDemo { enabled: true }
+        );
+        assert_eq!(
+            parse(r#"{"type":"add_virtual","name":"Ceiling","shape":{"type":"matrix","cols":30,"rows":10}}"#),
+            Command::AddVirtual {
+                name: "Ceiling".into(),
+                shape: VirtualShape::Matrix { cols: 30, rows: 10 }
+            }
+        );
+        assert_eq!(
+            parse(r#"{"type":"set_sound","layer":4,"band":{"type":"treble"}}"#),
+            Command::SetSound {
+                layer: 4,
+                band: Some(Band::Treble),
+                gain: None,
+                pulse: None
+            }
+        );
+        assert_eq!(
+            parse(r#"{"type":"set_sound","layer":4,"band":{"type":"range","low":0.2,"high":0.6},"gain":2}"#),
+            Command::SetSound {
+                layer: 4,
+                band: Some(Band::Range { low: 0.2, high: 0.6 }),
+                gain: Some(2.0),
+                pulse: None
+            }
+        );
+        assert_eq!(
+            parse(r#"{"type":"scan_network","prefix":"192.168.1."}"#),
+            Command::ScanNetwork {
+                prefix: "192.168.1.".into()
+            }
+        );
+    }
+
+    #[test]
+    fn virtual_lights_are_checked_for_size() {
+        let mut show = Show::default();
+        let add = |show: &mut Show, shape| {
+            apply(
+                show,
+                &Command::AddVirtual {
+                    name: "Plan".into(),
+                    shape,
+                },
+            )
+        };
+        assert!(add(&mut show, VirtualShape::Strip { count: 60 }).is_ok());
+        assert!(add(&mut show, VirtualShape::Matrix { cols: 32, rows: 8 }).is_ok());
+        assert!(add(&mut show, VirtualShape::Strip { count: 0 }).is_err());
+        assert!(add(&mut show, VirtualShape::Strip { count: MAX_PIXELS + 1 }).is_err());
+        assert!(add(&mut show, VirtualShape::Matrix { cols: 1, rows: 50 }).is_err());
+        assert!(
+            add(
+                &mut show,
+                VirtualShape::Matrix {
+                    cols: 70_000,
+                    rows: 70_000
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(show.devices.len(), 2);
+        assert!(show.devices.iter().all(|d| !d.sends() && !d.demo));
+        assert!(show.validate().is_ok());
+    }
+
+    #[test]
+    fn demo_lights_switch_on_and_off() {
+        let mut show = show_with_device();
+        apply(&mut show, &Command::SetDemo { enabled: true }).unwrap();
+        assert_eq!(show.devices.iter().filter(|d| d.demo).count(), 3);
+        apply(&mut show, &Command::SetDemo { enabled: false }).unwrap();
+        assert_eq!(show.devices.len(), 1);
+    }
+
+    #[test]
+    fn sound_settings_are_clamped_and_ranges_put_in_order() {
+        let mut show = show_with_device();
+        let layer = show.layers[0].id;
+        apply(
+            &mut show,
+            &Command::SetSound {
+                layer,
+                band: Some(Band::Range { low: 0.9, high: -3.0 }),
+                gain: Some(100.0),
+                pulse: Some(7.0),
+            },
+        )
+        .unwrap();
+        let sound = show.layers[0].sound;
+        assert_eq!(sound.band, Band::Range { low: 0.0, high: 0.9 });
+        assert_eq!((sound.gain, sound.pulse), (4.0, 1.0));
+        let before = show.clone();
+        let bad = Command::SetSound {
+            layer,
+            band: Some(Band::Range {
+                low: f32::NAN,
+                high: 1.0,
+            }),
+            gain: Some(1.0),
+            pulse: None,
+        };
+        assert!(apply(&mut show.clone(), &bad).is_err());
+        assert_eq!(show, before);
+    }
+
+    #[test]
+    fn layers_can_be_named_and_duplicated() {
+        let mut show = show_with_device();
+        let first = show.layers[0].id;
+        let top = show.add_layer("solid");
+        apply(
+            &mut show,
+            &Command::RenameLayer {
+                id: first,
+                name: "  Wash  ".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(show.layers[0].name.as_deref(), Some("Wash"));
+        apply(&mut show, &Command::DuplicateLayer { id: first }).unwrap();
+        // The copy sits just above the original and has its own id.
+        assert_eq!(show.layers.len(), 3);
+        assert_eq!(show.layers[1].name.as_deref(), Some("Wash"));
+        assert_ne!(show.layers[1].id, first);
+        assert_eq!(show.layers[2].id, top);
+        apply(
+            &mut show,
+            &Command::RenameLayer {
+                id: first,
+                name: " ".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(show.layers[0].name, None);
     }
 
     #[test]
@@ -739,7 +1008,41 @@ mod tests {
             let device = r.id(show.devices.iter().map(|d| d.id).collect());
             let fixture = r.id(show.fixtures.iter().map(|f| f.id).collect());
             let scene = r.id(show.scenes.iter().map(|s| s.id).collect());
-            let command = match r.next() % 15 {
+            let command = match r.next() % 20 {
+                15 => Command::SetDemo { enabled: r.flag() },
+                16 => Command::AddVirtual {
+                    name: r.text(),
+                    shape: if r.flag() {
+                        VirtualShape::Strip {
+                            count: [0, 1, 30, 100_000, 100_001, u32::MAX][r.next() as usize % 6],
+                        }
+                    } else {
+                        VirtualShape::Matrix {
+                            cols: [0, 1, 2, 16, 70_000, u32::MAX][r.next() as usize % 6],
+                            rows: [0, 1, 2, 16, 70_000, u32::MAX][r.next() as usize % 6],
+                        }
+                    },
+                },
+                17 => Command::RenameLayer {
+                    id: layer,
+                    name: r.text(),
+                },
+                18 => Command::DuplicateLayer { id: layer },
+                19 => Command::SetSound {
+                    layer,
+                    band: r.maybe(|r| match r.next() % 5 {
+                        0 => Band::All,
+                        1 => Band::Bass,
+                        2 => Band::Mid,
+                        3 => Band::Treble,
+                        _ => Band::Range {
+                            low: r.number(),
+                            high: r.number(),
+                        },
+                    }),
+                    gain: r.maybe(Awkward::number),
+                    pulse: r.maybe(Awkward::number),
+                },
                 0 => Command::UpdateDevice {
                     id: device,
                     name: r.maybe(Awkward::text),

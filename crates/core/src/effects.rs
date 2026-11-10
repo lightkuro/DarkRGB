@@ -3,7 +3,9 @@
 use std::sync::OnceLock;
 
 use crate::color::{Palette, Rgb, palette};
-use crate::effect::{Effect, EffectDef, EffectInfo, FrameCtx, hash2, smoothstep};
+use crate::effect::{
+    AMBIENT, Effect, EffectDef, EffectInfo, FOLLOWS_SOUND, FrameCtx, HITS_AND_BEATS, hash2, smoothstep,
+};
 use crate::params::{ParamReader, ParamSpec};
 
 /// The effect a new show starts with. It moves without sound, so a first
@@ -32,14 +34,6 @@ pub fn find(id: &str) -> Option<&'static EffectDef> {
     registry().iter().find(|d| d.info.id == id)
 }
 
-fn sensitivity() -> ParamSpec {
-    ParamSpec::float("sensitivity", "Sensitivity", 0.2, 3.0, 1.0)
-}
-
-fn boosted(v: f32, sensitivity: f32) -> f32 {
-    (v * sensitivity).clamp(0.0, 1.0)
-}
-
 // ---------------------------------------------------------------- Plasma
 
 struct Plasma {
@@ -58,12 +52,13 @@ impl Plasma {
                 id: "plasma",
                 name: "Plasma",
                 description: "Slow drifting colour that brightens and speeds up with the music.",
+                category: AMBIENT,
                 audio: true,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("speed", "Speed", 0.0, 2.0, 0.5),
-                    ParamSpec::float("scale", "Detail", 0.3, 4.0, 1.2),
-                    ParamSpec::float("react", "React to sound", 0.0, 1.0, 0.6),
+                    ParamSpec::float("scale", "Detail", 0.3, 4.0, 1.2).advanced(),
+                    ParamSpec::float("react", "React to sound", 0.0, 1.0, 0.6).advanced(),
                 ],
             },
             make: || {
@@ -114,7 +109,6 @@ impl Effect for Plasma {
 
 struct Spectrum {
     palette: &'static Palette,
-    sensitivity: f32,
     mirror: bool,
 }
 
@@ -125,17 +119,16 @@ impl Spectrum {
                 id: "spectrum",
                 name: "Spectrum",
                 description: "Bass on one side, treble on the other. Bars on a matrix, brightness on a strip.",
+                category: FOLLOWS_SOUND,
                 audio: true,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "rainbow"),
-                    sensitivity(),
-                    ParamSpec::bool("mirror", "Mirror from centre", false),
+                    ParamSpec::bool("mirror", "Mirror from centre", false).advanced(),
                 ],
             },
             make: || {
                 Box::new(Spectrum {
                     palette: palette("rainbow"),
-                    sensitivity: 1.0,
                     mirror: false,
                 })
             },
@@ -146,13 +139,12 @@ impl Spectrum {
 impl Effect for Spectrum {
     fn configure(&mut self, p: &ParamReader) {
         self.palette = p.palette("palette");
-        self.sensitivity = p.float("sensitivity");
         self.mirror = p.bool("mirror");
     }
 
     fn shade(&self, x: f32, y: f32, ctx: &FrameCtx) -> Rgb {
         let t = if self.mirror { (x - 0.5).abs() * 2.0 } else { x };
-        let v = boosted(ctx.audio.band_at(t), self.sensitivity);
+        let v = ctx.audio.band_at(t).clamp(0.0, 1.0);
         // Stop short of the palette's end so a cyclic one does not wrap.
         let colour = self.palette.sample(t * 0.85);
         if ctx.flat {
@@ -171,7 +163,6 @@ struct Energy {
     low: Rgb,
     mid: Rgb,
     high: Rgb,
-    sensitivity: f32,
     soft: f32,
 }
 
@@ -182,13 +173,13 @@ impl Energy {
                 id: "energy",
                 name: "Energy",
                 description: "Three colours grow from the centre: one each for bass, mids and treble.",
+                category: FOLLOWS_SOUND,
                 audio: true,
                 params: vec![
                     ParamSpec::color("low", "Bass colour", "#ff2a2a"),
                     ParamSpec::color("mid", "Mid colour", "#22ff66"),
                     ParamSpec::color("high", "Treble colour", "#3a6bff"),
-                    sensitivity(),
-                    ParamSpec::float("soft", "Soft edges", 0.0, 1.0, 0.3),
+                    ParamSpec::float("soft", "Soft edges", 0.0, 1.0, 0.3).advanced(),
                 ],
             },
             make: || {
@@ -196,7 +187,6 @@ impl Energy {
                     low: Rgb::WHITE,
                     mid: Rgb::WHITE,
                     high: Rgb::WHITE,
-                    sensitivity: 1.0,
                     soft: 0.3,
                 })
             },
@@ -209,7 +199,6 @@ impl Effect for Energy {
         self.low = p.color("low");
         self.mid = p.color("mid");
         self.high = p.color("high");
-        self.sensitivity = p.float("sensitivity");
         self.soft = p.float("soft");
     }
 
@@ -217,7 +206,7 @@ impl Effect for Energy {
         let r = ctx.radius(x, y);
         let edge = 0.02 + self.soft * 0.4;
         let blob = |v: f32| {
-            let v = boosted(v, self.sensitivity);
+            let v = v.clamp(0.0, 1.0);
             smoothstep(v, v - edge, r) * (0.4 + 0.6 * v)
         };
         let a = &ctx.audio;
@@ -248,12 +237,13 @@ impl BeatPulse {
                 id: "beat_pulse",
                 name: "Beat pulse",
                 description: "Flashes a new colour on every beat, then fades.",
+                category: HITS_AND_BEATS,
                 audio: true,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "candy"),
                     ParamSpec::float("decay", "Fade time (s)", 0.05, 1.5, 0.35),
-                    ParamSpec::float("floor", "Resting brightness", 0.0, 0.5, 0.04),
-                    ParamSpec::choice("trigger", "Flash on", &["Beat", "Any hit"]),
+                    ParamSpec::float("floor", "Resting brightness", 0.0, 0.5, 0.04).advanced(),
+                    ParamSpec::choice("trigger", "Flash on", &["Beat", "Any hit"]).advanced(),
                 ],
             },
             make: || {
@@ -321,7 +311,6 @@ struct Scroll {
     high: Rgb,
     speed: f32,
     origin: usize,
-    sensitivity: f32,
     history: Vec<Rgb>,
     head: usize,
     pending: f32,
@@ -335,14 +324,14 @@ impl Scroll {
                 id: "scroll",
                 name: "Scroll",
                 description: "The sound's colour is fed in at one point and travels along the lights.",
+                category: FOLLOWS_SOUND,
                 audio: true,
                 params: vec![
                     ParamSpec::color("low", "Bass colour", "#ff3d2e"),
                     ParamSpec::color("mid", "Mid colour", "#2eff8a"),
                     ParamSpec::color("high", "Treble colour", "#3d7bff"),
                     ParamSpec::float("speed", "Speed", 0.1, 3.0, 1.0),
-                    ParamSpec::choice("origin", "Starts at", &["Centre", "Left", "Right"]),
-                    sensitivity(),
+                    ParamSpec::choice("origin", "Starts at", &["Centre", "Left", "Right"]).advanced(),
                 ],
             },
             make: || {
@@ -352,7 +341,6 @@ impl Scroll {
                     high: Rgb::WHITE,
                     speed: 1.0,
                     origin: 0,
-                    sensitivity: 1.0,
                     history: vec![Rgb::BLACK; SCROLL_LEN],
                     head: 0,
                     pending: 0.0,
@@ -370,17 +358,15 @@ impl Effect for Scroll {
         self.high = p.color("high");
         self.speed = p.float("speed");
         self.origin = p.choice("origin");
-        self.sensitivity = p.float("sensitivity");
     }
 
     fn update(&mut self, ctx: &FrameCtx) {
         let a = &ctx.audio;
-        let s = self.sensitivity;
         let now = self
             .low
-            .scale(boosted(a.bass, s).powi(2))
-            .add(self.mid.scale(boosted(a.mid, s).powi(2)))
-            .add(self.high.scale(boosted(a.treble, s).powi(2)))
+            .scale(a.bass.clamp(0.0, 1.0).powi(2))
+            .add(self.mid.scale(a.mid.clamp(0.0, 1.0).powi(2)))
+            .add(self.high.scale(a.treble.clamp(0.0, 1.0).powi(2)))
             .clamp();
         // A full pass along the lights takes about two seconds at speed 1.
         self.pending += ctx.dt * self.speed * SCROLL_LEN as f32 / 2.0;
@@ -433,12 +419,13 @@ impl Ripple {
                 id: "ripple",
                 name: "Ripple",
                 description: "Each beat sends a ring of colour out from the centre.",
+                category: HITS_AND_BEATS,
                 audio: true,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "ocean"),
                     ParamSpec::float("speed", "Speed", 0.2, 3.0, 1.0),
-                    ParamSpec::float("width", "Ring width", 0.02, 0.5, 0.12),
-                    ParamSpec::choice("trigger", "New ring on", &["Beat", "Any hit"]),
+                    ParamSpec::float("width", "Ring width", 0.02, 0.5, 0.12).advanced(),
+                    ParamSpec::choice("trigger", "New ring on", &["Beat", "Any hit"]).advanced(),
                 ],
             },
             make: || {
@@ -527,13 +514,14 @@ impl Sparkle {
             info: EffectInfo {
                 id: "sparkle",
                 name: "Sparkle",
-                description: "Random twinkles. More of them when the treble is busy.",
+                description: "Random twinkles. More of them when the sound is busy.",
+                category: HITS_AND_BEATS,
                 audio: true,
                 params: vec![
                     ParamSpec::color("colour", "Colour", "#ffffff"),
                     ParamSpec::float("density", "Amount", 0.0, 1.0, 0.25),
-                    ParamSpec::float("rate", "Twinkle speed", 1.0, 20.0, 6.0),
-                    ParamSpec::bool("react", "React to sound", true),
+                    ParamSpec::float("rate", "Twinkle speed", 1.0, 20.0, 6.0).advanced(),
+                    ParamSpec::bool("react", "React to sound", true).advanced(),
                 ],
             },
             make: || {
@@ -560,7 +548,7 @@ impl Effect for Sparkle {
     fn update(&mut self, ctx: &FrameCtx) {
         let a = &ctx.audio;
         self.live_density = if self.react && a.active {
-            self.density * (0.15 + 1.6 * a.treble + 0.6 * a.onset)
+            self.density * (0.15 + 1.6 * a.level + 0.6 * a.onset)
         } else {
             self.density
         }
@@ -584,7 +572,6 @@ impl Effect for Sparkle {
 
 struct Meter {
     palette: &'static Palette,
-    sensitivity: f32,
     hold: bool,
     peak: f32,
 }
@@ -596,17 +583,16 @@ impl Meter {
                 id: "meter",
                 name: "Level meter",
                 description: "A bar that grows with loudness, with a marker that hangs at the peak.",
+                category: FOLLOWS_SOUND,
                 audio: true,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "fire"),
-                    sensitivity(),
-                    ParamSpec::bool("hold", "Peak marker", true),
+                    ParamSpec::bool("hold", "Peak marker", true).advanced(),
                 ],
             },
             make: || {
                 Box::new(Meter {
                     palette: palette("fire"),
-                    sensitivity: 1.0,
                     hold: true,
                     peak: 0.0,
                 })
@@ -618,19 +604,18 @@ impl Meter {
 impl Effect for Meter {
     fn configure(&mut self, p: &ParamReader) {
         self.palette = p.palette("palette");
-        self.sensitivity = p.float("sensitivity");
         self.hold = p.bool("hold");
     }
 
     fn update(&mut self, ctx: &FrameCtx) {
-        let level = boosted(ctx.audio.level, self.sensitivity);
+        let level = ctx.audio.level.clamp(0.0, 1.0);
         self.peak = (self.peak - ctx.dt * 0.35).max(level);
     }
 
     fn shade(&self, x: f32, y: f32, ctx: &FrameCtx) -> Rgb {
         // Run along the longer side: upward on tall layouts, rightward otherwise.
         let pos = if !ctx.flat && ctx.aspect < 1.0 { 1.0 - y } else { x };
-        let level = boosted(ctx.audio.level, self.sensitivity);
+        let level = ctx.audio.level.clamp(0.0, 1.0);
         let bar = self
             .palette
             .sample(0.25 + pos * 0.75)
@@ -659,12 +644,13 @@ impl Flow {
                 id: "flow",
                 name: "Colour flow",
                 description: "A gradient that slides across the lights. Does not react to sound.",
+                category: AMBIENT,
                 audio: false,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "rainbow"),
                     ParamSpec::float("speed", "Speed", -2.0, 2.0, 0.2),
-                    ParamSpec::float("scale", "Repeats", 0.1, 4.0, 1.0),
-                    ParamSpec::float("angle", "Angle", 0.0, 360.0, 0.0),
+                    ParamSpec::float("scale", "Repeats", 0.1, 4.0, 1.0).advanced(),
+                    ParamSpec::float("angle", "Angle", 0.0, 360.0, 0.0).advanced(),
                 ],
             },
             make: || {
@@ -705,7 +691,6 @@ impl Effect for Flow {
 
 struct Solid {
     colour: Rgb,
-    pulse: f32,
 }
 
 impl Solid {
@@ -714,19 +699,12 @@ impl Solid {
             info: EffectInfo {
                 id: "solid",
                 name: "Solid colour",
-                description: "One colour everywhere. Optionally breathes with loudness.",
+                description: "One colour everywhere.",
+                category: AMBIENT,
                 audio: false,
-                params: vec![
-                    ParamSpec::color("colour", "Colour", "#ff7a18"),
-                    ParamSpec::float("pulse", "Pulse with sound", 0.0, 1.0, 0.0),
-                ],
+                params: vec![ParamSpec::color("colour", "Colour", "#ff7a18")],
             },
-            make: || {
-                Box::new(Solid {
-                    colour: Rgb::WHITE,
-                    pulse: 0.0,
-                })
-            },
+            make: || Box::new(Solid { colour: Rgb::WHITE }),
         }
     }
 }
@@ -734,11 +712,10 @@ impl Solid {
 impl Effect for Solid {
     fn configure(&mut self, p: &ParamReader) {
         self.colour = p.color("colour");
-        self.pulse = p.float("pulse");
     }
 
-    fn shade(&self, _x: f32, _y: f32, ctx: &FrameCtx) -> Rgb {
-        self.colour.scale(1.0 - self.pulse + self.pulse * ctx.audio.level)
+    fn shade(&self, _x: f32, _y: f32, _ctx: &FrameCtx) -> Rgb {
+        self.colour
     }
 }
 
@@ -766,6 +743,7 @@ mod tests {
             treble: 0.5,
             bands: [0.7; BANDS],
             onset: 1.0,
+            onsets: [1.0; 3],
             beat: 1.0,
             beat_phase: 0.0,
             bpm: 120.0,

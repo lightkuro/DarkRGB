@@ -22,13 +22,14 @@ use axum::http::header::{self, HeaderMap, HeaderValue};
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use darkrgb_core::{color, effects};
+use darkrgb_core::audio::{BAND_MAX_HZ, band_edge_hz};
+use darkrgb_core::{BANDS, color, effects};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
-use crate::app::{APP_NAME, Discovered, Shared, VERSION};
+use crate::app::{APP_NAME, BUILD, Discovered, Shared, VERSION};
 use crate::commands::Command;
 use crate::render_loop::FRAME_RATE;
 
@@ -161,7 +162,10 @@ fn hello() -> String {
         "type": "hello",
         "app": APP_NAME,
         "version": VERSION,
+        "build": BUILD,
         "frame_rate": FRAME_RATE,
+        // Edges of the frequency bands in Hz, so the UI can label ranges.
+        "band_hz": (0..=BANDS).map(|i| band_edge_hz(i, BAND_MAX_HZ).round()).collect::<Vec<f32>>(),
         "effects": effects,
         "palettes": color::palettes(),
     })
@@ -212,6 +216,8 @@ fn status_message(shared: &Shared) -> String {
         "render": &*shared.stats.lock().unwrap(),
         "audio": shared.audio.status(),
         "inputs": &*shared.inputs.lock().unwrap(),
+        "networks": &*shared.networks.lock().unwrap(),
+        "scan": &*shared.scan.lock().unwrap(),
         "discovered": discovered,
         "notice": &*shared.notice.lock().unwrap(),
     })
@@ -416,16 +422,8 @@ mod tests {
             mac: mac.map(str::to_string),
         };
         let device = |mac: Option<&str>, address: &str| darkrgb_core::Device {
-            id: 1,
-            name: "d".into(),
-            address: address.into(),
-            port: 4048,
-            pixel_count: 1,
-            enabled: true,
-            gamma: 2.2,
-            brightness: 1.0,
             mac: mac.map(str::to_string),
-            version: None,
+            ..darkrgb_core::Device::wled("d", address, 4048, 1)
         };
         // Two simulators on one IP address are different devices.
         assert!(!already_added(

@@ -7,7 +7,7 @@ repository.workspace = true
 
 [dependencies]
 log = "0.4.35"
-darkrgb-core = { version = "0.1.0", path = "../core" }
+darkrgb-core = { path = "../core" }
 rtrb = "0.4.1"
 rustfft = "6.4.1"
 serde = { version = "1.0.229", features = ["derive"] }

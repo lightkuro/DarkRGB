@@ -19,9 +19,9 @@ env_logger = "0.11.11"
 futures-util = "0.3.34"
 log = "0.4.35"
 mime_guess = "2.0.5"
-darkrgb-audio = { version = "0.1.0", path = "../audio" }
-darkrgb-core = { version = "0.1.0", path = "../core" }
-darkrgb-output = { version = "0.1.0", path = "../output" }
+darkrgb-audio = { path = "../audio" }
+darkrgb-core = { path = "../core" }
+darkrgb-output = { path = "../output" }
 open = "5.4.5"
 rust-embed = { version = "8.13.0", features = ["interpolate-folder-path"] }
 serde = { version = "1.0.229", features = ["derive"] }

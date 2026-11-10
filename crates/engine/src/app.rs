@@ -8,6 +8,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use darkrgb_audio::{AudioCapture, InputDevice};
 use darkrgb_core::{Device, Show};
+use darkrgb_output::scan::{self, LocalNetwork};
 use darkrgb_output::{DeviceStats, wled};
 use serde::Serialize;
 use tokio::sync::watch;
@@ -17,6 +18,17 @@ use crate::commands::{self, Command};
 /// The name shown to users. Kept in one place so a rename is one edit.
 pub const APP_NAME: &str = "darkRGB";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The CI build number, when this program was built there. Lets a bug
+/// report say exactly which download it came from.
+pub const BUILD: Option<&str> = option_env!("DARKRGB_BUILD");
+
+/// The version as shown to users, such as `0.2.0 (build 12)`.
+pub fn version_text() -> String {
+    match BUILD {
+        Some(build) if !build.is_empty() => format!("{VERSION} (build {build})"),
+        _ => VERSION.to_string(),
+    }
+}
 
 /// How the frame loop is doing, refreshed about once a second.
 #[derive(Clone, Debug, Default, Serialize)]
@@ -45,6 +57,33 @@ pub struct Discovered {
     pub mac: Option<String>,
 }
 
+impl Discovered {
+    /// `mac_hint` is used when the device did not report one itself.
+    pub fn new(key: String, address: String, info: &wled::WledInfo, mac_hint: Option<String>) -> Self {
+        Self {
+            key,
+            name: info.name.clone(),
+            address,
+            leds: info.led_count,
+            matrix: info.matrix,
+            version: info.version.clone(),
+            mac: info.mac.clone().or(mac_hint),
+        }
+    }
+}
+
+/// Progress of a network scan, shown in the UI.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ScanStatus {
+    pub running: bool,
+    /// The network being scanned, such as `192.168.1.`.
+    pub prefix: String,
+    pub done: usize,
+    pub total: usize,
+    /// Devices this scan has found so far.
+    pub found: usize,
+}
+
 pub struct Shared {
     pub show: Mutex<Show>,
     /// Bumped on every change to the show. Clients and the saver watch it.
@@ -57,6 +96,9 @@ pub struct Shared {
     pub stats: Mutex<RenderStats>,
     pub discovered: Mutex<Vec<Discovered>>,
     pub inputs: Mutex<Vec<InputDevice>>,
+    /// Local networks this computer is on, for suggesting addresses.
+    pub networks: Mutex<Vec<LocalNetwork>>,
+    pub scan: Mutex<ScanStatus>,
     /// Where the show is saved; `None` keeps it in memory only.
     pub save_path: Option<PathBuf>,
     /// Something the user should be told once, such as an unreadable file.
@@ -75,6 +117,8 @@ impl Shared {
             stats: Mutex::new(RenderStats::default()),
             discovered: Mutex::new(Vec::new()),
             inputs: Mutex::new(Vec::new()),
+            networks: Mutex::new(Vec::new()),
+            scan: Mutex::new(ScanStatus::default()),
             save_path,
             notice: Mutex::new(notice),
         })
@@ -89,9 +133,11 @@ impl Shared {
     ///
     /// `AddDevice` talks to the network and can take a few seconds, so call
     /// this off the async runtime for that command.
-    pub fn execute(&self, command: &Command) -> Result<Option<String>, String> {
-        if let Command::AddDevice { address } = command {
-            return self.add_device(address);
+    pub fn execute(self: &Arc<Self>, command: &Command) -> Result<Option<String>, String> {
+        match command {
+            Command::AddDevice { address } => return self.add_device(address),
+            Command::ScanNetwork { prefix } => return self.scan_network(prefix),
+            _ => {}
         }
         {
             let mut show = self.show.lock().unwrap();
@@ -130,16 +176,9 @@ impl Shared {
         }
         show.add_device(
             Device {
-                id: 0,
-                name: info.name.clone(),
-                address: host,
-                port: info.ddp_port,
-                pixel_count: info.led_count,
-                enabled: true,
-                gamma: 2.2,
-                brightness: 1.0,
                 mac: info.mac.clone(),
                 version: Some(info.version.clone()),
+                ..Device::wled(&info.name, &host, info.ddp_port, info.led_count)
             },
             info.matrix,
         );
@@ -152,6 +191,45 @@ impl Shared {
                 info.name
             )
         }))
+    }
+
+    /// Starts asking every address under `prefix` whether it is a WLED
+    /// device. Returns at once; progress is in `scan`, and devices that
+    /// answer join the discovered list.
+    pub fn scan_network(self: &Arc<Self>, prefix: &str) -> Result<Option<String>, String> {
+        let octets = scan::parse_prefix(prefix)?;
+        let hosts = scan::hosts_of(octets);
+        {
+            let mut status = self.scan.lock().unwrap();
+            if status.running {
+                return Err("a scan is already running".into());
+            }
+            *status = ScanStatus {
+                running: true,
+                prefix: format!("{}.{}.{}.", octets[0], octets[1], octets[2]),
+                done: 0,
+                total: hosts.len(),
+                found: 0,
+            };
+        }
+        let (on_found, on_progress, finished) = (self.clone(), self.clone(), self.clone());
+        std::thread::Builder::new()
+            .name("scan".into())
+            .spawn(move || {
+                scan::scan_hosts(
+                    hosts,
+                    80,
+                    Duration::from_millis(900),
+                    move |ip, info| {
+                        on_found.note_discovered(Discovered::new(format!("scan:{ip}"), ip.to_string(), &info, None));
+                        on_found.scan.lock().unwrap().found += 1;
+                    },
+                    move |done| on_progress.scan.lock().unwrap().done = done,
+                );
+                finished.scan.lock().unwrap().running = false;
+            })
+            .map_err(|e| format!("could not start the scan: {e}"))?;
+        Ok(None)
     }
 
     /// Records a device found on the network, replacing an older sighting.
@@ -289,21 +367,7 @@ mod tests {
         let dir = temp_dir("absurd");
         let path = dir.join("show.json");
         let mut show = Show::default();
-        show.add_device(
-            darkrgb_core::Device {
-                id: 0,
-                name: "d".into(),
-                address: "127.0.0.1".into(),
-                port: 4048,
-                pixel_count: 10,
-                enabled: true,
-                gamma: 2.2,
-                brightness: 1.0,
-                mac: None,
-                version: None,
-            },
-            None,
-        );
+        show.add_device(darkrgb_core::Device::wled("d", "127.0.0.1", 4048, 10), None);
         let json = serde_json::to_string(&show)
             .unwrap()
             .replace(r#""count":10"#, r#""count":4000000000"#);

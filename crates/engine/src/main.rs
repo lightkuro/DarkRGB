@@ -1,34 +1,24 @@
-//! darkRGB: the engine and the server for its UI.
+//! `darkrgb-cli`: darkRGB from a terminal.
+//!
+//! Runs the same engine as the app, opens the UI in a browser, and has the
+//! checks that need a terminal to print to.
 
-mod app;
-mod commands;
-mod diagnostics;
-#[cfg(test)]
-mod e2e_tests;
-mod render_loop;
-mod server;
-
-use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
-use anyhow::Context;
-use clap::{Parser, Subcommand};
-use darkrgb_output::discovery::{Discovery, Event};
-use darkrgb_output::wled;
-
-use app::{APP_NAME, Discovered, Shared, VERSION};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use darkrgb_engine::{APP_NAME, DEFAULT_PORT, Engine, Options, diagnostics, version_text};
 
 #[derive(Parser)]
-#[command(name = "darkrgb-cli", version, about = "LED show controller for WLED and friends")]
+#[command(
+    name = "darkrgb-cli",
+    about = "darkRGB from a terminal: browser UI, checks, and headless use"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Tool>,
 
     /// Port for the UI, on this computer.
-    #[arg(long, default_value_t = 7420)]
+    #[arg(long, default_value_t = DEFAULT_PORT)]
     port: u16,
 
     /// Let other devices on the network open the UI (a phone as a remote).
@@ -88,7 +78,9 @@ fn main() -> anyhow::Result<()> {
         .format_timestamp_secs()
         .init();
 
-    let cli = Cli::parse();
+    // The version includes the build number, which is only known at run time.
+    let version: &'static str = Box::leak(version_text().into_boxed_str());
+    let cli = Cli::from_arg_matches(&Cli::command().version(version).get_matches())?;
     if let Some(tool) = cli.command {
         let ok = match tool {
             Tool::AudioTest { seconds, source } => diagnostics::audio_test(&source, seconds.clamp(2, 600)),
@@ -97,170 +89,38 @@ fn main() -> anyhow::Result<()> {
         };
         std::process::exit(if ok { 0 } else { 1 });
     }
-    run(cli)
-}
 
-fn default_show_path() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join(APP_NAME).join("show.json"))
-}
+    let engine = Engine::start(Options {
+        port: cli.port,
+        any_port_if_busy: false,
+        lan: cli.lan,
+        show: cli.show,
+        no_save: cli.no_save,
+        dev_origin: cli.dev_origin,
+    })?;
 
-fn run(cli: Cli) -> anyhow::Result<()> {
-    let save_path = if cli.no_save {
-        None
-    } else {
-        cli.show.clone().or_else(default_show_path)
-    };
-    let (show, notice) = match &save_path {
-        Some(path) => app::load_show(path),
-        None => (darkrgb_core::Show::default(), None),
-    };
-    if let Some(notice) = &notice {
-        log::warn!("{notice}");
-    }
-    let shared = Shared::new(show, save_path, notice);
-
-    let stop = Arc::new(AtomicBool::new(false));
-    let render = {
-        let (shared, stop) = (shared.clone(), stop.clone());
-        std::thread::Builder::new()
-            .name("render".into())
-            .spawn(move || render_loop::run(shared, stop))
-            .context("could not start the render thread")?
-    };
-
-    // Discovery is a convenience. Without it devices are added by address.
-    let _discovery = start_discovery(shared.clone())
-        .inspect_err(|e| log::warn!("device discovery is off: {e}"))
-        .ok();
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .context("could not start the async runtime")?;
-    let served = runtime.block_on(serve(cli, shared.clone()));
-
-    stop.store(true, Ordering::Relaxed);
-    let _ = render.join();
-    save_now(&shared);
-    served
-}
-
-async fn serve(cli: Cli, shared: Arc<Shared>) -> anyhow::Result<()> {
-    tokio::spawn(save_when_changed(shared.clone()));
-    tokio::spawn(refresh_inputs(shared.clone()));
-
-    let ip = if cli.lan {
-        Ipv4Addr::UNSPECIFIED
-    } else {
-        Ipv4Addr::LOCALHOST
-    };
-    let listener = tokio::net::TcpListener::bind(SocketAddr::from((ip, cli.port)))
-        .await
-        .with_context(|| {
-            format!(
-                "port {} is in use. Is {APP_NAME} already running? Close it, or pick another port with --port.",
-                cli.port
-            )
-        })?;
-    let url = format!("http://127.0.0.1:{}", cli.port);
-    println!("{APP_NAME} {VERSION} is running. Open {url}");
+    println!("{APP_NAME} {} is running. Open {}", version_text(), engine.url);
     if cli.lan {
         println!(
             "Other devices on your network can open it too, at this computer's address, port {}.",
-            cli.port
+            engine.port
         );
         println!("There is no password yet: anyone on the network can control the lights.");
     }
     println!("Press Ctrl+C to stop.");
     if !cli.no_open
-        && let Err(e) = open::that(&url)
+        && let Err(e) = open::that(&engine.url)
     {
-        log::info!("could not open a browser ({e}); open {url} yourself");
+        log::info!("could not open a browser ({e}); open {} yourself", engine.url);
     }
 
-    let access = server::Access {
-        lan: cli.lan,
-        dev_origin: cli.dev_origin,
-    };
-    axum::serve(listener, server::router(shared, access))
-        .with_graceful_shutdown(async {
+    // Wait for Ctrl+C on a small runtime of our own; the engine has its own.
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
             let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .context("the server stopped unexpectedly")
-}
-
-/// Saves a moment after the last change, so dragging a slider is one write.
-async fn save_when_changed(shared: Arc<Shared>) {
-    let mut revision = shared.revision.subscribe();
-    while revision.changed().await.is_ok() {
-        loop {
-            tokio::time::sleep(Duration::from_millis(800)).await;
-            if !revision.has_changed().unwrap_or(false) {
-                break;
-            }
-            revision.mark_unchanged();
-        }
-        let shared = shared.clone();
-        let _ = tokio::task::spawn_blocking(move || save_now(&shared)).await;
-    }
-}
-
-fn save_now(shared: &Shared) {
-    let Some(path) = &shared.save_path else {
-        return;
-    };
-    let show = shared.show.lock().unwrap().clone();
-    if let Err(e) = app::save_show(path, &show) {
-        log::error!("could not save the show to {}: {e}", path.display());
-        *shared.notice.lock().unwrap() = Some(format!(
-            "Your changes are not being saved: could not write {} ({e}).",
-            path.display()
-        ));
-    }
-}
-
-/// Keeps the list of audio inputs fresh for the UI's menu.
-async fn refresh_inputs(shared: Arc<Shared>) {
-    loop {
-        if let Ok(inputs) = tokio::task::spawn_blocking(darkrgb_audio::list_inputs).await {
-            *shared.inputs.lock().unwrap() = inputs;
-        }
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
-}
-
-fn start_discovery(shared: Arc<Shared>) -> Result<Discovery, String> {
-    Discovery::start(move |event| match event {
-        Event::Found(found) => {
-            // Ask the device about itself off the discovery thread.
-            let shared = shared.clone();
-            std::thread::spawn(move || {
-                // Use the first advertised address that actually answers.
-                for host in &found.hosts {
-                    match wled::fetch_info(host, found.http_port, Duration::from_secs(3)) {
-                        Ok(info) => {
-                            shared.note_discovered(Discovered {
-                                key: found.key,
-                                name: info.name,
-                                address: if found.http_port == 80 {
-                                    host.clone()
-                                } else {
-                                    format!("{host}:{}", found.http_port)
-                                },
-                                leds: info.led_count,
-                                matrix: info.matrix,
-                                version: info.version,
-                                mac: info.mac.or(found.mac),
-                            });
-                            return;
-                        }
-                        Err(e) => log::debug!("{host} advertised itself but did not answer: {e}"),
-                    }
-                }
-            });
-        }
-        Event::Lost { key } => shared.forget_discovered(&key),
-    })
+        });
+    engine.shutdown();
+    Ok(())
 }

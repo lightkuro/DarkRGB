@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::audio::Band;
 use crate::effects;
 use crate::layout::{Device, Fixture, MAX_PIXELS, Shape};
 use crate::params::Params;
@@ -22,12 +23,42 @@ pub enum Blend {
     Multiply,
 }
 
+/// What a layer hears, and how strongly it responds.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Sound {
+    /// The part of the spectrum the layer listens to.
+    #[serde(default)]
+    pub band: Band,
+    /// Multiplier on what it hears, 0.25..4.
+    #[serde(default = "one")]
+    pub gain: f32,
+    /// How much the layer's brightness follows the sound, 0..1. Works on
+    /// any effect, including ones that ignore sound themselves.
+    #[serde(default)]
+    pub pulse: f32,
+}
+
+impl Default for Sound {
+    fn default() -> Self {
+        Self {
+            band: Band::All,
+            gain: 1.0,
+            pulse: 0.0,
+        }
+    }
+}
+
 /// One effect running on some or all fixtures.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
     pub id: u32,
+    /// A label the user gave it. Without one, the effect's name is shown.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Effect id from the registry.
     pub effect: String,
+    #[serde(default)]
+    pub sound: Sound,
     #[serde(default)]
     pub params: Params,
     #[serde(default = "one")]
@@ -173,6 +204,8 @@ impl Show {
         };
         self.layers.push(Layer {
             id,
+            name: None,
+            sound: Sound::default(),
             effect: effect.to_string(),
             params: Params::new(),
             opacity: 1.0,
@@ -242,6 +275,47 @@ impl Show {
         });
         self.devices.push(device);
         device_id
+    }
+
+    /// Adds a light that exists only in the preview, with one fixture of
+    /// the given shape. Returns the device id.
+    pub fn add_virtual(&mut self, name: &str, shape: &Shape, demo: bool) -> u32 {
+        let mut device = Device::virtual_light(name, shape.pixel_count());
+        device.demo = demo;
+        let matrix = match *shape {
+            Shape::Matrix { cols, rows, .. } => Some((cols, rows)),
+            Shape::Strip { .. } => None,
+        };
+        self.add_device(device, matrix)
+    }
+
+    /// True when the built-in demo lights are in the show.
+    pub fn has_demo(&self) -> bool {
+        self.devices.iter().any(|d| d.demo)
+    }
+
+    /// Adds or removes the built-in demo lights: two strips and a matrix,
+    /// enough to see every kind of effect without owning hardware.
+    pub fn set_demo(&mut self, enabled: bool) {
+        if enabled == self.has_demo() {
+            return;
+        }
+        if enabled {
+            let strip = |count| Shape::Strip { count, reverse: false };
+            self.add_virtual("Demo strip", &strip(120), true);
+            self.add_virtual("Demo strip 2", &strip(90), true);
+            let matrix = Shape::Matrix {
+                cols: 16,
+                rows: 16,
+                serpentine: false,
+            };
+            self.add_virtual("Demo matrix", &matrix, true);
+        } else {
+            let demo: Vec<u32> = self.devices.iter().filter(|d| d.demo).map(|d| d.id).collect();
+            for id in demo {
+                self.remove_device(id);
+            }
+        }
     }
 
     /// Removes a device, its fixtures, and any layer targets pointing at them.
@@ -316,8 +390,13 @@ impl Show {
         }
         let layers = self.layers.iter().chain(self.scenes.iter().flat_map(|s| &s.layers));
         for layer in layers {
-            if !layer.opacity.is_finite() {
-                return Err("a layer has an opacity that is not a number".into());
+            let range_ok = match layer.sound.band {
+                Band::Range { low, high } => low.is_finite() && high.is_finite(),
+                _ => true,
+            };
+            if !(layer.opacity.is_finite() && layer.sound.gain.is_finite() && layer.sound.pulse.is_finite() && range_ok)
+            {
+                return Err("a layer has a setting that is not a number".into());
             }
         }
         if !self.master.brightness.is_finite() || !self.audio.sensitivity.is_finite() {
@@ -337,18 +416,7 @@ mod tests {
     use super::*;
 
     fn device(name: &str, pixels: u32) -> Device {
-        Device {
-            id: 0,
-            name: name.into(),
-            address: "127.0.0.1".into(),
-            port: 4048,
-            pixel_count: pixels,
-            enabled: true,
-            gamma: 2.2,
-            brightness: 1.0,
-            mac: None,
-            version: None,
-        }
+        Device::wled(name, "127.0.0.1", 4048, pixels)
     }
 
     #[test]
@@ -457,6 +525,70 @@ mod tests {
         let layer = show.layers.iter().find(|l| l.id == layer).unwrap();
         assert!(layer.targets.is_empty());
         assert!(!layer.enabled);
+    }
+
+    #[test]
+    fn demo_lights_are_virtual_and_come_and_go_as_a_set() {
+        let mut show = Show::default();
+        show.add_device(device("real", 10), None);
+        show.set_demo(true);
+        show.set_demo(true);
+        assert_eq!(show.devices.len(), 4, "turning it on twice adds one set");
+        let demo: Vec<_> = show.devices.iter().filter(|d| d.demo).collect();
+        assert_eq!(demo.len(), 3);
+        assert!(
+            demo.iter()
+                .all(|d| d.kind == crate::layout::DeviceKind::Virtual && !d.sends())
+        );
+        assert!(show.devices[0].sends(), "the real device still sends");
+        assert_eq!(show.pixel_count(), 10 + 120 + 90 + 256);
+        assert!(show.validate().is_ok());
+
+        // A layer aimed at a demo light is switched off with it, not spread to every light.
+        let demo_fixture = show.fixtures.iter().find(|f| f.name == "Demo matrix").unwrap().id;
+        let layer = show.add_layer("solid");
+        show.layer_mut(layer).unwrap().targets = vec![demo_fixture];
+        show.set_demo(false);
+        assert_eq!(show.devices.len(), 1);
+        assert_eq!(show.fixtures.len(), 1);
+        assert!(!show.layers.iter().find(|l| l.id == layer).unwrap().enabled);
+    }
+
+    #[test]
+    fn a_virtual_light_gets_a_fixture_of_its_shape() {
+        let mut show = Show::default();
+        let id = show.add_virtual(
+            "Ceiling plan",
+            &Shape::Matrix {
+                cols: 30,
+                rows: 10,
+                serpentine: false,
+            },
+            false,
+        );
+        let device = show.device(id).unwrap();
+        assert_eq!(
+            (device.pixel_count, device.demo, device.address.as_str()),
+            (300, false, "")
+        );
+        assert!(matches!(
+            show.fixtures[0].shape,
+            Shape::Matrix { cols: 30, rows: 10, .. }
+        ));
+        assert!(!show.has_demo());
+    }
+
+    #[test]
+    fn older_show_files_without_the_new_fields_still_load() {
+        // A layer and a device as version 0.1 wrote them.
+        let json = r#"{"version":1,"name":"old",
+            "devices":[{"id":1,"name":"d","address":"10.0.0.2","pixel_count":30}],
+            "layers":[{"id":2,"effect":"plasma"}]}"#;
+        let show: Show = serde_json::from_str(json).unwrap();
+        assert_eq!(show.devices[0].kind, crate::layout::DeviceKind::Wled);
+        assert!(!show.devices[0].demo);
+        assert_eq!(show.layers[0].sound, Sound::default());
+        assert_eq!(show.layers[0].name, None);
     }
 
     #[test]

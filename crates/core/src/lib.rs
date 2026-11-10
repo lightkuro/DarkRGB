@@ -12,10 +12,10 @@ pub mod params;
 pub mod render;
 pub mod show;
 
-pub use audio::{AudioFeatures, BANDS};
+pub use audio::{AudioFeatures, BANDS, Band};
 pub use color::{Palette, Rgb};
 pub use effect::{Effect, EffectInfo, FrameCtx};
-pub use layout::{Device, Fixture, Shape};
+pub use layout::{Device, DeviceKind, Fixture, Shape};
 pub use params::{ParamKind, ParamSpec, ParamValue, Params};
 pub use render::Renderer;
-pub use show::{Blend, Layer, Scene, Show};
+pub use show::{Blend, Layer, Scene, Show, Sound};

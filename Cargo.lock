@@ -422,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "darkrgb-audio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cpal",
  "darkrgb-core",
@@ -437,7 +437,7 @@ dependencies = [
 
 [[package]]
 name = "darkrgb-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -445,7 +445,7 @@ dependencies = [
 
 [[package]]
 name = "darkrgb-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -470,9 +470,10 @@ dependencies = [
 
 [[package]]
 name = "darkrgb-output"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "darkrgb-core",
+ "if-addrs",
  "log",
  "mdns-sd",
  "serde",
@@ -482,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "darkrgb-sim"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "darkrgb-output",

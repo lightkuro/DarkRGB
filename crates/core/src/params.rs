@@ -35,9 +35,18 @@ pub struct ParamSpec {
     #[serde(flatten)]
     pub kind: ParamKind,
     pub default: ParamValue,
+    /// Hidden until the user asks for advanced settings. The defaults of
+    /// advanced parameters must give a good result untouched.
+    pub advanced: bool,
 }
 
 impl ParamSpec {
+    /// Marks the parameter as one to hide from beginners.
+    pub fn advanced(mut self) -> Self {
+        self.advanced = true;
+        self
+    }
+
     pub fn float(id: &'static str, label: &'static str, min: f32, max: f32, default: f32) -> Self {
         let step = if max - min > 20.0 { 1.0 } else { 0.01 };
         Self {
@@ -45,6 +54,7 @@ impl ParamSpec {
             label,
             kind: ParamKind::Float { min, max, step },
             default: ParamValue::Number(default),
+            advanced: false,
         }
     }
 
@@ -54,6 +64,7 @@ impl ParamSpec {
             label,
             kind: ParamKind::Color,
             default: ParamValue::Text(default.to_string()),
+            advanced: false,
         }
     }
 
@@ -63,6 +74,7 @@ impl ParamSpec {
             label,
             kind: ParamKind::Bool,
             default: ParamValue::Bool(default),
+            advanced: false,
         }
     }
 
@@ -74,6 +86,7 @@ impl ParamSpec {
                 options: options.to_vec(),
             },
             default: ParamValue::Text(options[0].to_string()),
+            advanced: false,
         }
     }
 
@@ -83,6 +96,7 @@ impl ParamSpec {
             label,
             kind: ParamKind::Palette,
             default: ParamValue::Text(default.to_string()),
+            advanced: false,
         }
     }
 }

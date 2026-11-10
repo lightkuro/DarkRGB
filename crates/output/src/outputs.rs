@@ -5,7 +5,7 @@ use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, Sender as ChannelSender};
 use std::thread;
 
-use darkrgb_core::{Renderer, Show};
+use darkrgb_core::{DeviceKind, Renderer, Show};
 use serde::Serialize;
 
 use crate::ddp;
@@ -60,6 +60,12 @@ impl Outputs {
         self.targets.retain(|id, _| show.devices.iter().any(|d| d.id == *id));
         self.stats.retain(|id, _| show.devices.iter().any(|d| d.id == *id));
         for device in &show.devices {
+            // Virtual lights have no address and are never sent to.
+            if device.kind != DeviceKind::Wled {
+                self.targets.remove(&device.id);
+                self.stats.remove(&device.id);
+                continue;
+            }
             let current = self
                 .targets
                 .get(&device.id)
@@ -103,6 +109,9 @@ impl Outputs {
             }
         }
         for device in &show.devices {
+            if device.kind != DeviceKind::Wled {
+                continue;
+            }
             let stats = self.stats.entry(device.id).or_default();
             let addr = match self.targets.get(&device.id) {
                 Some((_, _, Target::Ready(addr))) => *addr,

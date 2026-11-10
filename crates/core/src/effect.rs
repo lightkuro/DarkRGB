@@ -60,10 +60,17 @@ pub struct EffectInfo {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
+    /// The group the effect is listed under in the picker.
+    pub category: &'static str,
     /// True when the effect does something with sound.
     pub audio: bool,
     pub params: Vec<ParamSpec>,
 }
+
+/// Picker groups, in the order they are shown.
+pub const FOLLOWS_SOUND: &str = "Follows the sound";
+pub const HITS_AND_BEATS: &str = "Hits and beats";
+pub const AMBIENT: &str = "Ambient";
 
 pub struct EffectDef {
     pub info: EffectInfo,

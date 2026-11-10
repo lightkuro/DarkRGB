@@ -3,6 +3,7 @@
 pub mod ddp;
 pub mod discovery;
 pub mod outputs;
+pub mod scan;
 pub mod wled;
 
 pub use outputs::{DeviceStats, Outputs};

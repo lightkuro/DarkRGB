@@ -109,10 +109,12 @@ impl Renderer {
             let (Some(state), Some(def)) = (self.layers.get_mut(&layer.id), effects::find(&layer.effect)) else {
                 continue;
             };
+            // Each layer hears its own part of the sound.
+            let heard = audio.routed(layer.sound.band, layer.sound.gain);
             let ctx = FrameCtx {
                 time,
                 dt,
-                audio: *audio,
+                audio: heard,
                 aspect: state.aspect,
                 flat: state.flat,
             };
@@ -121,8 +123,12 @@ impl Renderer {
                 .configure(&ParamReader::new(&def.info.params, &layer.params));
             state.effect.update(&ctx);
             let opacity = layer.opacity.clamp(0.0, 1.0);
+            // "Brightness follows sound": dim the layer by how quiet its
+            // part of the sound is. Zero leaves the effect as it is.
+            let pulse = layer.sound.pulse.clamp(0.0, 1.0);
+            let follow = 1.0 - pulse + pulse * heard.level;
             for t in &state.targets {
-                let src = state.effect.shade(t.x, t.y, &ctx).clamp();
+                let src = state.effect.shade(t.x, t.y, &ctx).clamp().scale(follow);
                 let dst = &mut self.frame[t.index as usize];
                 *dst = match layer.blend {
                     Blend::Normal => dst.lerp(src, opacity),
@@ -267,16 +273,8 @@ mod tests {
 
     fn device(pixels: u32) -> Device {
         Device {
-            id: 0,
-            name: "d".into(),
-            address: "127.0.0.1".into(),
-            port: 4048,
-            pixel_count: pixels,
-            enabled: true,
             gamma: 1.0,
-            brightness: 1.0,
-            mac: None,
-            version: None,
+            ..Device::wled("d", "127.0.0.1", 4048, pixels)
         }
     }
 
@@ -455,6 +453,66 @@ mod tests {
         r.render(&show, 0.5, 1.0 / 60.0, &audio);
         let after: f32 = r.frame.iter().map(|p| p.r).sum();
         assert!(after > before * 0.8, "history was lost: {before} -> {after}");
+    }
+
+    #[test]
+    fn a_layer_reacts_only_to_the_part_of_the_sound_it_listens_to() {
+        // The level meter grows with whatever it hears.
+        let mut show = Show::default();
+        show.layers.clear();
+        let id = show.add_layer("meter");
+        show.add_device(device(20), None);
+        let lit = |show: &Show, audio: &AudioFeatures| {
+            let mut r = Renderer::new();
+            r.sync(show);
+            r.render(show, 0.0, 1.0 / 60.0, audio);
+            r.frame.iter().filter(|p| p.r + p.g + p.b > 0.2).count()
+        };
+        // Loud treble, silent bass.
+        let audio = AudioFeatures {
+            active: true,
+            level: 0.5,
+            treble: 1.0,
+            bass: 0.0,
+            ..AudioFeatures::default()
+        };
+        show.layer_mut(id).unwrap().sound.band = crate::Band::Treble;
+        let highs = lit(&show, &audio);
+        show.layer_mut(id).unwrap().sound.band = crate::Band::Bass;
+        let bass = lit(&show, &audio);
+        show.layer_mut(id).unwrap().sound.band = crate::Band::All;
+        let all = lit(&show, &audio);
+        assert!(highs >= 18, "listening to highs should fill the bar, lit {highs}");
+        assert!(bass <= 1, "listening to bass should leave it dark, lit {bass}");
+        assert!(
+            all > bass && all < highs,
+            "everything sits in between: {bass} < {all} < {highs}"
+        );
+
+        // Gain makes a quiet sound count for more.
+        show.layer_mut(id).unwrap().sound.gain = 2.0;
+        assert!(lit(&show, &audio) > all);
+    }
+
+    #[test]
+    fn brightness_can_follow_the_sound_on_any_effect() {
+        let mut show = solid_show("#ffffff");
+        show.add_device(device(1), None);
+        let quiet = AudioFeatures {
+            active: true,
+            level: 0.25,
+            ..AudioFeatures::default()
+        };
+        let brightness = |show: &Show| {
+            let mut r = Renderer::new();
+            r.sync(show);
+            r.render(show, 0.0, 1.0 / 60.0, &quiet)[0].r
+        };
+        assert_eq!(brightness(&show), 1.0, "off by default: a solid colour stays solid");
+        show.layers[0].sound.pulse = 1.0;
+        assert!((brightness(&show) - 0.25).abs() < 1e-5);
+        show.layers[0].sound.pulse = 0.5;
+        assert!((brightness(&show) - 0.625).abs() < 1e-5);
     }
 
     #[test]
