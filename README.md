@@ -1,4 +1,4 @@
-# OpenLightShow
+# darkRGB
 
 A modern, visual LED show controller for Windows and Linux. One app for three jobs that existing tools split
 between them:
@@ -36,23 +36,23 @@ Builds for Windows and Linux are attached to each run of the
 [CI workflow](../../actions/workflows/ci.yml) (open the latest run, download the artifact, unzip).
 
 ```
-openlightshow              start the app and open the UI
-openlightshow audio-test   check that system audio is captured with no setup
-openlightshow ddp-test IP  stream a test pattern to one WLED device and report how steady it was
-openlightshow discover     list WLED devices found on the network
-openlightshow --help       all options
+darkrgb-cli              start the app and open the UI
+darkrgb-cli audio-test   check that system audio is captured with no setup
+darkrgb-cli ddp-test IP  stream a test pattern to one WLED device and report how steady it was
+darkrgb-cli discover     list WLED devices found on the network
+darkrgb-cli --help       all options
 ```
 
-No hardware? Run `ols-sim`, which pretends to be two WLED devices on this computer. They appear in the app
+No hardware? Run `darkrgb-sim`, which pretends to be two WLED devices on this computer. They appear in the app
 like real ones; if they do not, add `127.0.0.1:8081` and `127.0.0.1:8082` by address.
 
 ### Checks that still need real hardware
 
 Two things cannot be proven without a real computer and real lights. Each takes a minute:
 
-1. Play music, then run `openlightshow audio-test`. It should end with `RESULT: OK` and name your speakers or
+1. Play music, then run `darkrgb-cli audio-test`. It should end with `RESULT: OK` and name your speakers or
    headphones. This matters most on Windows, where it has never been run.
-2. Run `openlightshow ddp-test` followed by a WLED device's IP address. A white dot should glide along the
+2. Run `darkrgb-cli ddp-test` followed by a WLED device's IP address. A white dot should glide along the
    lights without stutter for 20 seconds, and the command prints how steady the stream was.
 
 Please report what each one prints, the WLED version, the LED count, and whether the device is on WiFi or
@@ -64,8 +64,8 @@ Needs [Rust](https://rustup.rs/) and [Node.js](https://nodejs.org/) 22 with [pnp
 
 ```
 cd ui && pnpm install && pnpm build && cd ..
-cargo build --release -p ols-engine -p ols-sim
-./target/release/openlightshow
+cargo build --release -p darkrgb-engine -p darkrgb-sim
+./target/release/darkrgb-cli
 ```
 
 The UI is embedded in the program, so build it first. `cargo test --workspace` runs the tests, including
@@ -74,18 +74,18 @@ end-to-end tests that drive a simulated device.
 To work on the UI with live reload, run the engine and Vite side by side:
 
 ```
-cargo run -p ols-engine -- --no-open
+cargo run -p darkrgb-engine -- --no-open
 cd ui && pnpm dev          # then open http://localhost:5173
 ```
 
 ## Layout
 
 ```
-crates/ols-core     layout, layers, effects, renderer (no I/O)
-crates/ols-audio    audio capture and analysis
-crates/ols-output   DDP, WLED info, discovery
-crates/ols-engine   the app: frame loop, commands, server, diagnostics
-crates/ols-sim      a pretend WLED device for tests and demos
+crates/core     layout, layers, effects, renderer (no I/O)
+crates/audio    audio capture and analysis
+crates/output   DDP, WLED info, discovery
+crates/engine   the app: frame loop, commands, server, diagnostics
+crates/sim      a pretend WLED device for tests and demos
 ui/                 the interface (React, TypeScript, Vite)
 docs/               research, architecture, roadmap
 ```

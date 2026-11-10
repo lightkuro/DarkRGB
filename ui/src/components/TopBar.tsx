@@ -56,7 +56,7 @@ export function TopBar() {
           <i />
           <i />
         </span>
-        <span className="brand-name">OpenLightShow</span>
+        <span className="brand-name">darkRGB</span>
         <ShowName name={show.name} />
       </div>
 

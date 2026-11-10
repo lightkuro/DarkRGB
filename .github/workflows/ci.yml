@@ -65,18 +65,18 @@ jobs:
         run: cargo test --workspace --release
 
       - name: Build release programs
-        run: cargo build --release -p ols-engine -p ols-sim
+        run: cargo build --release -p darkrgb-engine -p darkrgb-sim
 
       - name: Collect programs
         shell: bash
         run: |
           mkdir dist
-          cp target/release/openlightshow${{ runner.os == 'Windows' && '.exe' || '' }} dist/
-          cp target/release/ols-sim${{ runner.os == 'Windows' && '.exe' || '' }} dist/
+          cp target/release/darkrgb-cli${{ runner.os == 'Windows' && '.exe' || '' }} dist/
+          cp target/release/darkrgb-sim${{ runner.os == 'Windows' && '.exe' || '' }} dist/
           cp LICENSE CHANGELOG.md dist/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: openlightshow-${{ runner.os }}
+          name: darkrgb-cli-${{ runner.os }}
           path: dist/
           retention-days: 30

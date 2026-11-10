@@ -327,7 +327,7 @@ export function Stage() {
           <FoundDevices />
           <AddByAddress autoFocus />
           <p className="hint">
-            No hardware to hand? Run the bundled simulator (<code>ols-sim</code>) and add{" "}
+            No hardware to hand? Run the bundled simulator (<code>darkrgb-sim</code>) and add{" "}
             <code>127.0.0.1:8081</code>.
           </p>
         </div>

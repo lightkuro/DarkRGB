@@ -97,7 +97,7 @@ not WebGPU.
   performance played over a song can be recorded as clips and then edited. This is the intended fast path for
   making pre-programmed shows.
 - Every change goes through a command. The same commands will serve the UI, the phone remote, MIDI mappings
-  and recording. Commands are validated in one place (`crates/ols-engine/src/commands.rs`). Undo is not built.
+  and recording. Commands are validated in one place (`crates/engine/src/commands.rs`). Undo is not built.
 
 Built so far: layers that are always on (the audio-reactive case), four blend modes, scenes. Clips with start
 and stop times, modulators other than audio, and recording are not built.
@@ -135,7 +135,7 @@ all of it.
 
 - Follows the default device when the user switches headphones or speakers (checked every two seconds), and
   reconnects if the sound server restarts.
-- Analysis (`crates/ols-audio/src/analysis.rs`): mono mix, a 2048-sample windowed FFT every 512 samples at
+- Analysis (`crates/audio/src/analysis.rs`): mono mix, a 2048-sample windowed FFT every 512 samples at
   48 kHz, 32 mel bands, automatic gain, onset detection by spectral flux, and a tempo and beat tracker
   (autocorrelation of onset strength, 70 to 190 BPM). Tap tempo is not built.
 - Each band is levelled against its own recent peaks, so treble shows next to a loud kick. The tempo tracker
@@ -232,7 +232,7 @@ Planned: a folder per show with a `media/` folder for songs and images. Shared s
 | FFT | `rustfft` | |
 | Beat tracking | own code | `aubio` bindings are GPL-3 and stale |
 | mDNS | `mdns-sd` | |
-| DDP | own code | The header is 10 bytes (`crates/ols-output/src/ddp.rs`) |
+| DDP | own code | The header is 10 bytes (`crates/output/src/ddp.rs`) |
 | WLED HTTP | `ureq` | Requests never go through a system proxy |
 | Server | `axum`, `tokio` | |
 | Embedding the UI | `rust-embed` | The built UI is compiled into the program |
@@ -249,11 +249,11 @@ and file formats).
 
 ```
 crates/
-  ols-core/     layout, layers, effects, renderer (no I/O)
-  ols-audio/    capture and analysis
-  ols-output/   DDP, WLED info, discovery
-  ols-engine/   the program: frame loop, commands, server, diagnostics
-  ols-sim/      a pretend WLED device for tests and demos
+  darkrgb-core/     layout, layers, effects, renderer (no I/O)
+  darkrgb-audio/    capture and analysis
+  darkrgb-output/   DDP, WLED info, discovery
+  darkrgb-engine/   the program: frame loop, commands, server, diagnostics
+  darkrgb-sim/      a pretend WLED device for tests and demos
 ui/             React + Vite
 docs/
 ```

@@ -54,7 +54,7 @@ export function App() {
             <p>
               {show
                 ? "The lights keep whatever they last showed until it is back. Trying again every second."
-                : "If this stays here, the OpenLightShow program is not running."}
+                : "If this stays here, the darkRGB program is not running."}
             </p>
           </div>
         </div>
