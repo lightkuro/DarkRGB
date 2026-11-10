@@ -10,18 +10,18 @@ between them:
 It targets ESP32 controllers running [WLED](https://kno.wled.ge/) first, then generic sACN and Art-Net pixel
 controllers.
 
-![darkRGB with demo lights reacting to music](docs/images/main.png)
+![darkRGB: lights in a group, effects in a folder, keys on scenes and effects](docs/images/main.png)
 
 ## Status
 
-Version 0.2.0, in development. The first mode, audio-reactive, works end to end. Live and timeline modes are not
-started.
+Version 0.3.0, in development. Audio-reactive mode works end to end. Live mode has its first working cut:
+keys, pads, tap tempo and scene changes on the beat. MIDI and the timeline are not started.
 
 | | Linux | Windows |
 |---|---|---|
-| Automated tests | pass | pass |
+| Automated tests | pass | pass as of 0.2.0; 0.3.0 not yet built there |
 | System audio with no setup | works (PulseAudio and PipeWire, tested with virtual speakers) | works (checked on one Windows PC) |
-| The app window | works (tested under a virtual display) | builds; not yet run by anyone |
+| The app window | works, keys included (tested under a virtual display) | builds as of 0.2.0; not yet run by anyone |
 | Real WLED hardware | not yet tried | not yet tried |
 
 The effects have only met synthetic test songs so far, so expect them to need tuning against real music. See
@@ -34,11 +34,17 @@ What works today:
   hardware.
 - Captures system audio with no setup and analyses it: loudness, 32 frequency bands, hits in bass, mids and
   highs, tempo and beats.
-- Ten effects in layers. Each can play on all lights or chosen ones, and react to everything, bass, mids,
-  highs or a frequency range you pick.
+- Ten effects in layers. Each can play on all lights, chosen ones or a group, and react to everything, bass,
+  mids, highs or a frequency range you pick.
+- Folders for effects and groups for lights, each switched or dimmed as one.
 - A live preview where strips and matrices are arranged by dragging.
-- Scenes, master brightness and blackout. The show saves itself.
-- Simple by default; an Advanced switch reveals the rest.
+- Scenes, master brightness and blackout. The show saves itself; copies can be saved and opened.
+- Keys for scenes, effects, folders, groups, blackout, tap tempo and a hand-fired beat. Number keys switch
+  scenes with no setup.
+- A Live view with pads for all of it, usable by touch.
+- Simple by default; an Advanced switch and a settings window hold the rest.
+
+![The Live view while a key is held to flash white](docs/images/live.png)
 
 ## Try it
 

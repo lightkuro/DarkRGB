@@ -1,7 +1,8 @@
 # Architecture
 
-Decided on 2026-11-10. As of version 0.2.0 the engine, the app window, the UI and the device simulator exist;
-live mode and the timeline do not. Sections say which parts are built. Items marked **(to verify)** are
+Decided on 2026-11-10. As of version 0.3.0 the engine, the app window, the UI and the device simulator exist,
+and live mode has its first cut (keys, pads, tap tempo); MIDI and the timeline do not exist. Sections say
+which parts are built. Items marked **(to verify)** are
 assumptions that the checks in [roadmap.md](roadmap.md) test.
 
 ## Why installed software, not a website
@@ -81,7 +82,9 @@ Its speed on a real graphics card is not measured.
   lights added and removed as a set.
 - A **fixture** is a strip, matrix or custom shape on a device output, with a pixel count and a position on a 2D
   canvas (3D later).
-- **Groups** collect fixtures.
+- A **group of lights** collects fixtures under a name. A layer can target a group, so lights added to the
+  group later are included; a group has its own brightness and on/off switch, applied after the layers are
+  mixed. A fixture is in one group or none. Built.
 - Effects render in layout space, so one effect can sweep across fixtures on different devices.
 - The user never sees universe or channel numbers. The engine derives packets from the layout.
 
@@ -105,9 +108,48 @@ Its speed on a real graphics card is not measured.
 - Every change goes through a command. The same commands will serve the UI, the phone remote, MIDI mappings
   and recording. Commands are validated in one place (`crates/engine/src/commands.rs`). Undo is not built.
 
-Built so far: layers that are always on (the audio-reactive case), four blend modes, scenes, and per-layer
-sound settings (below). Clips with start and stop times, modulators on individual parameters, and recording
-are not built.
+Built so far: layers that are always on (the audio-reactive case) or switched by keys (below), four blend
+modes, folders, scenes, and per-layer sound settings (below). Clips with start and stop times, modulators on
+individual parameters, and recording are not built.
+
+### Folders
+
+A **folder** groups layers. The stack stays one flat list, bottom to top, and each layer names the folder it
+is in; the rule that a folder's layers sit next to each other is restored after every change
+(`Show::tidy_layers`). A folder can switch off everything inside it and scale its strength. The UI rearranges
+by sending the whole new order (`arrange_layers`), which the engine refuses if it does not name exactly the
+layers that exist, so a stale drag cannot scramble the stack. A scene stores its folders along with its
+layers.
+
+Ids are unique across everything in a show, so one list of targets on a layer can hold fixtures and groups of
+lights alike.
+
+### Live: keys, holds, tempo
+
+A **binding** ties a key to an action: switch to a scene, switch an effect, a folder or a group of lights,
+blackout, tap the tempo, fire a beat. Keys are stored by position (`KeyA`), with the printed label kept for
+display, so a show works on any keyboard layout. A key has one action and an action one key.
+
+The UI turns key presses into `trigger` commands (binding id, down or up); the engine decides what they do.
+That keeps the door open for MIDI, which the engine will listen to itself and feed into the same path.
+
+What is live and not saved lives in `crates/engine/src/live.rs`, as pure logic with the time passed in:
+
+- **Held keys.** A "while held" key flips its target only in the copy of the show the frame loop renders
+  (`Live::overlay`); the saved show never changes. Each client's held keys are released when its connection
+  closes, and the UI lets go when the window loses focus.
+- **Tapped tempo.** Two or more taps set a tempo that replaces the one found in the music (beat, phase, count)
+  until cleared. The first tap of a run is the first beat of four.
+- **Hand-fired beats.** Raise the beat and hit signals for a moment, so effects that wait for one go off.
+- **A waiting scene.** With scene changes set to wait, a requested scene starts on the first beat (or fourth
+  beat) that begins after it was asked for, or after a few seconds if no beat comes.
+
+A scene change can **fade**: the frame loop keeps the outgoing show and its renderer alive, renders both, and
+mixes them until the fade is over. The incoming scene starts with a fresh renderer; the fade hides the
+restart.
+
+Sound can be **delayed** for speakers that play late: the frame loop keeps a short history of audio features
+and reads from the past. The tapped tempo is not delayed, since it is tapped to what the user hears.
 
 ### What a layer hears
 
@@ -135,7 +177,7 @@ which groups them in the picker.
 
 - Audio callback thread: copies samples into a lock-free ring buffer and does nothing else.
 - Analysis thread: FFT and features per hop.
-- Render thread: fixed tick (60 fps by default, capped per device), renders layers, hands frames to output.
+- Render thread: fixed tick (60 fps by default; 30 and 40 can be chosen), renders layers, hands frames to output.
 - Output: UDP sends, paced per device.
 - API and discovery: async tasks (tokio).
 - Clock: a monotonic clock in audio-reactive and live modes; the audio playback position in timeline mode, so
@@ -221,9 +263,10 @@ Built. One WebSocket per client at `/ws`; the engine also serves the UI over HTT
 | From the engine | Content |
 |---|---|
 | text `hello` | Version, the effect list with each effect's parameters, palettes. Sent once. |
-| text `state` | The whole show. Sent on connect and after every change. |
+| text `state` | The whole show, and which scene is playing unchanged. On connect and after every change. |
 | text `audio` | Audio features, 30 times a second. |
 | text `status` | Frame rate, per-device send counts, audio status, discovered devices. Once a second. |
+| text `live` | Keys being held, a scene waiting for the beat, the tapped tempo. On every change. |
 | text `result` | Outcome of a command that carried an `id`. |
 | binary, first byte 1 | Preview colours: RGB per pixel, 30 times a second. |
 | binary, first byte 2 | Canvas position of every pixel, sent when the layout changes. |
@@ -233,6 +276,10 @@ colours whose serial matches the positions it holds.
 
 Clients send commands as JSON text. The UI builds effect controls from the `hello` message, so adding an effect
 needs no UI code.
+
+One thing goes over plain HTTP: opening a show file (`POST /api/import`), because a whole show does not fit in
+a WebSocket message. It gets the same checks as a show file read from disk, and the same checks on who is
+asking, with the `Origin` header required.
 
 ### Who may connect
 
@@ -248,6 +295,11 @@ Built: the show is one human-readable JSON file with a format version, saved a m
 user's config folder (or the path given with `--show`). It is written to a temporary file and renamed, so a
 crash cannot truncate it. A file that cannot be read, or that comes from a newer version, is kept as `.bak` and
 reported in the UI.
+
+Also built: saving a copy to the Documents folder, opening a show file, and starting a new show (optionally
+keeping the lights). Whatever replaces the show first writes the old one to `show.previous.json` beside it.
+After loading, `Show::repair` mends loose ends a hand-edited or older file can have (a folder or key pointing
+at something that is gone); the randomised command test checks that no command can create such loose ends.
 
 Planned: a folder per show with a `media/` folder for songs and images. Shared shows leave the songs out.
 

@@ -1,6 +1,23 @@
 # What's new
 
-## 0.2.0 (in development)
+## 0.3.0 (in development)
+
+Playing the lights from the keyboard, and keeping a growing show tidy.
+
+- Keys: give a scene, an effect, a folder of effects or a group of lights a key by pressing it. A key can
+  switch its thing on each press, or only while it is held down, which is how to flash.
+- The first ten scenes get the number keys by themselves.
+- A Live view: a big stage with a pad for every scene and every key. Pads work by mouse and touch too.
+- Scene changes can wait for the beat, and can fade instead of cutting.
+- Tap the tempo when the music's beat is not being found, and fire a beat by hand.
+- Folders for effects: drag effects in, fold the folder shut, switch or dim everything inside at once.
+- Groups of lights: an effect can play on a whole group, and a group can be dimmed or switched off as one.
+- Settings, behind the gear button: a brightness ceiling, frames per second, a delay for speakers that play
+  late, the keys, and the show file.
+- Save a copy of the show, open a show file, or start a new show and keep your lights.
+- Scenes can be renamed and updated from their own menu.
+
+## 0.2.0
 
 New name: darkRGB.
 

@@ -15,9 +15,9 @@ The plan rests on a few assumptions. Each has a check; `darkrgb-cli` runs the fi
 | System audio on Linux | Live levels from whatever is playing, with no setup, following the default output | Passed in a container with virtual outputs, on PulseAudio 16.1 and PipeWire 1.0.5: all audio received, a burst detected within about 30 ms, default-output changes followed. Not yet run on a desktop with real speakers. |
 | System audio on Windows | The same, through WASAPI loopback | **Passed** on the owner's Windows PC: `audio-test` reported 100% of the audio received. One machine so far. |
 | DDP to a real WLED | 60 fps to a physical ESP32 for 10 minutes without visible stutter, on WiFi and on Ethernet | Passed against the simulator (60 fps, under 1 ms jitter on one machine). **Not run on hardware.** `darkrgb-cli ddp-test IP` |
-| The app window on Windows | It opens, shows the UI and closes cleanly | It builds in CI. **Not run by anyone yet.** |
+| The app window on Windows | It opens, shows the UI and closes cleanly | 0.2.0 built in CI. **Not run by anyone yet.** |
 | Preview speed in the Linux app window | 10,000 points at 30 fps or better in WebKitGTK | The window works and draws the preview under a virtual display with software rendering. Speed on a real graphics card is **not measured.** |
-| Key handling | Key down and up arrive reliably in the app window, several keys held | **Not run.** Belongs to live mode. |
+| Key handling | Key down and up arrive reliably in the app window, several keys held | **Passed on Linux** in the app window (WebKitGTK under a virtual display): a held key, a second key pressed while it was held, taps and number keys all arrived. Windows not run. |
 
 If the preview is too slow in the Linux window, `darkrgb-cli` (browser) is the fallback today, and Electron on
 Linux the longer-term one.
@@ -35,6 +35,10 @@ Built:
   dragging, and can be renamed and duplicated.
 - Each layer hears everything, bass, mids, highs or a custom range, with its own sensitivity, and its
   brightness can follow the sound.
+- Folders for effects (switch, dim, fold, drag in and out) and groups of lights (an effect can play on a
+  group; a group dims or switches as one).
+- A settings window: brightness ceiling, frames per second, a delay for late speakers, keys, the show file.
+- Save a copy of the show, open a show file, start a new show keeping the lights.
 - Simple by default: parameters are marked basic or advanced, and an Advanced switch reveals the rest.
 - Live preview from the same frames the lights get.
 - Zero-setup audio on Linux and Windows.
@@ -60,11 +64,27 @@ minutes.
 
 ## 2. Live mode
 
-- Grid of clips and scenes.
-- Keyboard and MIDI mapping with a "learn" button; flash, toggle and hold behaviours.
-- Tap tempo, and beat-quantised launching.
-- Master dimmer, blackout, colour palettes.
-- Layers with blend modes.
+Built:
+
+- Keys tied to scenes, effects, folders of effects, groups of lights, blackout, tap tempo and a hand-fired
+  beat. Assigned by pressing the key ("learn"). A switch key either flips on each press or acts only while
+  held. The first ten scenes take the number keys by themselves.
+- A Live view: the stage and a pad for every scene and key, usable by mouse and touch.
+- Tap tempo, which replaces the tempo found in the music until told to follow the music again.
+- Scene changes at once, on the next beat or on every fourth beat, with an optional fade.
+- A key held by a window that closes or loses focus is let go.
+- Master dimmer, blackout, palettes, layers with blend modes (from stage 1).
+
+Left:
+
+- MIDI controllers, with the same "learn" as keys. The engine will listen for MIDI itself, so it works in the
+  app window on Linux, where the web view has no MIDI.
+- A grid of clips: today a key switches an effect that is already in the stack. Clips that start from their
+  beginning when launched, and one-shot clips that end by themselves, are not built.
+- Holding a key for a scene (show it while held, return on release).
+- Knobs and faders: a key can switch things but nothing continuous can be mapped yet.
+- A strobe limit and a photosensitivity warning before flashing is this easy to do on real lights.
+- Seeing which key does what on one printable page.
 
 Done when a full song can be performed from the keyboard without touching the mouse.
 
@@ -105,7 +125,8 @@ Done when a three-minute show can be recorded live, cleaned up in the editor and
 | Licence | Decided 2026-11-10: GPL-3.0-or-later | xLights, LedFx and the aubio beat library are GPL-3, so this allows porting their effects. |
 | Name | Decided 2026-11-10: darkRGB | The first name, OpenLightShow, clashed with an existing Python app of the same name and kind ([digidigital/openlightshow](https://github.com/digidigital/openlightshow), on PyPI as `openlightshow`). For darkRGB no GitHub repo, user or organisation of that name was found, `darkrgb` was free on crates.io, npm and PyPI, and web searches found no product called that. This is not a trademark search. Names ending in "RGB" usually mean PC keyboard and fan lighting, so some people will assume that first. |
 | Linux shell | Tauri (WebKitGTK) or Electron | Tauri is built and works. Electron only if the preview proves too slow on real hardware. |
-| Phone remote | Password or pairing code for `--lan` | Needed before recommending `--lan`. Today anyone on the network can control the lights. |
+| Phone remote | Password or pairing code for `--lan` | Needed before recommending `--lan`. Today anyone on the network can control the lights. The Live view's pads already work by touch. |
+| Where settings live | In the show file, or per computer | Today the brightness ceiling, frame rate and speaker delay are saved in the show. When there is more than one show, the ones that describe the room and the computer should move out of it. |
 | Windows code signing | Sign or ship unsigned | Unsigned installers trigger SmartScreen warnings; certificates cost money. Ship unsigned until there are users. |
 
 ## Things to keep in mind
