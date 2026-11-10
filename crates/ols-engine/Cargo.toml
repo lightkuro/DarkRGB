@@ -1,10 +1,15 @@
 [package]
 name = "ols-engine"
+description = "OpenLightShow engine and UI server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+[[bin]]
+name = "openlightshow"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -27,3 +32,4 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "
 
 [dev-dependencies]
 ols-sim = { path = "../ols-sim" }
+tokio-tungstenite = "0.30.0"

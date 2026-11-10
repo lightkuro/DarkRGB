@@ -14,6 +14,8 @@ pub struct WledInfo {
     pub mac: Option<String>,
     pub arch: Option<String>,
     pub led_count: u32,
+    /// Refresh rate the device reports for its LEDs.
+    pub fps: Option<u32>,
     /// Columns and rows, when the device is set up as a 2D matrix.
     pub matrix: Option<(u32, u32)>,
     /// True when something is already streaming to the device.
@@ -44,6 +46,7 @@ struct RawInfo {
 #[derive(Deserialize)]
 struct RawLeds {
     count: u32,
+    fps: Option<u32>,
     matrix: Option<RawMatrix>,
 }
 
@@ -76,6 +79,7 @@ pub fn parse_info(json: &str) -> Result<WledInfo, String> {
         mac: raw.mac.filter(|m| !m.is_empty()),
         arch: raw.arch,
         led_count: raw.leds.count,
+        fps: raw.leds.fps,
         matrix: raw.leds.matrix.filter(|m| m.w > 1 && m.h > 1).map(|m| (m.w, m.h)),
         live: raw.live,
         live_source,
@@ -106,21 +110,28 @@ pub fn parse_address(input: &str) -> Result<(String, u16), String> {
     Ok((host.to_string(), port))
 }
 
-/// Asks a device to describe itself. Blocks for at most `timeout`.
-pub fn fetch_info(host: &str, http_port: u16, timeout: Duration) -> Result<WledInfo, String> {
+/// Fetches a path from a device over HTTP. Blocks for at most `timeout`.
+pub fn get(host: &str, http_port: u16, path: &str, timeout: Duration) -> Result<String, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
+        // Devices are on the local network; never send requests to them
+        // through a system proxy.
+        .proxy(None)
         .build()
         .into();
-    let url = format!("http://{host}:{http_port}/json/info");
-    let body = agent
+    let url = format!("http://{host}:{http_port}{path}");
+    agent
         .get(&url)
         .call()
         .map_err(|e| format!("no answer from {host}: {e}"))?
         .body_mut()
         .read_to_string()
-        .map_err(|e| format!("bad reply from {host}: {e}"))?;
-    parse_info(&body)
+        .map_err(|e| format!("bad reply from {host}: {e}"))
+}
+
+/// Asks a device to describe itself. Blocks for at most `timeout`.
+pub fn fetch_info(host: &str, http_port: u16, timeout: Duration) -> Result<WledInfo, String> {
+    parse_info(&get(host, http_port, "/json/info", timeout)?)
 }
 
 #[cfg(test)]
@@ -142,6 +153,7 @@ mod tests {
         assert_eq!(info.name, "Desk strip");
         assert_eq!(info.version, "0.15.0");
         assert_eq!(info.led_count, 144);
+        assert_eq!(info.fps, Some(42));
         assert_eq!(info.matrix, None);
         assert_eq!(info.mac.as_deref(), Some("a0b1c2d3e4f5"));
         assert!(!info.live);
