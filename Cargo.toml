@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/lightkuro/OpenLightShow"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+
+# Audio analysis and effect rendering are too slow to judge unoptimised.
+[profile.dev]
+opt-level = 1
