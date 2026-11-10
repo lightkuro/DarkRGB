@@ -1,19 +1,39 @@
 // The lights in the show, and every way to add one: found on the network,
 // by address, by scanning, as a virtual light for planning, or the demo set.
 
-import { ChevronRight, Ghost, Grid3x3, Minus, Plus, Radar, Search, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  ChevronRight,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Ghost,
+  Grid3x3,
+  GripVertical,
+  Minus,
+  Plus,
+  Radar,
+  Search,
+  Settings2,
+  Trash2,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import {
   engine,
   perFrame,
+  toggleFolded,
+  useFolded,
+  useLive,
   useShow,
   useStatus,
   type Device,
   type DeviceStats,
   type Discovered,
   type Fixture,
+  type LightGroup,
+  type Show,
 } from "../engine";
-import { ConfirmButton, Slider, Switch } from "./ui";
+import { KeyAssign, Keycap } from "./Keys";
+import { ConfirmButton, IconButton, NameField, Slider, Switch } from "./ui";
 
 function describe(fixtures: Fixture[], device: Device): string {
   const own = fixtures.filter((f) => f.device === device.id);
@@ -47,42 +67,44 @@ function deviceSetter(id: number, field: "brightness" | "gamma") {
   return send;
 }
 
-/** A name that is saved when the field loses focus or Enter is pressed. */
-function NameField({ device }: { device: Device }) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const commit = () => {
-    const next = draft?.trim();
-    if (next && next !== device.name) engine.send({ type: "update_device", id: device.id, name: next });
-    setDraft(null);
-  };
-  return (
-    <label className="field">
-      <span className="field-head">
-        <span>Name</span>
-      </span>
-      <input
-        type="text"
-        maxLength={80}
-        value={draft ?? device.name}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") setDraft(null);
-        }}
-      />
-    </label>
-  );
+/** The group a device's lights are filed under. */
+function groupOf(show: Show, device: Device): number | null {
+  return show.fixtures.find((f) => f.device === device.id)?.group ?? null;
 }
 
-function DeviceRow({ device, fixtures, stats }: { device: Device; fixtures: Fixture[]; stats?: DeviceStats }) {
+/** Files every fixture of a device in a group, or in none. */
+function fileDevice(show: Show, device: number, group: number | null): void {
+  const fixtures = show.fixtures.filter((f) => f.device === device).map((f) => f.id);
+  if (fixtures.length > 0) engine.send({ type: "group_lights", fixtures, group });
+}
+
+function DeviceRow({
+  device,
+  show,
+  stats,
+  onGrip,
+  lifted,
+}: {
+  device: Device;
+  show: Show;
+  stats?: DeviceStats;
+  /** Starts dragging this light to another group. */
+  onGrip?: (e: React.PointerEvent) => void;
+  lifted?: boolean;
+}) {
   const [open, setOpen] = useState(false);
+  const fixtures = show.fixtures;
   const status = statusOf(device, stats);
   const virtual = device.kind === "virtual";
   const matrix = fixtures.some((f) => f.device === device.id && f.shape.type === "matrix");
   return (
-    <li className={`device ${open ? "open" : ""} ${virtual ? "virtual" : ""}`}>
+    <li className={`device ${open ? "open" : ""} ${virtual ? "virtual" : ""} ${lifted ? "lifted" : ""}`}>
       <div className="device-row">
+        {onGrip && (
+          <span className="grip" title="Drag into a group" onPointerDown={onGrip}>
+            <GripVertical size={14} />
+          </span>
+        )}
         <button
           type="button"
           className="device-main"
@@ -90,7 +112,7 @@ function DeviceRow({ device, fixtures, stats }: { device: Device; fixtures: Fixt
           aria-expanded={open}
           title="Settings for this light"
         >
-          <ChevronRight size={14} className="chevron" />
+          {!onGrip && <ChevronRight size={14} className="chevron" />}
           {matrix ? <Grid3x3 size={15} aria-hidden /> : <Minus size={15} aria-hidden />}
           <span className="device-text">
             <span className="device-name">{device.name}</span>
@@ -112,7 +134,23 @@ function DeviceRow({ device, fixtures, stats }: { device: Device; fixtures: Fixt
       {open && (
         <div className="device-settings">
           <p className={`device-status ${status.tone}`}>{status.text}</p>
-          <NameField device={device} />
+          <NameField value={device.name} onCommit={(name) => engine.send({ type: "update_device", id: device.id, name })} />
+          {show.light_groups.length > 0 && (
+            <label className="field inline">
+              <span>Group</span>
+              <select
+                value={groupOf(show, device) ?? ""}
+                onChange={(e) => fileDevice(show, device.id, e.target.value === "" ? null : Number(e.target.value))}
+              >
+                <option value="">None</option>
+                {show.light_groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {!virtual && (
             <>
               <Slider
@@ -150,6 +188,49 @@ function DeviceRow({ device, fixtures, stats }: { device: Device; fixtures: Fixt
         </div>
       )}
     </li>
+  );
+}
+
+const groupDimmers = new Map<number, (value: number) => void>();
+function groupDimmer(id: number) {
+  let send = groupDimmers.get(id);
+  if (!send) {
+    send = perFrame((brightness: number) => engine.quiet({ type: "update_light_group", id, brightness }));
+    groupDimmers.set(id, send);
+  }
+  return send;
+}
+
+function GroupSettings({ group }: { group: LightGroup }) {
+  return (
+    <div className="folder-settings">
+      <NameField
+        value={group.name}
+        autoSelect
+        onCommit={(name) => engine.send({ type: "update_light_group", id: group.id, name })}
+      />
+      <Slider
+        label="Brightness of the group"
+        min={0}
+        max={1}
+        value={group.brightness}
+        format={(v) => `${Math.round(v * 100)}%`}
+        onChange={groupDimmer(group.id)}
+      />
+      <KeyAssign action={{ type: "light_group", id: group.id }} label="Key to switch it" />
+      <div className="layer-footer">
+        <span className="hint">Effects can play on a whole group.</span>
+        <span className="spacer" />
+        <button
+          type="button"
+          className="text-button"
+          title="Remove the group and keep its lights"
+          onClick={() => engine.send({ type: "remove_light_group", id: group.id })}
+        >
+          Ungroup
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -432,22 +513,157 @@ export function DevicePanel() {
   const show = useShow();
   const status = useStatus();
   const found = useFound();
+  const folded = useFolded();
+  const live = useLive();
+  const [openGroup, setOpenGroup] = useState<number | null>(null);
+  // A light being dragged, and the group it is over ("none" for no group).
+  const [drag, setDrag] = useState<{ device: number; over: number | "none" | null } | null>(null);
+  const blocks = useRef(new Map<number | "none", HTMLElement>());
+  const knownGroups = useRef<number[] | null>(null);
+
+  // A new group opens with its name ready to type over.
+  const groupKey = show?.light_groups.map((g) => g.id).join(",") ?? "";
+  useEffect(() => {
+    if (!show) return;
+    const ids = show.light_groups.map((g) => g.id);
+    const before = knownGroups.current;
+    knownGroups.current = ids;
+    const added = before ? ids.filter((id) => !before.includes(id)) : [];
+    if (added.length === 1) setOpenGroup(added[0]!);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupKey, show === null]);
+
   if (!show) return null;
+  const groups = show.light_groups;
+  const loose = show.devices.filter((d) => groupOf(show, d) === null);
+
+  const startDrag = (device: Device) => (e: React.PointerEvent) => {
+    e.preventDefault();
+    const from = groupOf(show, device);
+    setDrag({ device: device.id, over: null });
+    const move = (ev: PointerEvent) => {
+      let over: number | "none" | null = null;
+      for (const [key, el] of blocks.current) {
+        const rect = el.getBoundingClientRect();
+        if (ev.clientY >= rect.top && ev.clientY <= rect.bottom) over = key;
+      }
+      setDrag({ device: device.id, over: over === (from ?? "none") ? null : over });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setDrag((current) => {
+        if (current && current.over !== null) fileDevice(show, device.id, current.over === "none" ? null : current.over);
+        return null;
+      });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const row = (device: Device) => (
+    <DeviceRow
+      key={device.id}
+      device={device}
+      show={show}
+      stats={status?.render.devices[String(device.id)]}
+      onGrip={groups.length > 0 ? startDrag(device) : undefined}
+      lifted={drag?.device === device.id}
+    />
+  );
+
+  const newGroup = () => {
+    const taken = groups.map((g) => g.name);
+    let n = groups.length + 1;
+    while (taken.includes(`Group ${n}`)) n += 1;
+    engine.send({ type: "add_light_group", name: `Group ${n}` });
+  };
+
   return (
     <aside className="panel devices">
-      <h2>Lights</h2>
+      <div className="panel-head">
+        <h2>Lights</h2>
+        {show.devices.length > 0 && (
+          <IconButton label="New group of lights" onClick={newGroup}>
+            <FolderPlus size={15} />
+          </IconButton>
+        )}
+      </div>
       {show.devices.length === 0 ? (
         <p className="hint">Your lights will be listed here once you add them.</p>
       ) : (
-        <ul className="device-list">
-          {show.devices.map((device) => (
-            <DeviceRow
-              key={device.id}
-              device={device}
-              fixtures={show.fixtures}
-              stats={status?.render.devices[String(device.id)]}
-            />
-          ))}
+        <ul className={`device-list ${drag ? "dragging" : ""}`}>
+          {groups.map((group) => {
+            const members = show.devices.filter((d) => groupOf(show, d) === group.id);
+            const shut = folded.includes(group.id);
+            const settings = openGroup === group.id && !drag;
+            const binding = show.bindings.find((b) => b.action.type === "light_group" && b.action.id === group.id);
+            return (
+              <li
+                key={`group-${group.id}`}
+                ref={(el) => {
+                  if (el) blocks.current.set(group.id, el);
+                  else blocks.current.delete(group.id);
+                }}
+                className={`folder ${group.enabled ? "" : "disabled"} ${drag?.over === group.id ? "drop-into" : ""}`}
+              >
+                <div className="folder-row">
+                  <button
+                    type="button"
+                    className="folder-main"
+                    aria-expanded={!shut}
+                    title={shut ? "Show the lights in this group" : "Fold this group shut"}
+                    onClick={() => toggleFolded(group.id)}
+                  >
+                    <ChevronRight size={14} className={`chevron ${shut ? "" : "down"}`} />
+                    {shut ? <Folder size={15} aria-hidden /> : <FolderOpen size={15} aria-hidden />}
+                    <span className="folder-name">{group.name}</span>
+                    <span className="folder-count">{members.length}</span>
+                    {group.brightness < 0.995 && (
+                      <span className="folder-count">{Math.round(group.brightness * 100)}%</span>
+                    )}
+                  </button>
+                  {binding && <Keycap binding={binding} held={live.held.includes(binding.id)} />}
+                  <IconButton
+                    label="Group settings"
+                    active={settings}
+                    onClick={() => setOpenGroup(settings ? null : group.id)}
+                  >
+                    <Settings2 size={15} />
+                  </IconButton>
+                  <Switch
+                    checked={group.enabled}
+                    label={group.enabled ? "Turn this group's lights off" : "Turn this group's lights on"}
+                    onChange={(enabled) => engine.send({ type: "update_light_group", id: group.id, enabled })}
+                  />
+                </div>
+                {settings && <GroupSettings group={group} />}
+                {!shut &&
+                  (members.length > 0 ? (
+                    <ul className="device-list nested">{members.map(row)}</ul>
+                  ) : (
+                    <p className="hint folder-empty">Empty. Drag lights onto this group.</p>
+                  ))}
+              </li>
+            );
+          })}
+          {(loose.length > 0 || drag) && groups.length > 0 ? (
+            <li
+              className={`loose ${drag?.over === "none" ? "drop-into" : ""}`}
+              ref={(el) => {
+                if (el) blocks.current.set("none", el);
+                else blocks.current.delete("none");
+              }}
+            >
+              {loose.length > 0 ? (
+                <ul className="device-list">{loose.map(row)}</ul>
+              ) : (
+                <p className="hint folder-empty">Drop here to take it out of its group.</p>
+              )}
+            </li>
+          ) : (
+            loose.map(row)
+          )}
         </ul>
       )}
 

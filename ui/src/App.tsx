@@ -2,10 +2,13 @@ import { X } from "lucide-react";
 import { useEffect } from "react";
 import { DevicePanel } from "./components/DevicePanel";
 import { LayerPanel } from "./components/LayerPanel";
+import { LivePads } from "./components/LivePads";
 import { ScenesBar } from "./components/ScenesBar";
+import { Settings } from "./components/Settings";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
-import { engine, useConnected, useShow, useStatus, useToasts } from "./engine";
+import { engine, useConnected, useShow, useStatus, useToasts, useView } from "./engine";
+import { startKeys } from "./keys";
 
 function Toasts() {
   const toasts = useToasts();
@@ -27,7 +30,9 @@ export function App() {
   const connected = useConnected();
   const show = useShow();
   const status = useStatus();
+  const view = useView();
   useEffect(() => engine.connect(), []);
+  useEffect(() => startKeys(), []);
 
   return (
     <div className="app">
@@ -40,12 +45,21 @@ export function App() {
           </button>
         </div>
       )}
-      <main className="workspace">
-        <DevicePanel />
-        <Stage />
-        <LayerPanel />
-      </main>
-      <ScenesBar />
+      {view === "live" ? (
+        <main className="workspace live">
+          <Stage />
+          <LivePads />
+        </main>
+      ) : (
+        <main className="workspace">
+          <DevicePanel />
+          <Stage />
+          <LayerPanel />
+        </main>
+      )}
+      {/* In the live view the scenes are pads, so the bar would repeat them. */}
+      {view === "edit" && <ScenesBar />}
+      <Settings />
       <Toasts />
       {!connected && (
         <div className="offline" role="alert">

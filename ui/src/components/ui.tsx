@@ -175,3 +175,57 @@ export function useDismiss(open: boolean, close: () => void) {
   }, [open, close]);
   return ref;
 }
+
+/**
+ * A text field for a name. It is saved when the field loses focus or
+ * Enter is pressed, and Escape puts the old name back.
+ */
+export function NameField({
+  value,
+  onCommit,
+  label = "Name",
+  placeholder,
+  autoSelect,
+  allowEmpty,
+}: {
+  value: string;
+  onCommit: (name: string) => void;
+  label?: string;
+  placeholder?: string;
+  /** Select the text when the field appears, ready to be typed over. */
+  autoSelect?: boolean;
+  allowEmpty?: boolean;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (autoSelect) inputRef.current?.select();
+    // Only when the field first appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const commit = () => {
+    const next = draft?.trim();
+    if (next !== undefined && next !== value && (next || allowEmpty)) onCommit(next);
+    setDraft(null);
+  };
+  return (
+    <label className="field">
+      <span className="field-head">
+        <span>{label}</span>
+      </span>
+      <input
+        ref={inputRef}
+        type="text"
+        maxLength={80}
+        placeholder={placeholder}
+        value={draft ?? value}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          if (e.key === "Escape") setDraft(null);
+        }}
+      />
+    </label>
+  );
+}

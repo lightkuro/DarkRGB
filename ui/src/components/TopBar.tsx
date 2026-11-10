@@ -1,7 +1,8 @@
-import { Power, Sun } from "lucide-react";
+import { Pencil, Play, Power, Settings as Gear, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { engine, perFrame, useShow } from "../engine";
+import { engine, perFrame, settingsPage, useShow, useView, viewPref } from "../engine";
 import { AudioMeter } from "./AudioMeter";
+import { Keycap, useBinding } from "./Keys";
 import { Slider } from "./ui";
 
 const setBrightness = perFrame((brightness: number) => engine.quiet({ type: "set_master", brightness }));
@@ -44,8 +45,38 @@ function ShowName({ name }: { name: string }) {
   );
 }
 
+/** Switches between building the show and performing it. */
+function ViewSwitch() {
+  const view = useView();
+  return (
+    <div className="segmented view-switch" role="radiogroup" aria-label="View">
+      <button
+        type="button"
+        role="radio"
+        aria-checked={view === "edit"}
+        className={view === "edit" ? "selected" : ""}
+        title="Build the show: lights, effects and their settings"
+        onClick={() => viewPref.set("edit")}
+      >
+        <Pencil size={13} /> Edit
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={view === "live"}
+        className={view === "live" ? "selected" : ""}
+        title="Perform: a big stage and pads for everything that has a key"
+        onClick={() => viewPref.set("live")}
+      >
+        <Play size={13} /> Live
+      </button>
+    </div>
+  );
+}
+
 export function TopBar() {
   const show = useShow();
+  const blackoutKey = useBinding({ type: "blackout" });
   if (!show) return <header className="topbar" />;
   const { brightness, blackout } = show.master;
   return (
@@ -60,6 +91,7 @@ export function TopBar() {
         <ShowName name={show.name} />
       </div>
 
+      <ViewSwitch />
       <AudioMeter />
 
       <div className="master">
@@ -85,6 +117,16 @@ export function TopBar() {
         >
           <Power size={15} />
           {blackout ? "Lights off" : "Blackout"}
+          {blackoutKey && <Keycap binding={blackoutKey} />}
+        </button>
+        <button
+          type="button"
+          className="icon-button settings-button"
+          aria-label="Settings"
+          title="Settings"
+          onClick={() => settingsPage.set("general")}
+        >
+          <Gear size={17} />
         </button>
       </div>
     </header>

@@ -47,7 +47,8 @@ export interface Hello {
   band_hz: number[];
   /** First band and one past the last band of bass, mids and treble. */
   band_groups: [number, number][];
-  frame_rate: number;
+  /** Frame rates the engine can run at. */
+  frame_rates: number[];
   effects: EffectInfo[];
   palettes: Palette[];
 }
@@ -84,7 +85,50 @@ export interface Fixture {
   width: number;
   height: number;
   rotation: number;
+  /** The group of lights this fixture is filed under, if any. */
+  group: number | null;
 }
+
+/** A named set of lights that can be aimed at, dimmed or switched as one. */
+export interface LightGroup {
+  id: number;
+  name: string;
+  enabled: boolean;
+  brightness: number;
+}
+
+/** A folder of effects. */
+export interface LayerGroup {
+  id: number;
+  name: string;
+  enabled: boolean;
+  opacity: number;
+}
+
+/** What a key does. */
+export type Action =
+  | { type: "scene"; id: number }
+  | { type: "layer"; id: number }
+  | { type: "layer_group"; id: number }
+  | { type: "light_group"; id: number }
+  | { type: "blackout" }
+  | { type: "tap_tempo" }
+  | { type: "hit" };
+
+/** Whether a key flips its thing on each press, or only while held down. */
+export type KeyMode = "toggle" | "hold";
+
+export interface Binding {
+  id: number;
+  /** The key's place on the keyboard, such as `KeyA`. */
+  key: string;
+  /** What is printed on the key. */
+  label: string;
+  action: Action;
+  mode: KeyMode;
+}
+
+export type Launch = "now" | "beat" | "bar";
 
 export type Blend = "normal" | "add" | "lighten" | "multiply";
 
@@ -113,14 +157,18 @@ export interface Layer {
   params: Record<string, ParamValue>;
   opacity: number;
   blend: Blend;
+  /** Ids of fixtures and groups of lights; empty means every light. */
   targets: number[];
   enabled: boolean;
+  /** The folder this layer is filed in, if any. */
+  group: number | null;
 }
 
 export interface Scene {
   id: number;
   name: string;
   layers: Layer[];
+  groups: LayerGroup[];
 }
 
 export interface Show {
@@ -128,10 +176,25 @@ export interface Show {
   name: string;
   devices: Device[];
   fixtures: Fixture[];
+  light_groups: LightGroup[];
   layers: Layer[];
+  layer_groups: LayerGroup[];
   scenes: Scene[];
-  master: { brightness: number; blackout: boolean };
-  audio: { source: string; sensitivity: number };
+  bindings: Binding[];
+  master: { brightness: number; blackout: boolean; limit: number };
+  audio: { source: string; sensitivity: number; delay_ms: number };
+  live: { launch: Launch; fade: number };
+  output: { frame_rate: number };
+}
+
+/** What is happening live, beyond what is saved in the show. */
+export interface Live {
+  /** Ids of the keys being held down. */
+  held: number[];
+  /** The scene waiting for the beat. */
+  pending_scene: number | null;
+  /** The tempo tapped by hand, or 0 when the music's own is followed. */
+  tapped_bpm: number;
 }
 
 export interface DeviceStats {
@@ -166,6 +229,8 @@ export interface Status {
   scan: { running: boolean; prefix: string; done: number; total: number; found: number };
   discovered: Discovered[];
   notice: string | null;
+  /** Where the show is saved on the computer running the engine. */
+  show_file: string | null;
 }
 
 export interface AudioFeatures {
@@ -208,8 +273,28 @@ export type Command =
       rotation?: number;
       reverse?: boolean;
     }
-  | { type: "add_layer"; effect: string }
+  | { type: "add_layer"; effect: string; group?: number | null }
   | { type: "remove_layer"; id: number }
+  | { type: "arrange_layers"; order: { id: number; group: number | null }[] }
+  | { type: "add_layer_group"; name: string; layer?: number }
+  | { type: "update_layer_group"; id: number; name?: string; enabled?: boolean; opacity?: number }
+  | { type: "remove_layer_group"; id: number; keep_layers: boolean }
+  | { type: "add_light_group"; name: string }
+  | { type: "update_light_group"; id: number; name?: string; enabled?: boolean; brightness?: number }
+  | { type: "remove_light_group"; id: number }
+  | { type: "group_lights"; fixtures: number[]; group: number | null }
+  | { type: "bind"; key: string; label: string; action: Action; mode: KeyMode }
+  | { type: "update_binding"; id: number; mode: KeyMode }
+  | { type: "unbind"; id: number }
+  | { type: "trigger"; binding: number; down: boolean }
+  | { type: "tap" }
+  | { type: "hit" }
+  | { type: "auto_tempo" }
+  | { type: "set_live"; launch?: Launch; fade?: number }
+  | { type: "set_output"; frame_rate?: number }
+  | { type: "rename_scene"; id: number; name: string }
+  | { type: "new_show"; keep_lights: boolean }
+  | { type: "export_show" }
   | {
       type: "update_layer";
       id: number;
@@ -219,11 +304,10 @@ export type Command =
       enabled?: boolean;
       targets?: number[];
     }
-  | { type: "move_layer"; id: number; to: number }
   | { type: "set_param"; layer: number; param: string; value: ParamValue }
   | { type: "reset_params"; layer: number }
-  | { type: "set_master"; brightness?: number; blackout?: boolean }
-  | { type: "set_audio"; source?: string; sensitivity?: number }
+  | { type: "set_master"; brightness?: number; blackout?: boolean; limit?: number }
+  | { type: "set_audio"; source?: string; sensitivity?: number; delay_ms?: number }
   | { type: "save_scene"; name: string }
   | { type: "recall_scene"; id: number }
   | { type: "delete_scene"; id: number }
@@ -279,6 +363,9 @@ class Engine {
   readonly hello = new Store<Hello | null>(null);
   readonly show = new Store<Show | null>(null);
   readonly status = new Store<Status | null>(null);
+  readonly live = new Store<Live>({ held: [], pending_scene: null, tapped_bpm: 0 });
+  /** The scene that is playing exactly as it was saved, if any. */
+  readonly currentScene = new Store<number | null>(null);
   readonly toasts = new Store<Toast[]>([]);
 
   /** Latest audio features. Read from animation frames, not from React. */
@@ -326,7 +413,11 @@ class Engine {
         this.audio = message as unknown as AudioFeatures;
         break;
       case "state":
+        this.currentScene.set((message.current_scene as number | null) ?? null);
         this.show.set(message.show as Show);
+        break;
+      case "live":
+        this.live.set(message as unknown as Live);
         break;
       case "status":
         this.status.set(message as unknown as Status);
@@ -396,7 +487,23 @@ class Engine {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(command));
   }
 
+  /**
+   * Replaces the show with one from a file. A whole show does not fit in
+   * a WebSocket message, so this goes over HTTP.
+   */
+  async importShow(json: string): Promise<CommandResult> {
+    try {
+      const response = await fetch("/api/import", { method: "POST", body: json });
+      if (response.status === 413) return { ok: false, error: "That file is far too large to be a show." };
+      return (await response.json()) as CommandResult;
+    } catch {
+      return { ok: false, error: "Could not reach the engine." };
+    }
+  }
+
   toast(kind: Toast["kind"], text: string): void {
+    // The engine words its errors as part of a sentence.
+    text = text.charAt(0).toUpperCase() + text.slice(1);
     const id = this.nextToast++;
     this.toasts.set([...this.toasts.get().slice(-3), { id, kind, text }]);
     setTimeout(() => this.dismissToast(id), kind === "error" ? 8000 : 6000);
@@ -444,6 +551,31 @@ class Pref<T> {
 /** Whether advanced settings are shown. Off for a new user. */
 export const advancedPref = new Pref<boolean>("darkrgb.advanced", false);
 export const useAdvanced = () => useSyncExternalStore(advancedPref.subscribe, advancedPref.get);
+
+/** Building the show, or performing it with the panels out of the way. */
+export type View = "edit" | "live";
+export const viewPref = new Pref<View>("darkrgb.view", "edit");
+export const useView = () => useSyncExternalStore(viewPref.subscribe, viewPref.get);
+
+/** Folders and groups the user has folded shut, by id. */
+export const foldedPref = new Pref<number[]>("darkrgb.folded", []);
+export const useFolded = () => useSyncExternalStore(foldedPref.subscribe, foldedPref.get);
+export function toggleFolded(id: number): void {
+  const folded = foldedPref.get();
+  foldedPref.set(folded.includes(id) ? folded.filter((f) => f !== id) : [...folded, id]);
+}
+
+/** Which page of the settings window is open, if it is open at all. */
+export type SettingsPage = "general" | "sound" | "lights" | "live" | "show" | "about";
+export const settingsPage = new Store<SettingsPage | null>(null);
+export const useSettingsPage = () => useSyncExternalStore(settingsPage.subscribe, settingsPage.get);
+
+export const useLive = () => useSyncExternalStore(engine.live.subscribe, engine.live.get);
+export const useCurrentScene = () => useSyncExternalStore(engine.currentScene.subscribe, engine.currentScene.get);
+
+export function sameAction(a: Action, b: Action): boolean {
+  return a.type === b.type && ("id" in a ? a.id : 0) === ("id" in b ? b.id : 0);
+}
 
 export const useConnected = () => useSyncExternalStore(engine.connected.subscribe, engine.connected.get);
 export const useHello = () => useSyncExternalStore(engine.hello.subscribe, engine.hello.get);

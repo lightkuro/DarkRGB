@@ -3,10 +3,84 @@
 
 import { ChevronDown, TriangleAlert, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { engine, perFrame, useShow, useStatus } from "../engine";
+import { engine, perFrame, useLive, useShow, useStatus } from "../engine";
 import { Slider, useDismiss } from "./ui";
 
 const setSensitivity = perFrame((sensitivity: number) => engine.quiet({ type: "set_audio", sensitivity }));
+
+/** Where the sound comes from and how strongly the lights respond. */
+export function AudioControls() {
+  const status = useStatus();
+  const show = useShow();
+  const audio = status?.audio;
+  const source = show?.audio.source ?? "system";
+  return (
+    <>
+      {audio?.state === "error" && audio.message && <p className="callout error">{audio.message}</p>}
+      <label className="field">
+        <span className="field-head">
+          <span>Listen to</span>
+        </span>
+        <select value={source} onChange={(e) => engine.send({ type: "set_audio", source: e.target.value })}>
+          <option value="system">System audio (whatever this computer plays)</option>
+          {status?.inputs.map((input) => (
+            <option key={input.id} value={input.id}>
+              {input.name}
+            </option>
+          ))}
+          {source !== "system" && !status?.inputs.some((i) => i.id === source) && (
+            <option value={source}>Unavailable input</option>
+          )}
+        </select>
+      </label>
+      <Slider
+        label="Sensitivity"
+        min={0.25}
+        max={4}
+        step={0.05}
+        value={show?.audio.sensitivity ?? 1}
+        format={(v) => `${v.toFixed(2)}×`}
+        onChange={setSensitivity}
+      />
+      <p className="hint">
+        Volume is levelled automatically, so quiet and loud music look the same. Raise sensitivity for a busier
+        picture.
+      </p>
+      {audio?.state === "running" && (
+        <p className="hint">
+          {audio.sample_rate / 1000} kHz, {audio.channels} channel{audio.channels === 1 ? "" : "s"}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** The tempo: found in the music, or tapped by hand. */
+export function Tempo() {
+  const live = useLive();
+  const tapped = live.tapped_bpm > 0;
+  return (
+    <div className="field">
+      <span className="field-head">
+        <span>Tempo</span>
+        <output>{tapped ? `${Math.round(live.tapped_bpm)} BPM, tapped` : "Following the music"}</output>
+      </span>
+      <div className="tempo-buttons">
+        <button type="button" className="button small" onClick={() => engine.quiet({ type: "tap" })}>
+          Tap
+        </button>
+        <button
+          type="button"
+          className="button small quiet"
+          disabled={!tapped}
+          onClick={() => engine.send({ type: "auto_tempo" })}
+        >
+          Follow the music
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function AudioMeter() {
   const status = useStatus();
@@ -88,44 +162,8 @@ export function AudioMeter() {
 
       {open && (
         <div className="popover audio-menu">
-          {failed && audio?.message && <p className="callout error">{audio.message}</p>}
-          <label className="field">
-            <span className="field-head">
-              <span>Listen to</span>
-            </span>
-            <select
-              value={source}
-              onChange={(e) => engine.send({ type: "set_audio", source: e.target.value })}
-            >
-              <option value="system">System audio (whatever this computer plays)</option>
-              {status?.inputs.map((input) => (
-                <option key={input.id} value={input.id}>
-                  {input.name}
-                </option>
-              ))}
-              {source !== "system" && !status?.inputs.some((i) => i.id === source) && (
-                <option value={source}>Unavailable input</option>
-              )}
-            </select>
-          </label>
-          <Slider
-            label="Sensitivity"
-            min={0.25}
-            max={4}
-            step={0.05}
-            value={show?.audio.sensitivity ?? 1}
-            format={(v) => `${v.toFixed(2)}×`}
-            onChange={setSensitivity}
-          />
-          <p className="hint">
-            Volume is levelled automatically, so quiet and loud music look the same. Raise sensitivity for a busier
-            picture.
-          </p>
-          {audio?.state === "running" && (
-            <p className="hint">
-              {audio.sample_rate / 1000} kHz, {audio.channels} channel{audio.channels === 1 ? "" : "s"}
-            </p>
-          )}
+          <AudioControls />
+          <Tempo />
         </div>
       )}
     </div>

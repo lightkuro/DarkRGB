@@ -8,12 +8,17 @@
 import {
   AudioLines,
   ChevronDown,
+  ChevronRight,
   Copy,
   Eye,
   EyeOff,
+  Folder,
+  FolderOpen,
+  FolderPlus,
   GripVertical,
   Plus,
   RotateCcw,
+  Settings2,
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
@@ -22,8 +27,11 @@ import {
   advancedPref,
   engine,
   perFrame,
+  toggleFolded,
   useAdvanced,
+  useFolded,
   useHello,
+  useLive,
   useShow,
   type Band,
   type Blend,
@@ -31,11 +39,15 @@ import {
   type Fixture,
   type Hello,
   type Layer,
+  type LayerGroup,
+  type LightGroup,
   type Palette,
   type ParamSpec,
   type ParamValue,
+  type Show,
 } from "../engine";
-import { ConfirmButton, IconButton, Slider, Switch, useDismiss } from "./ui";
+import { KeyAssign, Keycap } from "./Keys";
+import { ConfirmButton, IconButton, NameField, Slider, Switch, useDismiss } from "./ui";
 
 const BLENDS: { id: Blend; name: string; hint: string }[] = [
   { id: "normal", name: "Replace", hint: "Covers the effects below" },
@@ -256,13 +268,14 @@ export function EffectPicker({ onPick, current }: { onPick: (id: string) => void
   );
 }
 
-function Targets({ layer, fixtures }: { layer: Layer; fixtures: Fixture[] }) {
-  if (fixtures.length < 2) return null;
+function Targets({ layer, fixtures, groups }: { layer: Layer; fixtures: Fixture[]; groups: LightGroup[] }) {
+  if (fixtures.length < 2 && groups.length === 0) return null;
   const all = layer.targets.length === 0;
   const toggle = (id: number) => {
     const next = layer.targets.includes(id) ? layer.targets.filter((t) => t !== id) : [...layer.targets, id];
-    // Selecting every fixture is the same as "all lights".
-    engine.send({ type: "update_layer", id: layer.id, targets: next.length === fixtures.length ? [] : next });
+    // Ticking every light one by one is the same as "all lights".
+    const everyLight = fixtures.every((f) => next.includes(f.id));
+    engine.send({ type: "update_layer", id: layer.id, targets: everyLight ? [] : next });
   };
   return (
     <div className="field">
@@ -278,6 +291,18 @@ function Targets({ layer, fixtures }: { layer: Layer; fixtures: Fixture[] }) {
         >
           All lights
         </button>
+        {groups.map((g) => (
+          <button
+            key={g.id}
+            type="button"
+            className={`chip ${layer.targets.includes(g.id) ? "selected" : ""}`}
+            aria-pressed={layer.targets.includes(g.id)}
+            title={`Every light in ${g.name}, including ones added to it later`}
+            onClick={() => toggle(g.id)}
+          >
+            <Folder size={12} aria-hidden /> {g.name}
+          </button>
+        ))}
         {fixtures.map((f) => (
           <button
             key={f.id}
@@ -463,21 +488,31 @@ function LayerName({ layer }: { layer: Layer }) {
   );
 }
 
+/** The layers top first, as they are listed, with the folder each is in. */
+function placements(show: Show): { id: number; group: number | null }[] {
+  return show.layers.map((l) => ({ id: l.id, group: l.group })).reverse();
+}
+
+/** Sends a new arrangement; the engine wants it bottom first. */
+function arrange(order: { id: number; group: number | null }[]): void {
+  engine.send({ type: "arrange_layers", order: [...order].reverse() });
+}
+
 function LayerBody({
   layer,
   effect,
-  fixtures,
+  show,
   hello,
-  count,
   advanced,
 }: {
   layer: Layer;
   effect: EffectInfo | undefined;
-  fixtures: Fixture[];
+  show: Show;
   hello: Hello;
-  count: number;
   advanced: boolean;
 }) {
+  const fixtures = show.fixtures;
+  const count = show.layers.length;
   const [picking, setPicking] = useState(false);
   const params = effect?.params ?? [];
   const basic = params.filter((p) => !p.advanced);
@@ -519,7 +554,7 @@ function LayerBody({
         <ParamControl key={spec.id} layer={layer} spec={spec} />
       ))}
       {usesSound && <SoundControls layer={layer} hello={hello} advanced={advanced} />}
-      <Targets layer={layer} fixtures={fixtures} />
+      <Targets layer={layer} fixtures={fixtures} groups={show.light_groups} />
       <Slider
         label="Strength"
         min={0}
@@ -528,6 +563,26 @@ function LayerBody({
         format={(v) => `${Math.round(v * 100)}%`}
         onChange={numberSender(`${layer.id}:opacity`, (opacity) => ({ type: "update_layer", id: layer.id, opacity }))}
       />
+      <KeyAssign action={{ type: "layer", id: layer.id }} />
+      {show.layer_groups.length > 0 && (
+        <label className="field inline">
+          <span>Folder</span>
+          <select
+            value={layer.group ?? ""}
+            onChange={(e) => {
+              const group = e.target.value === "" ? null : Number(e.target.value);
+              arrange(placements(show).map((p) => (p.id === layer.id ? { ...p, group } : p)));
+            }}
+          >
+            <option value="">None</option>
+            {show.layer_groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
 
       {advanced && (
         <div className="advanced">
@@ -610,73 +665,212 @@ function LayerBody({
 }
 
 /** What a collapsed row says about its layer, beyond the name. */
-function summary(layer: Layer, fixtures: Fixture[], hello: Hello): string[] {
+function summary(layer: Layer, show: Show, hello: Hello): string[] {
   const parts: string[] = [];
   if (layer.sound.band.type !== "all") parts.push(bandName(layer.sound.band, hello));
   if (layer.targets.length === 1) {
-    parts.push(fixtures.find((f) => f.id === layer.targets[0])?.name ?? "1 light");
+    const id = layer.targets[0];
+    const name = show.fixtures.find((f) => f.id === id)?.name ?? show.light_groups.find((g) => g.id === id)?.name;
+    parts.push(name ?? "1 light");
   } else if (layer.targets.length > 1) {
-    parts.push(`${layer.targets.length} lights`);
+    parts.push(`${layer.targets.length} places`);
   }
   if (layer.opacity < 0.995) parts.push(`${Math.round(layer.opacity * 100)}%`);
   return parts;
+}
+
+/** What is being dragged, and where it would land if let go now. */
+interface Drag {
+  kind: "layer" | "folder";
+  id: number;
+  drop: { key: string; where: "before" | "after" | "into" } | null;
+}
+
+/** A top-level item of the list: a folder with its layers, or a lone layer. */
+type Item = { folder: LayerGroup; layers: Layer[] } | { folder: null; layer: Layer };
+
+/** The stack as it is listed: top first, folders gathered, empty folders on top. */
+function listItems(show: Show): Item[] {
+  const items: Item[] = [];
+  const top = [...show.layers].reverse();
+  for (const folder of show.layer_groups) {
+    if (!top.some((l) => l.group === folder.id)) items.push({ folder, layers: [] });
+  }
+  for (const layer of top) {
+    const folder = show.layer_groups.find((g) => g.id === layer.group) ?? null;
+    const last = items[items.length - 1];
+    if (folder && last && last.folder && last.folder.id === folder.id) last.layers.push(layer);
+    else if (folder) items.push({ folder, layers: [layer] });
+    else items.push({ folder: null, layer });
+  }
+  return items;
+}
+
+function FolderSettings({ folder, onAdd }: { folder: LayerGroup; onAdd: () => void }) {
+  return (
+    <div className="folder-settings">
+      <NameField
+        value={folder.name}
+        autoSelect
+        onCommit={(name) => engine.send({ type: "update_layer_group", id: folder.id, name })}
+      />
+      <Slider
+        label="Strength of everything inside"
+        min={0}
+        max={1}
+        value={folder.opacity}
+        format={(v) => `${Math.round(v * 100)}%`}
+        onChange={numberSender(`folder:${folder.id}`, (opacity) => ({
+          type: "update_layer_group",
+          id: folder.id,
+          opacity,
+        }))}
+      />
+      <KeyAssign action={{ type: "layer_group", id: folder.id }} />
+      <div className="layer-footer">
+        <button type="button" className="text-button" onClick={onAdd}>
+          <Plus size={13} /> Add an effect here
+        </button>
+        <span className="spacer" />
+        <button
+          type="button"
+          className="text-button"
+          title="Remove the folder and keep its effects"
+          onClick={() => engine.send({ type: "remove_layer_group", id: folder.id, keep_layers: true })}
+        >
+          Ungroup
+        </button>
+        <ConfirmButton
+          label="Remove this folder and the effects in it"
+          confirmLabel="Remove all?"
+          onConfirm={() => engine.send({ type: "remove_layer_group", id: folder.id, keep_layers: false })}
+        >
+          <Trash2 size={15} />
+        </ConfirmButton>
+      </div>
+    </div>
+  );
 }
 
 export function LayerPanel() {
   const show = useShow();
   const hello = useHello();
   const advanced = useAdvanced();
-  const [adding, setAdding] = useState(false);
+  const folded = useFolded();
+  const live = useLive();
+  // The effect picker, and the folder a new effect should go into.
+  const [adding, setAdding] = useState<{ group: number | null } | null>(null);
   // One effect is open at a time, so the list stays short.
   const [open, setOpen] = useState<number | null>(null);
-  const [drag, setDrag] = useState<{ id: number; over: number } | null>(null);
-  const rows = useRef(new Map<number, HTMLLIElement>());
-  const known = useRef<number[] | null>(null);
+  const [openFolder, setOpenFolder] = useState<number | null>(null);
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const rows = useRef(new Map<string, HTMLElement>());
+  const known = useRef<{ layers: number[]; folders: number[] } | null>(null);
 
-  // Open a layer the moment it is added; open the only one at start.
+  // Open a layer the moment it is added; open the only one at start. A
+  // new folder opens too, with its name ready to type over.
   const ids = show?.layers.map((l) => l.id) ?? [];
-  const idKey = ids.join(",");
+  const folderIds = show?.layer_groups.map((g) => g.id) ?? [];
+  const idKey = `${ids.join(",")}|${folderIds.join(",")}`;
   useEffect(() => {
     if (!show) return;
     const before = known.current;
-    known.current = ids;
+    known.current = { layers: ids, folders: folderIds };
     if (before === null) {
       if (ids.length === 1) setOpen(ids[0]!);
       return;
     }
-    const added = ids.filter((id) => !before.includes(id));
+    const added = ids.filter((id) => !before.layers.includes(id));
     if (added.length === 1) setOpen(added[0]!);
+    const addedFolders = folderIds.filter((id) => !before.folders.includes(id));
+    if (addedFolders.length === 1) setOpenFolder(addedFolders[0]!);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idKey, show === null]);
 
   if (!show || !hello) return null;
-  // Listed top-down, like layers in a paint program: the last one drawn is first.
-  const listed = show.layers.map((layer, index) => ({ layer, index })).reverse();
+  const items = listItems(show);
+  const isFolded = (id: number) => folded.includes(id);
+  const register = (key: string) => (el: HTMLElement | null) => {
+    if (el) rows.current.set(key, el);
+    else rows.current.delete(key);
+  };
 
-  const startDrag = (id: number) => (e: React.PointerEvent) => {
+  /** Where the pointer is, in terms of the rows on screen. */
+  const dropAt = (kind: Drag["kind"], id: number, y: number): Drag["drop"] => {
+    // Rows that can be dropped on, top to bottom. A folder being dragged
+    // only goes between top-level items.
+    const keys: string[] = [];
+    for (const item of items) {
+      if (item.folder) {
+        if (kind === "folder") keys.push(`b:${item.folder.id}`);
+        else {
+          keys.push(`f:${item.folder.id}`);
+          if (!isFolded(item.folder.id)) for (const layer of item.layers) keys.push(`l:${layer.id}`);
+        }
+      } else keys.push(`l:${item.layer.id}`);
+    }
+    let last: DOMRect | undefined;
+    for (const key of keys) {
+      const rect = rows.current.get(key)?.getBoundingClientRect();
+      if (!rect) continue;
+      last = rect;
+      if (y > rect.bottom) continue;
+      if (key === `${kind === "folder" ? "b" : "l"}:${id}`) return null;
+      if (key.startsWith("f:")) return { key, where: y < rect.top + rect.height * 0.3 ? "before" : "into" };
+      return { key, where: y < rect.top + rect.height / 2 ? "before" : "after" };
+    }
+    // Below everything: the bottom of the stack, in no folder.
+    return last && y > last.bottom + 4 ? { key: "end", where: "after" } : null;
+  };
+
+  /** The arrangement after letting go at `drop`. */
+  const dropped = (moving: Drag, drop: NonNullable<Drag["drop"]>) => {
+    const order = placements(show);
+    const targetId = Number(drop.key.slice(2));
+    if (moving.kind === "layer") {
+      const rest = order.filter((p) => p.id !== moving.id);
+      const put = (at: number, group: number | null) => rest.splice(at < 0 ? 0 : at, 0, { id: moving.id, group });
+      if (drop.key === "end") put(rest.length, null);
+      else if (drop.key.startsWith("l:")) {
+        const at = rest.findIndex((p) => p.id === targetId);
+        put(drop.where === "before" ? at : at + 1, rest[at]?.group ?? null);
+      } else {
+        // On a folder: into it at the top, or just above it.
+        const at = rest.findIndex((p) => p.group === targetId);
+        put(at, drop.where === "into" ? targetId : null);
+      }
+      return rest;
+    }
+    const block = order.filter((p) => p.group === moving.id);
+    const rest = order.filter((p) => p.group !== moving.id);
+    let at = rest.length;
+    if (drop.key.startsWith("l:")) {
+      const index = rest.findIndex((p) => p.id === targetId);
+      at = drop.where === "before" ? index : index + 1;
+    } else if (drop.key.startsWith("b:")) {
+      const first = rest.findIndex((p) => p.group === targetId);
+      const lastIndex = rest.map((p) => p.group).lastIndexOf(targetId);
+      at = first < 0 ? 0 : drop.where === "before" ? first : lastIndex + 1;
+    }
+    rest.splice(Math.max(at, 0), 0, ...block);
+    return rest;
+  };
+
+  const startDrag = (kind: Drag["kind"], id: number) => (e: React.PointerEvent) => {
     e.preventDefault();
     setOpen(null);
-    const from = listed.findIndex((l) => l.layer.id === id);
-    setDrag({ id, over: from });
-    const move = (ev: PointerEvent) => {
-      // The slot is the first row whose middle is below the pointer.
-      let over = listed.length - 1;
-      for (let i = 0; i < listed.length; i++) {
-        const rect = rows.current.get(listed[i]!.layer.id)?.getBoundingClientRect();
-        if (rect && ev.clientY < rect.top + rect.height / 2) {
-          over = i;
-          break;
-        }
-      }
-      setDrag({ id, over });
-    };
+    setOpenFolder(null);
+    setDrag({ kind, id, drop: null });
+    const move = (ev: PointerEvent) => setDrag({ kind, id, drop: dropAt(kind, id, ev.clientY) });
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       setDrag((current) => {
-        if (current && current.over !== from) {
-          // The list is shown top-down; the engine counts from the bottom.
-          engine.send({ type: "move_layer", id, to: listed.length - 1 - current.over });
+        if (current?.drop) {
+          const next = dropped(current, current.drop);
+          const before = placements(show);
+          const same = next.every((p, i) => p.id === before[i]?.id && p.group === before[i]?.group);
+          if (!same) arrange(next);
         }
         return null;
       });
@@ -685,6 +879,136 @@ export function LayerPanel() {
     window.addEventListener("pointerup", up);
   };
 
+  const dropClass = (key: string) => (drag?.drop?.key === key ? `drop-${drag.drop.where}` : "");
+
+  const newFolder = () => {
+    const taken = show.layer_groups.map((g) => g.name);
+    let n = show.layer_groups.length + 1;
+    while (taken.includes(`Folder ${n}`)) n += 1;
+    engine.send({ type: "add_layer_group", name: `Folder ${n}` });
+  };
+
+  const layerRow = (layer: Layer, folder: LayerGroup | null) => {
+    const effect = hello.effects.find((e) => e.id === layer.effect);
+    const isOpen = open === layer.id && !drag;
+    const title = layer.name ?? effect?.name ?? layer.effect;
+    const notes = summary(layer, show, hello);
+    const binding = show.bindings.find((b) => b.action.type === "layer" && b.action.id === layer.id);
+    const hidden = !layer.enabled || (folder !== null && !folder.enabled);
+    const canDrag = show.layers.length > 1 || show.layer_groups.length > 0;
+    return (
+      <li
+        key={layer.id}
+        ref={register(`l:${layer.id}`)}
+        className={`layer ${hidden ? "disabled" : ""} ${isOpen ? "open" : ""} ${
+          drag?.kind === "layer" && drag.id === layer.id ? "lifted" : ""
+        } ${dropClass(`l:${layer.id}`)}`}
+      >
+        <div className="layer-row">
+          {canDrag && (
+            <span
+              className="grip"
+              title="Drag to reorder or into a folder. Effects higher up are drawn on top."
+              onPointerDown={startDrag("layer", layer.id)}
+            >
+              <GripVertical size={15} />
+            </span>
+          )}
+          <button
+            type="button"
+            className="layer-main"
+            aria-expanded={isOpen}
+            onClick={() => setOpen(isOpen ? null : layer.id)}
+          >
+            <span className="layer-swatch" style={{ background: swatch(layer, effect, hello) }} />
+            <span className="layer-text">
+              <span className="layer-title">
+                {title}
+                {effect?.audio && <AudioLines size={12} aria-label="Reacts to sound" />}
+              </span>
+              {(notes.length > 0 || (layer.name && effect)) && (
+                <span className="layer-notes">
+                  {[layer.name && effect ? effect.name : null, ...notes].filter(Boolean).join(" · ")}
+                </span>
+              )}
+            </span>
+            {binding && <Keycap binding={binding} held={live.held.includes(binding.id)} />}
+            <ChevronDown size={15} className="chevron" />
+          </button>
+          <IconButton
+            label={layer.enabled ? "Hide this effect" : "Show this effect"}
+            onClick={() => engine.send({ type: "update_layer", id: layer.id, enabled: !layer.enabled })}
+          >
+            {layer.enabled ? <Eye size={15} /> : <EyeOff size={15} />}
+          </IconButton>
+        </div>
+        {isOpen && <LayerBody layer={layer} effect={effect} show={show} hello={hello} advanced={advanced} />}
+      </li>
+    );
+  };
+
+  const folderBlock = (folder: LayerGroup, layers: Layer[]) => {
+    const shut = isFolded(folder.id);
+    const settings = openFolder === folder.id && !drag;
+    const binding = show.bindings.find((b) => b.action.type === "layer_group" && b.action.id === folder.id);
+    return (
+      <li
+        key={`folder-${folder.id}`}
+        ref={register(`b:${folder.id}`)}
+        className={`folder ${folder.enabled ? "" : "disabled"} ${
+          drag?.kind === "folder" && drag.id === folder.id ? "lifted" : ""
+        } ${dropClass(`b:${folder.id}`)} ${dropClass(`f:${folder.id}`)}`}
+      >
+        <div className="folder-row" ref={register(`f:${folder.id}`)}>
+          {layers.length > 0 && (
+            <span
+              className="grip"
+              title="Drag to move the folder and everything in it"
+              onPointerDown={startDrag("folder", folder.id)}
+            >
+              <GripVertical size={15} />
+            </span>
+          )}
+          <button
+            type="button"
+            className="folder-main"
+            aria-expanded={!shut}
+            title={shut ? "Show the effects in this folder" : "Fold this folder shut"}
+            onClick={() => toggleFolded(folder.id)}
+          >
+            <ChevronRight size={14} className={`chevron ${shut ? "" : "down"}`} />
+            {shut ? <Folder size={15} aria-hidden /> : <FolderOpen size={15} aria-hidden />}
+            <span className="folder-name">{folder.name}</span>
+            <span className="folder-count">{layers.length}</span>
+            {folder.opacity < 0.995 && <span className="folder-count">{Math.round(folder.opacity * 100)}%</span>}
+          </button>
+          {binding && <Keycap binding={binding} held={live.held.includes(binding.id)} />}
+          <IconButton
+            label="Folder settings"
+            active={settings}
+            onClick={() => setOpenFolder(settings ? null : folder.id)}
+          >
+            <Settings2 size={15} />
+          </IconButton>
+          <IconButton
+            label={folder.enabled ? "Hide everything in this folder" : "Show this folder's effects"}
+            onClick={() => engine.send({ type: "update_layer_group", id: folder.id, enabled: !folder.enabled })}
+          >
+            {folder.enabled ? <Eye size={15} /> : <EyeOff size={15} />}
+          </IconButton>
+        </div>
+        {settings && <FolderSettings folder={folder} onAdd={() => setAdding({ group: folder.id })} />}
+        {!shut &&
+          (layers.length > 0 ? (
+            <ul className="layer-list nested">{layers.map((layer) => layerRow(layer, folder))}</ul>
+          ) : (
+            <p className="hint folder-empty">Empty. Drag effects onto this folder.</p>
+          ))}
+      </li>
+    );
+  };
+
+  const addingTo = adding?.group != null ? show.layer_groups.find((g) => g.id === adding.group) : undefined;
   return (
     <aside className="panel layers">
       <div className="panel-head">
@@ -697,96 +1021,39 @@ export function LayerPanel() {
 
       {adding ? (
         <div className="add-effect">
+          {addingTo && <p className="hint">Adding to the folder {addingTo.name}.</p>}
           <EffectPicker
             onPick={(effect) => {
-              setAdding(false);
-              engine.send({ type: "add_layer", effect });
+              setAdding(null);
+              engine.send({ type: "add_layer", effect, group: addingTo?.id ?? null });
             }}
           />
-          <button type="button" className="text-button" onClick={() => setAdding(false)}>
+          <button type="button" className="text-button" onClick={() => setAdding(null)}>
             Cancel
           </button>
         </div>
       ) : (
-        <button type="button" className="button wide" onClick={() => setAdding(true)}>
-          <Plus size={15} /> Add an effect
-        </button>
+        <div className="add-row">
+          <button type="button" className="button wide" onClick={() => setAdding({ group: null })}>
+            <Plus size={15} /> Add an effect
+          </button>
+          <button
+            type="button"
+            className="button square"
+            aria-label="New folder"
+            title="New folder, to keep effects that belong together in one place"
+            onClick={newFolder}
+          >
+            <FolderPlus size={16} />
+          </button>
+        </div>
       )}
       {show.layers.length === 0 && !adding && (
         <p className="hint">No effects, so the lights are dark. Add one to get started.</p>
       )}
 
-      <ul className={`layer-list ${drag ? "dragging" : ""}`}>
-        {listed.map(({ layer }, position) => {
-          const effect = hello.effects.find((e) => e.id === layer.effect);
-          const isOpen = open === layer.id && !drag;
-          const title = layer.name ?? effect?.name ?? layer.effect;
-          const notes = summary(layer, show.fixtures, hello);
-          const dropClass =
-            drag && drag.id !== layer.id && drag.over === position
-              ? listed.findIndex((l) => l.layer.id === drag.id) > position
-                ? "drop-before"
-                : "drop-after"
-              : "";
-          return (
-            <li
-              key={layer.id}
-              ref={(el) => {
-                if (el) rows.current.set(layer.id, el);
-                else rows.current.delete(layer.id);
-              }}
-              className={`layer ${layer.enabled ? "" : "disabled"} ${isOpen ? "open" : ""} ${
-                drag?.id === layer.id ? "lifted" : ""
-              } ${dropClass}`}
-            >
-              <div className="layer-row">
-                {show.layers.length > 1 && (
-                  <span
-                    className="grip"
-                    title="Drag to reorder. Effects higher up are drawn on top."
-                    onPointerDown={startDrag(layer.id)}
-                  >
-                    <GripVertical size={15} />
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className="layer-main"
-                  aria-expanded={isOpen}
-                  onClick={() => setOpen(isOpen ? null : layer.id)}
-                >
-                  <span className="layer-swatch" style={{ background: swatch(layer, effect, hello) }} />
-                  <span className="layer-text">
-                    <span className="layer-title">
-                      {title}
-                      {effect?.audio && <AudioLines size={12} aria-label="Reacts to sound" />}
-                    </span>
-                    {(notes.length > 0 || (layer.name && effect)) && (
-                      <span className="layer-notes">{[layer.name && effect ? effect.name : null, ...notes].filter(Boolean).join(" · ")}</span>
-                    )}
-                  </span>
-                  <ChevronDown size={15} className="chevron" />
-                </button>
-                <IconButton
-                  label={layer.enabled ? "Hide this effect" : "Show this effect"}
-                  onClick={() => engine.send({ type: "update_layer", id: layer.id, enabled: !layer.enabled })}
-                >
-                  {layer.enabled ? <Eye size={15} /> : <EyeOff size={15} />}
-                </IconButton>
-              </div>
-              {isOpen && (
-                <LayerBody
-                  layer={layer}
-                  effect={effect}
-                  fixtures={show.fixtures}
-                  hello={hello}
-                  count={show.layers.length}
-                  advanced={advanced}
-                />
-              )}
-            </li>
-          );
-        })}
+      <ul className={`layer-list ${drag ? "dragging" : ""} ${dropClass("end")}`}>
+        {items.map((item) => (item.folder ? folderBlock(item.folder, item.layers) : layerRow(item.layer, null)))}
       </ul>
       {show.layers.length > 1 && <p className="hint">Effects higher in the list are drawn on top of those below.</p>}
     </aside>
