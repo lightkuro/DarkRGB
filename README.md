@@ -10,66 +10,82 @@ between them:
 It targets ESP32 controllers running [WLED](https://kno.wled.ge/) first, then generic sACN and Art-Net pixel
 controllers.
 
-![The app with two strips and a matrix reacting to music](docs/images/main.png)
+![darkRGB with demo lights reacting to music](docs/images/main.png)
 
 ## Status
 
-Version 0.1.0, in development. The first mode, audio-reactive, works end to end against simulated devices on
-Linux. The automated tests also pass on Windows, but nobody has run the app there yet, and it has never driven
-real WLED hardware; see [docs/roadmap.md](docs/roadmap.md) for what is proven and what is not. Live and
-timeline modes are not started.
+Version 0.2.0, in development. The first mode, audio-reactive, works end to end. Live and timeline modes are not
+started.
+
+| | Linux | Windows |
+|---|---|---|
+| Automated tests | pass | pass |
+| System audio with no setup | works (PulseAudio and PipeWire, tested with virtual speakers) | works (checked on one Windows PC) |
+| The app window | works (tested under a virtual display) | builds; not yet run by anyone |
+| Real WLED hardware | not yet tried | not yet tried |
+
+The effects have only met synthetic test songs so far, so expect them to need tuning against real music. See
+[docs/roadmap.md](docs/roadmap.md) for the details.
 
 What works today:
 
-- Finds WLED devices on the network (mDNS) or adds them by IP address, and reads their LED count and matrix size.
-- Streams 60 frames per second over DDP.
-- Captures system audio with no setup and analyses it: loudness, 32 frequency bands, onsets, tempo and beats.
-- Ten effects with live controls, stacked in layers, each on all lights or chosen ones.
+- Opens as one window. Finds WLED devices on the network, adds them by address, or scans the network for them.
+- Demo lights and virtual lights that exist only on screen, for trying effects and planning layouts without
+  hardware.
+- Captures system audio with no setup and analyses it: loudness, 32 frequency bands, hits in bass, mids and
+  highs, tempo and beats.
+- Ten effects in layers. Each can play on all lights or chosen ones, and react to everything, bass, mids,
+  highs or a frequency range you pick.
 - A live preview where strips and matrices are arranged by dragging.
 - Scenes, master brightness and blackout. The show saves itself.
-
-The UI opens in your browser for now. A desktop window (Tauri) comes later.
+- Simple by default; an Advanced switch reveals the rest.
 
 ## Try it
 
 Builds for Windows and Linux are attached to each run of the
-[CI workflow](../../actions/workflows/ci.yml) (open the latest run, download the artifact, unzip).
+[CI workflow](../../actions/workflows/ci.yml): open the latest run on `dev`, download the zip for your system,
+unzip. The zip is named with the version and build number, which the app also shows in its bottom corner.
+
+| Program | What it is |
+|---|---|
+| `darkrgb` | The app. Double-click it. On first run, choose "Try it with demo lights" if you have no hardware to hand. |
+| `darkrgb-cli` | The same engine from a terminal. Opens the UI in your browser, and has the checks below. |
+
+Windows will warn that the programs are unsigned. On Linux the app needs WebKitGTK 4.1 (`libwebkit2gtk-4.1-0`,
+present on most desktops); `darkrgb-cli` needs nothing extra.
 
 ```
-darkrgb-cli              start the app and open the UI
-darkrgb-cli audio-test   check that system audio is captured with no setup
-darkrgb-cli ddp-test IP  stream a test pattern to one WLED device and report how steady it was
-darkrgb-cli discover     list WLED devices found on the network
-darkrgb-cli --help       all options
+darkrgb-cli                start the engine and open the UI in a browser
+darkrgb-cli --lan          also let phones on your network open it (no password yet)
+darkrgb-cli audio-test     check that system audio is captured with no setup
+darkrgb-cli ddp-test IP    stream a test pattern to one WLED device and report how steady it was
+darkrgb-cli discover       list WLED devices found on the network
+darkrgb-cli --help         all options
 ```
 
-No hardware? Run `darkrgb-sim`, which pretends to be two WLED devices on this computer. They appear in the app
-like real ones; if they do not, add `127.0.0.1:8081` and `127.0.0.1:8082` by address.
+### The check that still needs real hardware
 
-### Checks that still need real hardware
-
-Two things cannot be proven without a real computer and real lights. Each takes a minute:
-
-1. Play music, then run `darkrgb-cli audio-test`. It should end with `RESULT: OK` and name your speakers or
-   headphones. This matters most on Windows, where it has never been run.
-2. Run `darkrgb-cli ddp-test` followed by a WLED device's IP address. A white dot should glide along the
-   lights without stutter for 20 seconds, and the command prints how steady the stream was.
-
-Please report what each one prints, the WLED version, the LED count, and whether the device is on WiFi or
-Ethernet.
+Run `darkrgb-cli ddp-test` followed by a WLED device's IP address. A white dot should glide along the lights
+without stutter for 20 seconds, and the command prints how steady the stream was. Please report what it prints,
+the WLED version, the LED count, and whether the device is on WiFi or Ethernet.
 
 ## Build from source
 
-Needs [Rust](https://rustup.rs/) and [Node.js](https://nodejs.org/) 22 with [pnpm](https://pnpm.io/).
+Needs [Rust](https://rustup.rs/) (the version in `rust-toolchain.toml` is installed for you) and
+[Node.js](https://nodejs.org/) 22 with [pnpm](https://pnpm.io/). The app window also needs, on Linux:
+
+```
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev
+```
 
 ```
 cd ui && pnpm install && pnpm build && cd ..
-cargo build --release -p darkrgb-engine -p darkrgb-sim
-./target/release/darkrgb-cli
+cargo build --release -p darkrgb-desktop -p darkrgb-engine
+./target/release/darkrgb
 ```
 
-The UI is embedded in the program, so build it first. `cargo test --workspace` runs the tests, including
-end-to-end tests that drive a simulated device.
+The UI is embedded in the programs, so build it first. `cargo test` runs the tests, including end-to-end tests
+that drive a simulated device; it does not build the app window, so it needs none of the Linux packages above.
 
 To work on the UI with live reload, run the engine and Vite side by side:
 
@@ -78,21 +94,25 @@ cargo run -p darkrgb-engine -- --no-open
 cd ui && pnpm dev          # then open http://localhost:5173
 ```
 
+`cargo run -p darkrgb-sim` starts pretend WLED devices that speak the real network protocol, for testing
+discovery and streaming without hardware.
+
 ## Layout
 
 ```
-crates/core     layout, layers, effects, renderer (no I/O)
-crates/audio    audio capture and analysis
-crates/output   DDP, WLED info, discovery
-crates/engine   the app: frame loop, commands, server, diagnostics
-crates/sim      a pretend WLED device for tests and demos
-ui/                 the interface (React, TypeScript, Vite)
-docs/               research, architecture, roadmap
+crates/core      layout, layers, effects, renderer (no I/O)
+crates/audio     audio capture and analysis
+crates/output    DDP, WLED info, discovery, network scan
+crates/engine    the engine as a library, and darkrgb-cli
+crates/desktop   darkrgb, the app window (Tauri)
+crates/sim       a pretend WLED device for tests
+ui/              the interface (React, TypeScript, Vite)
+docs/            research, architecture, roadmap
 ```
 
 - [docs/research.md](docs/research.md): what xLights, Vixen and LedFx do well, where they hurt, and the gap.
 - [docs/architecture.md](docs/architecture.md): the stack and the core design.
-- [docs/roadmap.md](docs/roadmap.md): what is proven, milestones and open decisions.
+- [docs/roadmap.md](docs/roadmap.md): what is proven, what comes next, open decisions.
 - [CHANGELOG.md](CHANGELOG.md): what's new in each version.
 
 ## Licence

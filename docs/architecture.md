@@ -1,7 +1,7 @@
 # Architecture
 
-Decided on 2026-11-10. As of version 0.1.0 the engine, the device simulator and the UI exist; the desktop
-shell, live mode and the timeline do not. Sections say which parts are built. Items marked **(to verify)** are
+Decided on 2026-11-10. As of version 0.2.0 the engine, the app window, the UI and the device simulator exist;
+live mode and the timeline do not. Sections say which parts are built. Items marked **(to verify)** are
 assumptions that the checks in [roadmap.md](roadmap.md) test.
 
 ## Why installed software, not a website
@@ -25,7 +25,7 @@ a phone on the same network can open it as a remote. A public website is only ne
 |---|---|---|
 | Engine | Rust, a headless process | Steady 60 fps with no garbage-collector pauses; good audio, MIDI and network crates |
 | UI | TypeScript, React, Vite | Largest contributor pool; modern look is easy; WebGL2 for the preview, Canvas for the timeline |
-| Desktop shell | Tauri v2 (not built yet; the UI opens in the browser) | Small installers, auto-update, Windows and Linux packaging |
+| Desktop shell | Tauri v2 | One window with the engine in the same process; installers and auto-update later |
 | Engine to UI | WebSocket and HTTP on localhost | Keeps the shell replaceable; also serves the phone remote and a headless mode |
 
 ```mermaid
@@ -55,9 +55,13 @@ Tauri uses the system WebKitGTK on Linux. Tauri's docs carry a page of workaroun
 WebGPU is not confirmed there, and the Chromium (CEF) backend for Tauri has no release date.
 [Tauri Linux graphics](https://v2.tauri.app/develop/debug/linux-graphics/)
 
-Mitigation: the UI talks to the engine only over the WebSocket, never through Tauri-specific calls for show
-logic. If WebKitGTK is too slow, the same UI runs in Electron on Linux with no engine changes. Design for WebGL2,
-not WebGPU.
+Mitigation: the UI talks to the engine only over the WebSocket, never through Tauri-specific calls. The page
+in the window is given no access to the system at all. `darkrgb-cli` serves the same UI to any browser, which
+is the fallback today, and the same UI would run in Electron on Linux with no engine changes. Design for
+WebGL2, not WebGPU.
+
+Status: the window works on Linux under a virtual display with WebKitGTK 2.52, including the WebGL2 preview.
+Its speed on a real graphics card is not measured.
 
 ### Alternatives considered
 
@@ -72,7 +76,9 @@ not WebGPU.
 
 ### Layout
 
-- A **device** is something on the network: a WLED box, an sACN controller.
+- A **device** is something that shows pixels. It is either a WLED box on the network or a **virtual** light,
+  which exists only in the preview and is never sent anywhere. The built-in demo lights are three virtual
+  lights added and removed as a set.
 - A **fixture** is a strip, matrix or custom shape on a device output, with a pixel count and a position on a 2D
   canvas (3D later).
 - **Groups** collect fixtures.
@@ -99,8 +105,23 @@ not WebGPU.
 - Every change goes through a command. The same commands will serve the UI, the phone remote, MIDI mappings
   and recording. Commands are validated in one place (`crates/engine/src/commands.rs`). Undo is not built.
 
-Built so far: layers that are always on (the audio-reactive case), four blend modes, scenes. Clips with start
-and stop times, modulators other than audio, and recording are not built.
+Built so far: layers that are always on (the audio-reactive case), four blend modes, scenes, and per-layer
+sound settings (below). Clips with start and stop times, modulators on individual parameters, and recording
+are not built.
+
+### What a layer hears
+
+Each layer has sound settings: a **band** (everything, bass, mids, highs, or a custom range across the 32
+bands), a **sensitivity**, and how much its **brightness follows the sound**. The renderer hands each effect
+its own view of the audio (`AudioFeatures::routed` in `crates/core/src/audio.rs`): the level, the bands
+(spread across the full width), and hit detection all come from the chosen part of the spectrum. The beat is
+left alone, since it follows the tempo of the whole song. Effects need no code for any of this.
+
+### Simple first
+
+Every parameter is marked basic or advanced, and the defaults of advanced ones must give a good result
+untouched. The UI shows only basic settings until its Advanced switch is on. Effects also carry a category,
+which groups them in the picker.
 
 ### Effects
 
@@ -124,7 +145,7 @@ and stop times, modulators other than audio, and recording are not built.
 
 | OS | Method | Status |
 |---|---|---|
-| Windows | WASAPI loopback of the default output, through `cpal`: opening an output device as an input stream enables loopback. Needs no driver or user setting. [Microsoft](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording) | Written and compiles for Windows; not yet run on Windows |
+| Windows | WASAPI loopback of the default output, through `cpal`: opening an output device as an input stream enables loopback. Needs no driver or user setting. [Microsoft](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording) | Passed `audio-test` on one Windows PC (100% of audio received) |
 | Linux | The monitor source of the default sink, through the PulseAudio protocol with the pure-Rust `pulseaudio` client. PipeWire answers the same protocol. | Tested on PulseAudio 16.1 and PipeWire 1.0.5 |
 | macOS | A CoreAudio tap on the default output through `cpal` (macOS 14.6+) | Same code path as Windows; untested |
 
@@ -138,8 +159,12 @@ all of it.
 - Analysis (`crates/audio/src/analysis.rs`): mono mix, a 2048-sample windowed FFT every 512 samples at
   48 kHz, 32 mel bands, automatic gain, onset detection by spectral flux, and a tempo and beat tracker
   (autocorrelation of onset strength, 70 to 190 BPM). Tap tempo is not built.
-- Each band is levelled against its own recent peaks, so treble shows next to a loud kick. The tempo tracker
-  uses the unlevelled signal, weighted toward bass, so hi-hats are not mistaken for the beat.
+- Each band, each group (bass, mids, treble) and the overall level is read between its own recent quiet level
+  and recent peak, so treble shows next to a loud kick and a steady bass line does not hide the kick on top
+  of it. The tempo tracker uses the unlevelled signal, weighted toward bass, so hi-hats are not mistaken for
+  the beat.
+- Hits are detected for the whole spectrum and for bass, mids and treble separately. A group far quieter than
+  the loudest group (22 dB) is treated as spill, so a kick's click is not a treble hit.
 - Latency offset per device. Loopback audio arrives before a Bluetooth speaker plays it, so lights sometimes need
   to be delayed, not sped up.
 - Optional later on Windows: capture one application only, so notification sounds do not flash the lights
@@ -150,7 +175,10 @@ all of it.
 
 ### WLED (first-class)
 
-- **Discovery:** mDNS service `_wled._tcp`.
+- **Discovery:** mDNS service `_wled._tcp`. When that finds nothing (multicast blocked, some Windows setups),
+  the user can scan: the engine asks all 254 addresses of a /24 network for `/json/info`. It runs only on
+  request and only on private address ranges. The UI pre-fills the address field with this computer's network
+  prefix, since devices are almost always on the same network.
 - **Auto-setup:** `GET /json/info` gives `leds.count`, `leds.matrix.w` and `.h` for 2D setups, `name`, `mac`,
   `ver`, `arch`, and whether another source is streaming (`live`, `lm`, `lip`).
   [JSON API](https://kno.wled.ge/interfaces/json-api/)
@@ -236,6 +264,8 @@ Planned: a folder per show with a `media/` folder for songs and images. Shared s
 | WLED HTTP | `ureq` | Requests never go through a system proxy |
 | Server | `axum`, `tokio` | |
 | Embedding the UI | `rust-embed` | The built UI is compiled into the program |
+| App window | `tauri` 2, `tauri-plugin-single-instance` | The window loads the engine's own local URL |
+| Local networks | `if-addrs` | For suggesting addresses and scanning |
 | Frame pacing | `spin_sleep` | |
 
 Planned: `midir` (MIDI), `sacn` (sACN), own code for Art-Net, `symphonia` (song decoding).
@@ -249,13 +279,12 @@ and file formats).
 
 ```
 crates/
-  darkrgb-core/     layout, layers, effects, renderer (no I/O)
-  darkrgb-audio/    capture and analysis
-  darkrgb-output/   DDP, WLED info, discovery
-  darkrgb-engine/   the program: frame loop, commands, server, diagnostics
-  darkrgb-sim/      a pretend WLED device for tests and demos
-ui/             React + Vite
+  core/      layout, layers, effects, renderer (no I/O)
+  audio/     capture and analysis
+  output/    DDP, WLED info, discovery, network scan
+  engine/    the engine as a library (`Engine::start`), and darkrgb-cli
+  desktop/   darkrgb: the app window
+  sim/       a pretend WLED device for tests
+ui/          React + Vite
 docs/
 ```
-
-Planned: `apps/desktop/` for the Tauri shell.
