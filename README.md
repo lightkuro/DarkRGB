@@ -43,7 +43,19 @@ openlightshow --help       all options
 ```
 
 No hardware? Run `ols-sim`, which pretends to be two WLED devices on this computer. They appear in the app
-like real ones.
+like real ones; if they do not, add `127.0.0.1:8081` and `127.0.0.1:8082` by address.
+
+### Checks that still need real hardware
+
+Two things cannot be proven without a real computer and real lights. Each takes a minute:
+
+1. Play music, then run `openlightshow audio-test`. It should end with `RESULT: OK` and name your speakers or
+   headphones. This matters most on Windows, where it has never been run.
+2. Run `openlightshow ddp-test` followed by a WLED device's IP address. A white dot should glide along the
+   lights without stutter for 20 seconds, and the command prints how steady the stream was.
+
+Please report what each one prints, the WLED version, the LED count, and whether the device is on WiFi or
+Ethernet.
 
 ## Build from source
 
