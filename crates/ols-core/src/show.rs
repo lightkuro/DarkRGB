@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::effects;
-use crate::layout::{Device, Fixture, Shape};
+use crate::layout::{Device, Fixture, MAX_PIXELS, Shape};
 use crate::params::Params;
 
 pub const SHOW_VERSION: u32 = 1;
@@ -191,7 +191,9 @@ impl Show {
         let fixture_id = self.alloc_id();
 
         let (shape, width, height) = match matrix {
-            Some((cols, rows)) if cols > 1 && rows > 1 && cols * rows <= device.pixel_count => {
+            Some((cols, rows))
+                if cols > 1 && rows > 1 && cols.checked_mul(rows).is_some_and(|n| n <= device.pixel_count) =>
+            {
                 let aspect = rows as f32 / cols as f32;
                 let width = if aspect > 1.0 { 0.5 / aspect } else { 0.5 };
                 (
@@ -284,6 +286,46 @@ impl Show {
         true
     }
 
+    /// Checks a show that came from outside the program (a file). Sizes
+    /// must be sane and every number finite, so that rendering cannot be
+    /// asked for absurd amounts of memory or fed NaN positions.
+    pub fn validate(&self) -> Result<(), String> {
+        for device in &self.devices {
+            if device.pixel_count > MAX_PIXELS {
+                return Err(format!("device {:?} claims {} pixels", device.name, device.pixel_count));
+            }
+            if !(device.gamma.is_finite() && device.brightness.is_finite()) {
+                return Err(format!("device {:?} has a setting that is not a number", device.name));
+            }
+        }
+        for fixture in &self.fixtures {
+            let pixels = match fixture.shape {
+                Shape::Strip { count, .. } => Some(count),
+                Shape::Matrix { cols, rows, .. } => cols.checked_mul(rows),
+            };
+            if pixels.is_none_or(|n| n > MAX_PIXELS) {
+                return Err(format!("fixture {:?} is too large", fixture.name));
+            }
+            let numbers = [fixture.x, fixture.y, fixture.width, fixture.height, fixture.rotation];
+            if numbers.iter().any(|n| !n.is_finite()) {
+                return Err(format!(
+                    "fixture {:?} has a position that is not a number",
+                    fixture.name
+                ));
+            }
+        }
+        let layers = self.layers.iter().chain(self.scenes.iter().flat_map(|s| &s.layers));
+        for layer in layers {
+            if !layer.opacity.is_finite() {
+                return Err("a layer has an opacity that is not a number".into());
+            }
+        }
+        if !self.master.brightness.is_finite() || !self.audio.sensitivity.is_finite() {
+            return Err("a master setting is not a number".into());
+        }
+        Ok(())
+    }
+
     /// Total pixels across all fixtures, in fixture order.
     pub fn pixel_count(&self) -> usize {
         self.fixtures.iter().map(|f| f.pixel_count() as usize).sum()
@@ -347,6 +389,47 @@ mod tests {
         let mut show = Show::default();
         show.add_device(device("odd", 100), Some((16, 16)));
         assert!(matches!(show.fixtures[0].shape, Shape::Strip { count: 100, .. }));
+    }
+
+    #[test]
+    fn an_impossible_matrix_size_does_not_overflow() {
+        let mut show = Show::default();
+        show.add_device(device("odd", 100), Some((u32::MAX, u32::MAX)));
+        assert!(matches!(show.fixtures[0].shape, Shape::Strip { count: 100, .. }));
+    }
+
+    #[test]
+    fn validate_rejects_absurd_sizes_and_bad_numbers() {
+        let mut show = Show::default();
+        show.add_device(device("ok", 300), Some((20, 15)));
+        assert!(show.validate().is_ok());
+
+        let mut huge = show.clone();
+        huge.devices[0].pixel_count = u32::MAX;
+        assert!(huge.validate().is_err());
+
+        let mut huge = show.clone();
+        huge.fixtures[0].shape = Shape::Matrix {
+            cols: 70_000,
+            rows: 70_000,
+            serpentine: false,
+        };
+        assert!(huge.validate().is_err(), "the product overflows 32 bits");
+
+        let mut huge = show.clone();
+        huge.fixtures[0].shape = Shape::Strip {
+            count: MAX_PIXELS + 1,
+            reverse: false,
+        };
+        assert!(huge.validate().is_err());
+
+        let mut nan = show.clone();
+        nan.fixtures[0].x = f32::NAN;
+        assert!(nan.validate().is_err());
+
+        let mut nan = show.clone();
+        nan.master.brightness = f32::INFINITY;
+        assert!(nan.validate().is_err());
     }
 
     #[test]

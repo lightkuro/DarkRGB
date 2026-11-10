@@ -71,7 +71,9 @@ Done when a three-minute show can be recorded live, cleaned up in the editor and
 - Export `.fseq` v2 and upload to FPP.
 - Scheduler for unattended playback.
 - 3D preview.
-- Performance target: 50,000 pixels at 40 fps on a mid-range PC.
+- Performance target: 50,000 pixels at 40 fps on a mid-range PC. Measured on 2026-11-10 for the engine alone:
+  50,000 pixels on ten simulated devices with three effect layers ran at 60 fps, 4.2 ms of work per frame, on a
+  4-core cloud machine. Real networks and the preview at that size are not measured.
 
 ## 5. Later
 

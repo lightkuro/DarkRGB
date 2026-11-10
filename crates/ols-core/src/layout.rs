@@ -2,6 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Most pixels one device or fixture may have. Far above any real
+/// controller, and low enough that a device (or a hand-edited file)
+/// claiming billions cannot exhaust memory.
+pub const MAX_PIXELS: u32 = 100_000;
+
 /// Something on the network that receives pixel data.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Device {

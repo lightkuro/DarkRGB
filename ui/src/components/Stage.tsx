@@ -204,6 +204,11 @@ export function Stage() {
     dragRef.current = null;
   };
 
+  // Where the selected fixture has been nudged to. Key presses can arrive
+  // faster than the engine reports each move back, so each one builds on
+  // the last instead of on the engine's older position.
+  const nudged = useRef<{ id: number; x: number; y: number; timer?: ReturnType<typeof setTimeout> } | null>(null);
+
   const nudge = (e: React.KeyboardEvent) => {
     const f = fixtures.find((x) => x.id === selected);
     if (!f) return;
@@ -218,7 +223,12 @@ export function Stage() {
     if (e.key === "Escape") setSelected(null);
     if (!d) return;
     e.preventDefault();
-    engine.send({ type: "update_fixture", id: f.id, x: f.x + d[0], y: f.y + d[1] });
+    const from = nudged.current?.id === f.id ? nudged.current : { id: f.id, x: f.x, y: f.y };
+    clearTimeout(nudged.current?.timer);
+    const next = { id: f.id, x: from.x + d[0], y: from.y + d[1] };
+    // Forget our own position once the keys have been quiet for a moment.
+    nudged.current = { ...next, timer: setTimeout(() => (nudged.current = null), 500) };
+    engine.send({ type: "update_fixture", ...next });
   };
 
   const selectedFixture = shown.find((f) => f.id === selected);

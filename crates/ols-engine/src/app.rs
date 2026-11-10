@@ -183,7 +183,12 @@ pub fn load_show(path: &Path) -> (Show, Option<String>) {
             );
         }
     };
-    match serde_json::from_str::<Show>(&text) {
+    // A file that parses but holds impossible values is as unusable as one
+    // that does not parse.
+    let parsed = serde_json::from_str::<Show>(&text)
+        .map_err(|e| e.to_string())
+        .and_then(|show| show.validate().map(|()| show));
+    match parsed {
         Ok(show) if show.version <= ols_core::show::SHOW_VERSION => (show, None),
         Ok(show) => {
             let backup = set_aside(path);
@@ -277,6 +282,37 @@ mod tests {
             std::fs::read_to_string(path.with_extension("json.bak")).unwrap(),
             "{ this is not json"
         );
+    }
+
+    #[test]
+    fn a_file_with_impossible_sizes_is_kept_and_reported() {
+        let dir = temp_dir("absurd");
+        let path = dir.join("show.json");
+        let mut show = Show::default();
+        show.add_device(
+            ols_core::Device {
+                id: 0,
+                name: "d".into(),
+                address: "127.0.0.1".into(),
+                port: 4048,
+                pixel_count: 10,
+                enabled: true,
+                gamma: 2.2,
+                brightness: 1.0,
+                mac: None,
+                version: None,
+            },
+            None,
+        );
+        let json = serde_json::to_string(&show)
+            .unwrap()
+            .replace(r#""count":10"#, r#""count":4000000000"#);
+        assert!(json.contains("4000000000"));
+        std::fs::write(&path, json).unwrap();
+        let (loaded, notice) = load_show(&path);
+        assert_eq!(loaded, Show::default());
+        assert!(notice.unwrap().contains("too large"));
+        assert!(path.with_extension("json.bak").exists());
     }
 
     #[test]

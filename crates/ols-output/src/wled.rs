@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use ols_core::layout::MAX_PIXELS;
+
 use crate::ddp::DDP_PORT;
 
 /// What `/json/info` tells us about a device.
@@ -66,6 +68,12 @@ pub fn parse_info(json: &str) -> Result<WledInfo, String> {
     let raw: RawInfo = serde_json::from_str(json).map_err(|e| format!("not a WLED info reply: {e}"))?;
     if raw.leds.count == 0 {
         return Err("the device reports zero LEDs".into());
+    }
+    if raw.leds.count > MAX_PIXELS {
+        return Err(format!(
+            "the device reports {} LEDs, more than the {MAX_PIXELS} this app supports per device",
+            raw.leds.count
+        ));
     }
     let live_source = match (raw.lm.filter(|s| !s.is_empty()), raw.lip.filter(|s| !s.is_empty())) {
         (Some(mode), Some(ip)) => Some(format!("{mode} from {ip}")),
@@ -174,6 +182,10 @@ mod tests {
         assert!(parse_info("<html>router login</html>").is_err());
         assert!(parse_info(r#"{"name":"x"}"#).is_err());
         assert!(parse_info(r#"{"leds":{"count":0}}"#).is_err());
+        // A reply claiming billions of LEDs must not be believed.
+        assert!(parse_info(r#"{"leds":{"count":4000000000}}"#).is_err());
+        assert!(parse_info(r#"{"leds":{"count":100001}}"#).is_err());
+        assert!(parse_info(r#"{"leds":{"count":100000}}"#).is_ok());
     }
 
     #[test]
