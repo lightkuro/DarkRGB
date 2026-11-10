@@ -29,12 +29,17 @@ const BAND_MAX_HZ: f32 = 16_000.0;
 const BASS_MAX_HZ: f32 = 250.0;
 const TREBLE_MIN_HZ: f32 = 2_500.0;
 
-/// A band this far below its own recent peak shows as zero.
+/// A band this far below its own recent peak shows as zero, at most.
 const BAND_RANGE_DB: f32 = 24.0;
+/// How close to the peak the "quiet" end of a band's range may rise, when
+/// the band never goes quiet. Music with a steady bass line under its kick
+/// drum then still swings: the steady part reads low and the kick high.
+const MIN_RANGE_DB: f32 = 9.0;
+/// Seconds for the quiet end of the range to drift up to a sustained level.
+const FLOOR_RISE_S: f32 = 3.0;
 /// A band is never levelled up by more than this relative to the loudest
 /// band (30 dB), so bands holding only noise stay dark.
 const BAND_FLOOR: f32 = 0.03;
-const LEVEL_RANGE_DB: f32 = 24.0;
 /// Input quieter than this (about -80 dBFS) counts as silence.
 const SILENCE_RMS: f32 = 1e-4;
 /// Gain never amplifies beyond what this reference allows, so background
@@ -72,7 +77,13 @@ pub struct Analyzer {
     /// Recent peak of the loudest band, and of each band by itself.
     band_ref: f32,
     band_peaks: [f32; BANDS],
+    /// Recent quiet level of each band: falls at once, rises slowly.
+    band_floors: [f32; BANDS],
+    /// The same pair for bass, mid and treble as whole groups.
+    group_peaks: [f32; 3],
+    group_floors: [f32; 3],
     level_ref: f32,
+    level_floor: f32,
     prev_log: [f32; BANDS],
     /// As `prev_log`, but measured against the loudest band, not each
     /// band's own peak. The tempo tracker uses this one.
@@ -159,7 +170,11 @@ impl Analyzer {
             sensitivity: 1.0,
             band_ref: MIN_REFERENCE,
             band_peaks: [0.0; BANDS],
+            band_floors: [0.0; BANDS],
+            group_peaks: [0.0; 3],
+            group_floors: [0.0; 3],
             level_ref: MIN_REFERENCE,
+            level_floor: 0.0,
             prev_log: [0.0; BANDS],
             prev_log_natural: [0.0; BANDS],
             quiet_steps: usize::MAX / 2,
@@ -288,8 +303,10 @@ impl Analyzer {
             group_flux[self.band_class[b] as usize] += natural_rise;
             group_size[self.band_class[b] as usize] += 1;
 
+            let reference = peak.max(floor);
+            let quiet = follow_floor(&mut self.band_floors[b], bands[b], self.step_rate, reference);
             let target = if active {
-                (to_unit(relative, BAND_RANGE_DB).powf(1.4) * self.sensitivity).min(1.0)
+                (within(bands[b], quiet, reference).powf(1.2) * self.sensitivity).min(1.0)
             } else {
                 0.0
             };
@@ -298,31 +315,43 @@ impl Analyzer {
             *current += (target - *current) * rate;
         }
 
+        let quiet = follow_floor(&mut self.level_floor, rms, self.step_rate, self.level_ref);
         let target = if active {
-            (to_unit(rms / self.level_ref, LEVEL_RANGE_DB).powf(1.2) * self.sensitivity).min(1.0)
+            (within(rms, quiet, self.level_ref).powf(1.2) * self.sensitivity).min(1.0)
         } else {
             0.0
         };
         let rate = if target > self.out.level { 0.6 } else { 0.12 };
         self.out.level += (target - self.out.level) * rate;
 
-        let mut sums = [(0.0f32, 0.0f32, 0u32); 3];
+        // Bass, mid and treble come from each group's total energy, levelled
+        // the same way as a single band. Taking the loudest band of a group
+        // would sit near the top all the time: some band always is.
+        let mut energy = [0.0f32; 3];
         for b in 0..BANDS {
-            let slot = &mut sums[self.band_class[b] as usize];
-            slot.0 += self.out.bands[b];
-            slot.1 = slot.1.max(self.out.bands[b]);
-            slot.2 += 1;
+            energy[self.band_class[b] as usize] += bands[b] * bands[b];
         }
-        let blend = |(sum, max, count): (f32, f32, u32)| {
-            if count == 0 {
-                0.0
+        let mut groups = [0.0f32; 3];
+        for g in 0..3 {
+            let value = energy[g].sqrt();
+            let peak = &mut self.group_peaks[g];
+            *peak = if value > *peak {
+                *peak + (value - *peak) * 0.3
             } else {
-                0.6 * max + 0.4 * sum / count as f32
-            }
-        };
-        self.out.bass = blend(sums[0]);
-        self.out.mid = blend(sums[1]);
-        self.out.treble = blend(sums[2]);
+                *peak * release
+            };
+            let reference = peak.max(floor);
+            let quiet = follow_floor(&mut self.group_floors[g], value, self.step_rate, reference);
+            let target = if active {
+                (within(value, quiet, reference).powf(1.2) * self.sensitivity).min(1.0)
+            } else {
+                0.0
+            };
+            let current = [&mut self.out.bass, &mut self.out.mid, &mut self.out.treble];
+            let rate = if target > *current[g] { 0.7 } else { 0.18 };
+            groups[g] = *current[g] + (target - *current[g]) * rate;
+        }
+        [self.out.bass, self.out.mid, self.out.treble] = groups;
         self.out.active = active;
 
         let onset = active && self.detect_onset(flux);
@@ -568,13 +597,25 @@ fn follow(reference: f32, value: f32, release: f32) -> f32 {
     next.max(MIN_REFERENCE)
 }
 
-/// Maps a ratio to 0..1 on a decibel scale: 1.0 at the reference, 0.0 at
-/// `range_db` below it.
-fn to_unit(ratio: f32, range_db: f32) -> f32 {
-    if ratio <= 0.0 {
+fn db_to_ratio(db: f32) -> f32 {
+    10f32.powf(db / 20.0)
+}
+
+/// Updates a band's quiet level and returns the bottom of its range: the
+/// quiet level, kept between `BAND_RANGE_DB` and `MIN_RANGE_DB` below the
+/// peak. A steady tone therefore reads as full, not as nothing.
+fn follow_floor(floor: &mut f32, value: f32, step_rate: f32, peak: f32) -> f32 {
+    let rise = 1.0 - (-1.0 / (step_rate * FLOOR_RISE_S)).exp();
+    *floor += (value - *floor) * if value < *floor { 0.2 } else { rise };
+    floor.clamp(peak * db_to_ratio(-BAND_RANGE_DB), peak * db_to_ratio(-MIN_RANGE_DB))
+}
+
+/// Where `value` sits between `low` and `high` on a decibel scale, 0..1.
+fn within(value: f32, low: f32, high: f32) -> f32 {
+    if value <= low || high <= low {
         return 0.0;
     }
-    (1.0 + 20.0 * ratio.log10() / range_db).clamp(0.0, 1.0)
+    ((value / low).log10() / (high / low).log10()).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

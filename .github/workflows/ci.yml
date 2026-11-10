@@ -56,8 +56,10 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets -- -D warnings
 
+      # Tests run on the release build, so the programs that are attached
+      # below are the ones that were tested, and everything compiles once.
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --release
 
       - name: Build release programs
         run: cargo build --release -p ols-engine -p ols-sim
