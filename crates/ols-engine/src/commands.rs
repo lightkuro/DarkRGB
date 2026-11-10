@@ -676,6 +676,148 @@ mod tests {
         assert!(apply(&mut show, &Command::RecallScene { id }).is_err());
     }
 
+    /// A small repeatable source of awkward values for the test below.
+    struct Awkward(u32);
+
+    impl Awkward {
+        const NUMBERS: [f32; 10] = [
+            0.0,
+            1.0,
+            -1.0,
+            0.5,
+            1e30,
+            -1e30,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MIN_POSITIVE,
+        ];
+        const TEXTS: [&'static str; 13] = [
+            "", " ", "x", "#ff0000", "#GGGGGG", "plasma", "solid", "scroll", "nope", "Left", "fire", "system", "a\nb",
+        ];
+
+        fn next(&mut self) -> u32 {
+            self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            self.0 >> 8
+        }
+        fn flag(&mut self) -> bool {
+            self.next().is_multiple_of(2)
+        }
+        fn number(&mut self) -> f32 {
+            Self::NUMBERS[self.next() as usize % Self::NUMBERS.len()]
+        }
+        fn text(&mut self) -> String {
+            Self::TEXTS[self.next() as usize % Self::TEXTS.len()].to_string()
+        }
+        fn maybe<T>(&mut self, make: impl FnOnce(&mut Self) -> T) -> Option<T> {
+            if self.flag() { Some(make(self)) } else { None }
+        }
+        /// Mostly an id that exists, sometimes one that does not.
+        fn id(&mut self, ids: Vec<u32>) -> u32 {
+            let n = self.next();
+            if n.is_multiple_of(5) || ids.is_empty() {
+                n % 50
+            } else {
+                ids[n as usize % ids.len()]
+            }
+        }
+    }
+
+    /// Whatever commands arrive, in whatever order and with whatever
+    /// values, the show stays one that could be saved and loaded again.
+    #[test]
+    fn no_sequence_of_commands_can_make_the_show_invalid() {
+        let mut r = Awkward(0x2545_F491);
+        let blends = [Blend::Normal, Blend::Add, Blend::Lighten, Blend::Multiply];
+        let params = ["speed", "colour", "palette", "origin", "mirror", "nope"];
+
+        let mut show = show_with_device();
+        show.add_layer("scroll");
+        let mut accepted = 0;
+        for _ in 0..20_000 {
+            let layer = r.id(show.layers.iter().map(|l| l.id).collect());
+            let device = r.id(show.devices.iter().map(|d| d.id).collect());
+            let fixture = r.id(show.fixtures.iter().map(|f| f.id).collect());
+            let scene = r.id(show.scenes.iter().map(|s| s.id).collect());
+            let command = match r.next() % 15 {
+                0 => Command::UpdateDevice {
+                    id: device,
+                    name: r.maybe(Awkward::text),
+                    enabled: r.maybe(Awkward::flag),
+                    gamma: r.maybe(Awkward::number),
+                    brightness: r.maybe(Awkward::number),
+                },
+                1 => Command::UpdateFixture {
+                    id: fixture,
+                    name: r.maybe(Awkward::text),
+                    x: r.maybe(Awkward::number),
+                    y: r.maybe(Awkward::number),
+                    width: r.maybe(Awkward::number),
+                    height: r.maybe(Awkward::number),
+                    rotation: r.maybe(Awkward::number),
+                    reverse: r.maybe(Awkward::flag),
+                },
+                2 => Command::AddLayer { effect: r.text() },
+                3 => Command::RemoveLayer { id: layer },
+                4 => Command::UpdateLayer {
+                    id: layer,
+                    effect: r.maybe(Awkward::text),
+                    opacity: r.maybe(Awkward::number),
+                    blend: r.maybe(|r| blends[r.next() as usize % 4]),
+                    enabled: r.maybe(Awkward::flag),
+                    targets: r.maybe(|r| vec![fixture, r.next() % 50]),
+                },
+                5 => Command::MoveLayer {
+                    id: layer,
+                    to: r.next() as usize,
+                },
+                6 | 7 => Command::SetParam {
+                    layer,
+                    param: params[r.next() as usize % params.len()].into(),
+                    value: match r.next() % 3 {
+                        0 => ParamValue::Number(r.number()),
+                        1 => ParamValue::Text(r.text()),
+                        _ => ParamValue::Bool(r.flag()),
+                    },
+                },
+                8 => Command::ResetParams { layer },
+                9 => Command::SetMaster {
+                    brightness: r.maybe(Awkward::number),
+                    blackout: r.maybe(Awkward::flag),
+                },
+                10 => Command::SetAudio {
+                    source: r.maybe(Awkward::text),
+                    sensitivity: r.maybe(Awkward::number),
+                },
+                11 => Command::SaveScene { name: r.text() },
+                12 => Command::RecallScene { id: scene },
+                13 => Command::DeleteScene { id: scene },
+                _ => Command::RenameShow { name: r.text() },
+            };
+            // Like the server, apply to a copy and keep it only on success.
+            let mut next = show.clone();
+            if apply(&mut next, &command).is_ok() {
+                accepted += 1;
+                show = next;
+            }
+            if let Err(problem) = show.validate() {
+                panic!("{command:?} left the show invalid: {problem}");
+            }
+            assert!(show.layers.len() <= MAX_LAYERS && show.scenes.len() <= MAX_SCENES);
+            for layer in &show.layers {
+                assert!((0.0..=1.0).contains(&layer.opacity), "{command:?}");
+                assert!(
+                    layer.targets.iter().all(|t| show.fixtures.iter().any(|f| f.id == *t)),
+                    "{command:?} left a target that does not exist"
+                );
+            }
+        }
+        assert!(
+            accepted > 2_000,
+            "only {accepted} commands were accepted; the test is not exercising much"
+        );
+    }
+
     #[test]
     fn layer_count_is_capped() {
         let mut show = show_with_device();
