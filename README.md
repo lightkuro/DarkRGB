@@ -42,17 +42,19 @@ What works today:
 
 ## Try it
 
-Builds for Windows and Linux are attached to each run of the
-[CI workflow](../../actions/workflows/ci.yml): open the latest run on `dev`, download the zip for your system,
-unzip. The zip is named with the version and build number, which the app also shows in its bottom corner.
+Builds for Windows and Linux are attached to runs of the [CI workflow](../../actions/workflows/ci.yml): open
+the latest run, download the zip for your system, unzip. The zip is named with the version and build number,
+which the app also shows in its bottom corner. Builds are started by hand ("Run workflow" on that page), not on
+every push, and downloads are kept for a week.
 
 | Program | What it is |
 |---|---|
 | `darkrgb` | The app. Double-click it. On first run, choose "Try it with demo lights" if you have no hardware to hand. |
 | `darkrgb-cli` | The same engine from a terminal. Opens the UI in your browser, and has the checks below. |
 
-Windows will warn that the programs are unsigned. On Linux the app needs WebKitGTK 4.1 (`libwebkit2gtk-4.1-0`,
-present on most desktops); `darkrgb-cli` needs nothing extra.
+Windows will warn that the programs are unsigned. The app window uses the system's web engine: WebView2 on
+Windows (part of Windows 11, and installed with Edge on Windows 10) and WebKitGTK 4.1 on Linux
+(`libwebkit2gtk-4.1-0`, present on most desktops). `darkrgb-cli` needs neither.
 
 ```
 darkrgb-cli                start the engine and open the UI in a browser

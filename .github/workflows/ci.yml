@@ -1,15 +1,11 @@
 name: CI
 
-# Changes that only touch documentation do not start a build.
+# Builds start only when asked for: Actions tab, "CI", "Run workflow", pick
+# the branch. Nothing runs on a push, so build minutes are spent on purpose.
 on:
-  push:
-    branches: [main, dev]
-    paths-ignore: ["docs/**", "README.md", "LICENSE"]
-  pull_request:
-    paths-ignore: ["docs/**", "README.md", "LICENSE"]
   workflow_dispatch:
 
-# A newer push to the same branch replaces the run in progress.
+# Starting a build for a branch replaces one still running for it.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
