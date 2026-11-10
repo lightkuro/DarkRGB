@@ -22,7 +22,7 @@ use axum::http::header::{self, HeaderMap, HeaderValue};
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use darkrgb_core::audio::{BAND_MAX_HZ, band_edge_hz};
+use darkrgb_core::audio::{BAND_MAX_HZ, BASS, MID, TREBLE, band_edge_hz, group_bands};
 use darkrgb_core::{BANDS, color, effects};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -164,6 +164,8 @@ fn hello() -> String {
         "version": VERSION,
         "build": BUILD,
         "frame_rate": FRAME_RATE,
+        // First band and one past the last band of bass, mids and treble.
+        "band_groups": ([BASS, MID, TREBLE].map(group_bands)),
         // Edges of the frequency bands in Hz, so the UI can label ranges.
         "band_hz": (0..=BANDS).map(|i| band_edge_hz(i, BAND_MAX_HZ).round()).collect::<Vec<f32>>(),
         "effects": effects,

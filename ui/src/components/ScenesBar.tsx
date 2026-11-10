@@ -87,7 +87,7 @@ function Version() {
         </div>
       )}
       <button type="button" className="text-button" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {open ? "Close" : `Version ${hello.version}`}
+        {open ? "Close" : `Version ${hello.version}${hello.build ? ` (build ${hello.build})` : ""}`}
       </button>
     </div>
   );

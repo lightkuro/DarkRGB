@@ -2,7 +2,7 @@
 // dragging. The LEDs are drawn with WebGL; outlines and handles sit on top
 // in SVG so they stay crisp at any zoom.
 
-import { ArrowLeftRight, Maximize, RotateCw } from "lucide-react";
+import { ArrowLeftRight, Maximize, RotateCw, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { engine, perFrame, useShow, useStatus, type Fixture } from "../engine";
 import { StageRenderer, type View } from "../stageGl";
@@ -232,6 +232,8 @@ export function Stage() {
   };
 
   const selectedFixture = shown.find((f) => f.id === selected);
+  // Virtual lights get a dashed outline, so they are not mistaken for real ones.
+  const virtualIds = new Set(show?.devices.filter((d) => d.kind === "virtual").map((d) => d.id));
   const pixels = fixtures.reduce(
     (n, f) => n + (f.shape.type === "strip" ? f.shape.count : f.shape.cols * f.shape.rows),
     0,
@@ -264,7 +266,7 @@ export function Stage() {
           return (
             <g key={f.id} transform={`translate(${sx} ${sy}) rotate(${f.rotation})`}>
               <rect
-                className={`fixture-box ${isSelected ? "selected" : ""}`}
+                className={`fixture-box ${isSelected ? "selected" : ""} ${virtualIds.has(f.device) ? "virtual" : ""}`}
                 x={-w / 2}
                 y={-h / 2}
                 width={w}
@@ -325,10 +327,16 @@ export function Stage() {
             already reacting to whatever your computer is playing.
           </p>
           <FoundDevices />
-          <AddByAddress autoFocus />
+          <AddByAddress />
+          <div className="or">
+            <span>or</span>
+          </div>
+          <button type="button" className="button wide demo" onClick={() => engine.send({ type: "set_demo", enabled: true })}>
+            <Sparkles size={15} /> Try it with demo lights
+          </button>
           <p className="hint">
-            No hardware to hand? Run the bundled simulator (<code>darkrgb-sim</code>) and add{" "}
-            <code>127.0.0.1:8081</code>.
+            Demo lights exist only on this screen. Play some music and watch them react; switch them off again under
+            Lights.
           </p>
         </div>
       )}

@@ -15,15 +15,16 @@ pub const DEFAULT_EFFECT: &str = "plasma";
 pub fn registry() -> &'static [EffectDef] {
     static REGISTRY: OnceLock<Vec<EffectDef>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
+        // Listed in the order the picker shows them, group by group.
         vec![
-            Plasma::def(),
             Spectrum::def(),
             Energy::def(),
-            BeatPulse::def(),
             Scroll::def(),
+            Meter::def(),
+            BeatPulse::def(),
             Ripple::def(),
             Sparkle::def(),
-            Meter::def(),
+            Plasma::def(),
             Flow::def(),
             Solid::def(),
         ]

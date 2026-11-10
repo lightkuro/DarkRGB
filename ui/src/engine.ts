@@ -11,6 +11,8 @@ export type ParamValue = boolean | number | string;
 export interface ParamSpec {
   id: string;
   label: string;
+  /** Hidden until the user switches advanced settings on. */
+  advanced: boolean;
   kind: "float" | "color" | "bool" | "choice" | "palette";
   min?: number;
   max?: number;
@@ -23,6 +25,8 @@ export interface EffectInfo {
   id: string;
   name: string;
   description: string;
+  /** The group it is listed under in the picker. */
+  category: string;
   audio: boolean;
   params: ParamSpec[];
 }
@@ -37,6 +41,12 @@ export interface Palette {
 export interface Hello {
   app: string;
   version: string;
+  /** CI build number, when this program was built there. */
+  build: string | null;
+  /** Edges of the 32 frequency bands in Hz (33 numbers). */
+  band_hz: number[];
+  /** First band and one past the last band of bass, mids and treble. */
+  band_groups: [number, number][];
   frame_rate: number;
   effects: EffectInfo[];
   palettes: Palette[];
@@ -45,6 +55,10 @@ export interface Hello {
 export interface Device {
   id: number;
   name: string;
+  /** A virtual light exists only in the preview. */
+  kind: "wled" | "virtual";
+  /** One of the built-in demo lights. */
+  demo: boolean;
   address: string;
   port: number;
   pixel_count: number;
@@ -74,8 +88,27 @@ export interface Fixture {
 
 export type Blend = "normal" | "add" | "lighten" | "multiply";
 
+/** The part of the spectrum a layer listens to. */
+export type Band =
+  | { type: "all" }
+  | { type: "bass" }
+  | { type: "mid" }
+  | { type: "treble" }
+  | { type: "range"; low: number; high: number };
+
+export interface Sound {
+  band: Band;
+  /** Multiplier on what the layer hears, 0.25 to 4. */
+  gain: number;
+  /** How much the layer's brightness follows the sound, 0 to 1. */
+  pulse: number;
+}
+
 export interface Layer {
   id: number;
+  /** A label the user gave it; otherwise the effect's name is shown. */
+  name: string | null;
+  sound: Sound;
   effect: string;
   params: Record<string, ParamValue>;
   opacity: number;
@@ -128,6 +161,9 @@ export interface Status {
     message: string | null;
   };
   inputs: { id: string; name: string }[];
+  /** Local networks this computer is on, best guess first. */
+  networks: { address: string; prefix: string }[];
+  scan: { running: boolean; prefix: string; done: number; total: number; found: number };
   discovered: Discovered[];
   notice: string | null;
 }
@@ -139,6 +175,7 @@ export interface AudioFeatures {
   treble: number;
   bands: number[];
   onset: number;
+  onsets: number[];
   beat: number;
   beat_phase: number;
   bpm: number;
@@ -148,6 +185,16 @@ export interface AudioFeatures {
 
 export type Command =
   | { type: "add_device"; address: string }
+  | { type: "scan_network"; prefix: string }
+  | { type: "set_demo"; enabled: boolean }
+  | {
+      type: "add_virtual";
+      name: string;
+      shape: { type: "strip"; count: number } | { type: "matrix"; cols: number; rows: number };
+    }
+  | { type: "rename_layer"; id: number; name: string }
+  | { type: "duplicate_layer"; id: number }
+  | { type: "set_sound"; layer: number; band?: Band; gain?: number; pulse?: number }
   | { type: "remove_device"; id: number }
   | { type: "update_device"; id: number; name?: string; enabled?: boolean; gamma?: number; brightness?: number }
   | {
@@ -205,6 +252,7 @@ const SILENCE: AudioFeatures = {
   treble: 0,
   bands: new Array<number>(32).fill(0),
   onset: 0,
+  onsets: [0, 0, 0],
   beat: 0,
   beat_phase: 0,
   bpm: 0,
@@ -360,6 +408,42 @@ class Engine {
 }
 
 export const engine = new Engine();
+
+/**
+ * A setting of the interface itself, kept in the browser. It belongs to
+ * whoever is looking (a phone used as a remote keeps its own), not to
+ * the show.
+ */
+class Pref<T> {
+  private store: Store<T>;
+  constructor(
+    private key: string,
+    fallback: T,
+  ) {
+    let value = fallback;
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved !== null) value = JSON.parse(saved) as T;
+    } catch {
+      // Storage can be unavailable or hold something unreadable.
+    }
+    this.store = new Store(value);
+  }
+  get = (): T => this.store.get();
+  subscribe = (listener: () => void) => this.store.subscribe(listener);
+  set(value: T): void {
+    this.store.set(value);
+    try {
+      localStorage.setItem(this.key, JSON.stringify(value));
+    } catch {
+      // Not being able to remember it is not worth an error.
+    }
+  }
+}
+
+/** Whether advanced settings are shown. Off for a new user. */
+export const advancedPref = new Pref<boolean>("darkrgb.advanced", false);
+export const useAdvanced = () => useSyncExternalStore(advancedPref.subscribe, advancedPref.get);
 
 export const useConnected = () => useSyncExternalStore(engine.connected.subscribe, engine.connected.get);
 export const useHello = () => useSyncExternalStore(engine.hello.subscribe, engine.hello.get);
