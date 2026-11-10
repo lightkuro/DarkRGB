@@ -935,7 +935,7 @@ checksum = "914a755b7c2d4af2bdcff7ce1739e2db9a1b81a9b07123d8015786ae03c0980d"
 
 [[package]]
 name = "darkrgb-audio"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cpal",
  "darkrgb-core",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "darkrgb-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "darkrgb-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "darkrgb-engine",
  "dirs 7.0.0",
@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "darkrgb-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "darkrgb-output"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "darkrgb-core",
  "if-addrs",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "darkrgb-sim"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "darkrgb-output",

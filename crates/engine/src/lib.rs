@@ -10,6 +10,7 @@ pub mod commands;
 pub mod diagnostics;
 #[cfg(test)]
 mod e2e_tests;
+pub mod live;
 pub mod render_loop;
 pub mod server;
 

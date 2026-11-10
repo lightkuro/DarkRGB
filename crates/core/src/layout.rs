@@ -149,6 +149,9 @@ pub struct Fixture {
     /// Clockwise rotation in degrees.
     #[serde(default)]
     pub rotation: f32,
+    /// The group of lights this fixture is filed under, if any.
+    #[serde(default)]
+    pub group: Option<u32>,
 }
 
 impl Fixture {
@@ -204,6 +207,7 @@ mod tests {
             width: 4.0,
             height: 2.0,
             rotation: 0.0,
+            group: None,
         }
     }
 

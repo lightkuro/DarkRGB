@@ -103,7 +103,11 @@ impl Renderer {
     pub fn render(&mut self, show: &Show, time: f64, dt: f32, audio: &AudioFeatures) -> &[Rgb] {
         self.frame.fill(Rgb::BLACK);
         for layer in &show.layers {
-            if !layer.enabled || layer.opacity <= 0.0 {
+            // A folder can switch its layers off and scale their strength.
+            let folder = layer.group.and_then(|g| show.layer_groups.iter().find(|x| x.id == g));
+            let folder_strength = folder.map_or(1.0, |f| if f.enabled { f.opacity } else { 0.0 });
+            let opacity = (layer.opacity * folder_strength).clamp(0.0, 1.0);
+            if !layer.enabled || opacity <= 0.0 {
                 continue;
             }
             let (Some(state), Some(def)) = (self.layers.get_mut(&layer.id), effects::find(&layer.effect)) else {
@@ -122,7 +126,6 @@ impl Renderer {
                 .effect
                 .configure(&ParamReader::new(&def.info.params, &layer.params));
             state.effect.update(&ctx);
-            let opacity = layer.opacity.clamp(0.0, 1.0);
             // "Brightness follows sound": dim the layer by how quiet its
             // part of the sound is. Zero leaves the effect as it is.
             let pulse = layer.sound.pulse.clamp(0.0, 1.0);
@@ -141,14 +144,47 @@ impl Renderer {
         let master = if show.master.blackout {
             0.0
         } else {
-            show.master.brightness.clamp(0.0, 1.0)
+            show.master.brightness.clamp(0.0, 1.0) * show.master.limit.clamp(0.0, 1.0)
         };
         if master < 1.0 {
             for px in &mut self.frame {
                 *px = px.scale(master);
             }
         }
+        // Groups of lights can be dimmed or switched off as one.
+        if show.light_groups.iter().any(|g| !g.enabled || g.brightness < 1.0) {
+            let mut offset = 0usize;
+            for fixture in &show.fixtures {
+                let count = fixture.pixel_count() as usize;
+                let group = fixture.group.and_then(|g| show.light_groups.iter().find(|x| x.id == g));
+                let level = group.map_or(1.0, |g| if g.enabled { g.brightness.clamp(0.0, 1.0) } else { 0.0 });
+                if level < 1.0 {
+                    for px in self.frame.iter_mut().skip(offset).take(count) {
+                        *px = px.scale(level);
+                    }
+                }
+                offset += count;
+            }
+        }
         &self.frame
+    }
+
+    /// The last rendered frame.
+    pub fn frame(&self) -> &[Rgb] {
+        &self.frame
+    }
+
+    /// Mixes another frame into the last rendered one: `amount` 0 keeps
+    /// this frame, 1 replaces it with `other`. Used to fade from one
+    /// scene to the next. Does nothing if the sizes differ.
+    pub fn mix_in(&mut self, other: &[Rgb], amount: f32) {
+        if other.len() != self.frame.len() {
+            return;
+        }
+        let amount = amount.clamp(0.0, 1.0);
+        for (px, from) in self.frame.iter_mut().zip(other) {
+            *px = px.lerp(*from, amount);
+        }
     }
 
     /// The last rendered frame as 8-bit RGB with no gamma, for the preview.
@@ -202,7 +238,7 @@ fn build_targets(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> (Vec<Tar
     let mut fixtures_hit = 0;
     for fixture in &show.fixtures {
         let count = fixture.pixel_count();
-        if layer.targets.is_empty() || layer.targets.contains(&fixture.id) {
+        if Show::layer_hits(layer, fixture) {
             fixtures_hit += 1;
             lone_strip = matches!(fixture.shape, Shape::Strip { .. }).then_some(fixture);
             for i in 0..count {
@@ -369,6 +405,85 @@ mod tests {
         let (_, frame) = render(&show);
         let lit: Vec<bool> = frame.iter().map(|p| p.r > 0.5).collect();
         assert_eq!(lit, [false, false, true, true, true]);
+    }
+
+    #[test]
+    fn a_layer_can_target_a_group_of_lights() {
+        let mut show = solid_show("#ffffff");
+        show.add_device(device(2), None);
+        show.add_device(device(2), None);
+        show.add_device(device(2), None);
+        let group = show.add_light_group("Ceiling");
+        show.fixtures[0].group = Some(group);
+        show.fixtures[2].group = Some(group);
+        show.layers[0].targets = vec![group];
+        let (_, frame) = render(&show);
+        let lit: Vec<bool> = frame.iter().map(|px| *px == Rgb::WHITE).collect();
+        assert_eq!(lit, [true, true, false, false, true, true]);
+
+        // Moving a light out of the group takes it out of the effect.
+        show.fixtures[2].group = None;
+        let (_, frame) = render(&show);
+        assert_eq!(frame[4], Rgb::BLACK);
+    }
+
+    #[test]
+    fn a_group_of_lights_can_be_dimmed_or_switched_off() {
+        let mut show = solid_show("#ffffff");
+        show.add_device(device(2), None);
+        show.add_device(device(2), None);
+        let group = show.add_light_group("Ceiling");
+        show.fixtures[1].group = Some(group);
+        show.light_groups[0].brightness = 0.5;
+        let (_, frame) = render(&show);
+        assert_eq!(frame[0], Rgb::WHITE, "lights outside the group are untouched");
+        assert!((frame[2].r - 0.5).abs() < 1e-6);
+        show.light_groups[0].enabled = false;
+        let (_, frame) = render(&show);
+        assert_eq!((frame[1], frame[3]), (Rgb::WHITE, Rgb::BLACK));
+    }
+
+    #[test]
+    fn a_folder_switches_and_scales_the_effects_inside_it() {
+        let mut show = solid_show("#ffffff");
+        show.add_device(device(1), None);
+        let folder = show.add_layer_group("Verse");
+        show.layers[0].group = Some(folder);
+        let (_, frame) = render(&show);
+        assert_eq!(frame[0], Rgb::WHITE);
+
+        show.layer_groups[0].opacity = 0.25;
+        let (_, frame) = render(&show);
+        assert!((frame[0].r - 0.25).abs() < 1e-6);
+
+        show.layer_groups[0].enabled = false;
+        let (_, frame) = render(&show);
+        assert_eq!(frame[0], Rgb::BLACK, "the layer's own switch is still on");
+        assert!(show.layers[0].enabled);
+    }
+
+    #[test]
+    fn the_brightness_limit_scales_what_full_brightness_means() {
+        let mut show = solid_show("#ffffff");
+        show.add_device(device(1), None);
+        show.master.limit = 0.4;
+        let (_, frame) = render(&show);
+        assert!((frame[0].r - 0.4).abs() < 1e-6);
+        show.master.brightness = 0.5;
+        let (_, frame) = render(&show);
+        assert!((frame[0].r - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn frames_can_be_mixed_for_a_fade() {
+        let mut show = solid_show("#ffffff");
+        show.add_device(device(2), None);
+        let (mut r, _) = render(&show);
+        r.mix_in(&[Rgb::BLACK, Rgb::BLACK], 0.75);
+        assert!((r.frame()[0].r - 0.25).abs() < 1e-6);
+        // A frame of another size is ignored instead of panicking.
+        r.mix_in(&[Rgb::BLACK], 1.0);
+        assert!((r.frame()[1].r - 0.25).abs() < 1e-6);
     }
 
     #[test]

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use darkrgb_core::Show;
 use darkrgb_core::params::ParamValue;
+use darkrgb_core::{Action, KeyMode, Launch, Show};
 use darkrgb_sim::{Sim, SimConfig};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -49,13 +49,14 @@ impl Drop for Engine {
     }
 }
 
-fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+fn wait_for(what: &str, done: impl FnMut() -> bool) {
+    wait_up_to(Duration::from_secs(5), what, done);
+}
+
+fn wait_up_to(limit: Duration, what: &str, mut done: impl FnMut() -> bool) {
     let started = Instant::now();
     while !done() {
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "timed out waiting for {what}"
-        );
+        assert!(started.elapsed() < limit, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -177,6 +178,7 @@ fn blackout_and_disabling_a_device_stop_the_light() {
         .execute(&Command::SetMaster {
             brightness: None,
             blackout: Some(true),
+            limit: None,
         })
         .unwrap();
     wait_for("black", || sim.frame().iter().all(|b| *b == 0));
@@ -186,6 +188,7 @@ fn blackout_and_disabling_a_device_stop_the_light() {
         .execute(&Command::SetMaster {
             brightness: Some(0.5),
             blackout: Some(false),
+            limit: None,
         })
         .unwrap();
     // Half brightness through gamma 2.2 is (128/255)^2.2 * 255 = 56.
@@ -288,7 +291,7 @@ async fn a_client_can_drive_the_show_over_the_websocket() {
         .unwrap();
 
     let hello = next_json(&mut ws, "hello").await;
-    assert_eq!(hello["frame_rate"], 60);
+    assert_eq!(hello["frame_rates"], serde_json::json!([30, 40, 60]));
     let state = next_json(&mut ws, "state").await;
     assert_eq!(state["show"]["devices"], json!([]));
     assert_eq!(state["show"]["layers"][0]["effect"], "plasma");
@@ -422,7 +425,12 @@ fn a_scan_is_refused_outside_local_networks_and_while_one_runs() {
         assert_eq!((status.prefix.as_str(), status.total), ("169.254.77.", 254));
     }
     assert!(scan("169.254.78.").unwrap_err().contains("already running"));
-    wait_for("the scan to finish", || !engine.shared.scan.lock().unwrap().running);
+    // Where the network drops packets for these addresses instead of
+    // refusing them, every address waits out its full timeout: 254
+    // addresses, 32 at a time, 0.9 s each is a little over 7 s.
+    wait_up_to(Duration::from_secs(30), "the scan to finish", || {
+        !engine.shared.scan.lock().unwrap().running
+    });
     assert_eq!(engine.shared.scan.lock().unwrap().done, 254);
 }
 
@@ -454,4 +462,304 @@ fn demo_lights_are_previewed_but_never_sent_anywhere() {
     let real = show.devices.iter().find(|d| !d.demo).unwrap().id;
     assert_eq!(stats.devices.keys().copied().collect::<Vec<_>>(), [real]);
     assert_eq!(show.pixel_count(), 120 + 90 + 256 + 10);
+}
+
+/// An engine streaming to a small simulated strip.
+fn engine_with_strip() -> (Engine, Sim) {
+    let sim = Sim::start(SimConfig {
+        leds: 8,
+        ..SimConfig::default()
+    })
+    .unwrap();
+    let engine = Engine::start();
+    engine
+        .shared
+        .execute(&Command::AddDevice {
+            address: format!("127.0.0.1:{}", sim.http_port),
+        })
+        .unwrap();
+    (engine, sim)
+}
+
+fn all(sim: &Sim, value: u8) -> bool {
+    let frame = sim.frame();
+    !frame.is_empty() && frame.iter().all(|b| *b == value)
+}
+
+#[test]
+fn a_held_key_flashes_and_a_toggled_key_stays() {
+    let (engine, sim) = engine_with_strip();
+    let shared = &engine.shared;
+    make_solid(shared, "#ffffff");
+    wait_for("white", || all(&sim, 255));
+    let layer = shared.show.lock().unwrap().layers[0].id;
+    let bind = |key: &str, action, mode| {
+        shared
+            .execute(&Command::Bind {
+                key: key.into(),
+                label: String::new(),
+                action,
+                mode,
+            })
+            .unwrap();
+        shared.show.lock().unwrap().binding_for(action).unwrap().id
+    };
+    let press = |binding, down| shared.execute(&Command::Trigger { binding, down });
+
+    // Held: the effect is cut only while the key is down, and the saved
+    // show never changes.
+    let cut = bind("KeyA", Action::Layer { id: layer }, KeyMode::Hold);
+    let saved = shared.show.lock().unwrap().clone();
+    press(cut, true).unwrap();
+    wait_for("dark while held", || all(&sim, 0));
+    assert_eq!(*shared.show.lock().unwrap(), saved);
+    assert_eq!(shared.live.lock().unwrap().status().held, [cut]);
+    press(cut, false).unwrap();
+    wait_for("white again", || all(&sim, 255));
+
+    // Toggled: each press flips it; letting go does nothing.
+    let dark = bind("KeyB", Action::Blackout, KeyMode::Toggle);
+    press(dark, true).unwrap();
+    wait_for("blackout", || all(&sim, 0));
+    press(dark, false).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(all(&sim, 0) && shared.show.lock().unwrap().master.blackout);
+    press(dark, true).unwrap();
+    wait_for("lights back", || all(&sim, 255));
+
+    // A key that was removed while held is still let go of.
+    press(cut, true).unwrap();
+    shared.execute(&Command::Unbind { id: cut }).unwrap();
+    assert!(press(cut, true).is_err());
+    press(cut, false).unwrap();
+    assert!(shared.live.lock().unwrap().status().held.is_empty());
+}
+
+#[test]
+fn a_beat_fired_by_hand_sets_off_effects_that_wait_for_one() {
+    let (engine, sim) = engine_with_strip();
+    let shared = &engine.shared;
+    let layer = shared.show.lock().unwrap().layers[0].id;
+    shared
+        .execute(&Command::UpdateLayer {
+            id: layer,
+            effect: Some("beat_pulse".into()),
+            opacity: None,
+            blend: None,
+            enabled: None,
+            targets: None,
+        })
+        .unwrap();
+    // With no sound and no beat, the pulse stays dark.
+    wait_for("frames", || sim.stats().frames > 20);
+    assert!(all(&sim, 0), "{:?}", sim.frame());
+    shared
+        .execute(&Command::Bind {
+            key: "Space".into(),
+            label: String::new(),
+            action: Action::Hit,
+            mode: KeyMode::Toggle,
+        })
+        .unwrap();
+    let key = shared.show.lock().unwrap().bindings[0].id;
+    shared
+        .execute(&Command::Trigger {
+            binding: key,
+            down: true,
+        })
+        .unwrap();
+    wait_for("the flash", || sim.frame().iter().any(|b| *b > 60));
+    wait_for("the flash to fade", || all(&sim, 0));
+}
+
+#[test]
+fn a_scene_waits_for_the_beat_when_asked_to() {
+    let engine = Engine::start();
+    let shared = &engine.shared;
+    make_solid(shared, "#ffffff");
+    shared.execute(&Command::SaveScene { name: "White".into() }).unwrap();
+    make_solid(shared, "#000000");
+    shared.execute(&Command::SaveScene { name: "Black".into() }).unwrap();
+    let (white, black) = {
+        let show = shared.show.lock().unwrap();
+        (show.scenes[0].id, show.scenes[1].id)
+    };
+    let current = || shared.show.lock().unwrap().current_scene();
+    assert_eq!(current(), Some(black));
+    shared
+        .execute(&Command::SetLive {
+            launch: Some(Launch::Beat),
+            fade: None,
+        })
+        .unwrap();
+
+    // With no tempo there is no beat to wait for: the scene starts at once.
+    shared.execute(&Command::RecallScene { id: white }).unwrap();
+    assert_eq!(current(), Some(white));
+
+    // Tap a tempo of about 150 beats a minute, then ask for the other scene.
+    shared.execute(&Command::Tap).unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    shared.execute(&Command::Tap).unwrap();
+    let bpm = shared.live.lock().unwrap().status().tapped_bpm;
+    assert!((120.0..=165.0).contains(&bpm), "tapped {bpm}");
+    let asked = Instant::now();
+    shared.execute(&Command::RecallScene { id: black }).unwrap();
+    assert_eq!(shared.live.lock().unwrap().status().pending_scene, Some(black));
+    assert_eq!(current(), Some(white), "still the old scene until the beat");
+    wait_for("the beat", || current() == Some(black));
+    let waited = asked.elapsed();
+    assert!(
+        waited > Duration::from_millis(150) && waited < Duration::from_millis(900),
+        "waited {waited:?}"
+    );
+    assert_eq!(shared.live.lock().unwrap().status().pending_scene, None);
+
+    // Back to the music's own tempo.
+    shared.execute(&Command::AutoTempo).unwrap();
+    assert_eq!(shared.live.lock().unwrap().status().tapped_bpm, 0.0);
+    assert!(shared.execute(&Command::RecallScene { id: 9999 }).is_err());
+}
+
+#[test]
+fn a_scene_change_can_fade_in() {
+    let (engine, sim) = engine_with_strip();
+    let shared = &engine.shared;
+    make_solid(shared, "#000000");
+    shared.execute(&Command::SaveScene { name: "Dark".into() }).unwrap();
+    make_solid(shared, "#ffffff");
+    shared.execute(&Command::SaveScene { name: "Bright".into() }).unwrap();
+    wait_for("white", || all(&sim, 255));
+    let dark = shared.show.lock().unwrap().scenes[0].id;
+    shared
+        .execute(&Command::SetLive {
+            launch: None,
+            fade: Some(0.6),
+        })
+        .unwrap();
+
+    let started = Instant::now();
+    shared.execute(&Command::RecallScene { id: dark }).unwrap();
+    let mut in_between = false;
+    wait_for("dark", || {
+        let frame = sim.frame();
+        in_between |= frame.iter().all(|b| *b > 10 && *b < 245);
+        all(&sim, 0)
+    });
+    assert!(in_between, "the change should pass through the shades in between");
+    let took = started.elapsed();
+    assert!(
+        took > Duration::from_millis(350) && took < Duration::from_millis(1500),
+        "the fade took {took:?}"
+    );
+}
+
+#[test]
+fn the_frame_rate_can_be_lowered() {
+    let (engine, sim) = engine_with_strip();
+    engine
+        .shared
+        .execute(&Command::SetOutput { frame_rate: Some(30) })
+        .unwrap();
+    wait_for("the stream to start", || sim.stats().frames > 5);
+    std::thread::sleep(Duration::from_millis(200));
+    sim.reset_stats();
+    std::thread::sleep(Duration::from_secs(2));
+    let stats = sim.stats();
+    assert!(stats.fps > 27.0 && stats.fps < 33.0, "{stats:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_held_by_a_client_that_disappears_is_let_go() {
+    let engine = Engine::start();
+    let shared = engine.shared.clone();
+    let layer = shared.show.lock().unwrap().layers[0].id;
+    shared
+        .execute(&Command::Bind {
+            key: "KeyF".into(),
+            label: "F".into(),
+            action: Action::Layer { id: layer },
+            mode: KeyMode::Hold,
+        })
+        .unwrap();
+    let key = shared.show.lock().unwrap().bindings[0].id;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = server::router(shared.clone(), Access::default());
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws"))
+        .await
+        .unwrap();
+
+    let state = next_json(&mut ws, "state").await;
+    assert_eq!(state["show"]["bindings"][0]["key"], "KeyF");
+    assert_eq!(state["current_scene"], Value::Null);
+    let live = next_json(&mut ws, "live").await;
+    assert_eq!(live["held"], json!([]));
+
+    let press = json!({ "type": "trigger", "binding": key, "down": true });
+    ws.send(Message::Text(press.to_string().into())).await.unwrap();
+    let live = next_json(&mut ws, "live").await;
+    assert_eq!(live["held"], json!([key]));
+
+    // The window closes with the key still down.
+    drop(ws);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while shared.live.lock().unwrap().is_held(key) {
+        assert!(Instant::now() < deadline, "the key stayed held after its client left");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Sends one HTTP request by hand and returns the status line and body.
+async fn post(port: u16, origin: Option<&str>, body: &str) -> (String, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let origin = origin.map(|o| format!("Origin: {o}\r\n")).unwrap_or_default();
+    let request = format!(
+        "POST /api/import HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{origin}Content-Type: text/plain\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    let status = response.lines().next().unwrap_or_default().to_string();
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or_default().to_string();
+    (status, body)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_show_file_can_be_imported_but_only_by_the_served_page() {
+    let engine = Engine::start();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = server::router(engine.shared.clone(), Access::default());
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let own = format!("http://127.0.0.1:{port}");
+    let good = r#"{"version":1,"name":"From a file"}"#;
+
+    // Another site's page, or no page at all, is refused and changes nothing.
+    let (status, _) = post(port, Some("http://evil.example"), good).await;
+    assert!(status.contains("403"), "{status}");
+    let (status, _) = post(port, None, good).await;
+    assert!(status.contains("403"), "{status}");
+    assert_eq!(engine.shared.show.lock().unwrap().name, "Untitled show");
+
+    // A file that is not a show is refused with a reason.
+    let (status, body) = post(port, Some(&own), "{ nope").await;
+    assert!(status.contains("400"), "{status}");
+    let reply: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(reply["ok"], false);
+    assert!(reply["error"].as_str().unwrap().contains("not a darkRGB show"));
+
+    let (status, body) = post(port, Some(&own), good).await;
+    assert!(status.contains("200"), "{status} {body}");
+    assert_eq!(engine.shared.show.lock().unwrap().name, "From a file");
+
+    // Far too large to be a show.
+    let huge = "x".repeat(9 * 1024 * 1024);
+    let (status, _) = post(port, Some(&own), &huge).await;
+    assert!(status.contains("413"), "{status}");
 }

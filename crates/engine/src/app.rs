@@ -3,17 +3,18 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use darkrgb_audio::{AudioCapture, InputDevice};
-use darkrgb_core::{Device, Show};
+use darkrgb_core::{Action, AudioFeatures, Device, KeyMode, Launch, Show};
 use darkrgb_output::scan::{self, LocalNetwork};
 use darkrgb_output::{DeviceStats, wled};
 use serde::Serialize;
 use tokio::sync::watch;
 
 use crate::commands::{self, Command};
+use crate::live::{Live, Pending};
 
 /// The name shown to users. Kept in one place so a rename is one edit.
 pub const APP_NAME: &str = "darkRGB";
@@ -103,6 +104,11 @@ pub struct Shared {
     pub save_path: Option<PathBuf>,
     /// Something the user should be told once, such as an unreadable file.
     pub notice: Mutex<Option<String>>,
+    /// What is happening live: held keys, a tapped tempo, a waiting scene.
+    pub live: Mutex<Live>,
+    /// Bumped on every change to `live`.
+    pub live_rev: watch::Sender<u64>,
+    started: Instant,
 }
 
 impl Shared {
@@ -121,11 +127,28 @@ impl Shared {
             scan: Mutex::new(ScanStatus::default()),
             save_path,
             notice: Mutex::new(notice),
+            live: Mutex::new(Live::default()),
+            live_rev: watch::Sender::new(1),
+            started: Instant::now(),
         })
     }
 
     fn bump(&self) {
         self.revision.send_modify(|r| *r += 1);
+    }
+
+    fn bump_live(&self) {
+        self.live_rev.send_modify(|r| *r += 1);
+    }
+
+    /// Seconds since the engine started: the clock the live state runs on.
+    pub fn now(&self) -> f64 {
+        self.started.elapsed().as_secs_f64()
+    }
+
+    /// The audio features with the tapped tempo and hand-fired beats in.
+    pub fn features(&self) -> AudioFeatures {
+        self.live.lock().unwrap().features(self.now(), self.audio.features())
     }
 
     /// Runs a command. Returns a note for the user when there is something
@@ -137,6 +160,25 @@ impl Shared {
         match command {
             Command::AddDevice { address } => return self.add_device(address),
             Command::ScanNetwork { prefix } => return self.scan_network(prefix),
+            Command::Trigger { binding, down } => return self.trigger(*binding, *down),
+            Command::RecallScene { id } => return self.recall_scene(*id),
+            Command::Tap => {
+                self.live.lock().unwrap().tap(self.now(), self.audio.features());
+                self.bump_live();
+                return Ok(None);
+            }
+            Command::Hit => {
+                self.live.lock().unwrap().hit(self.now());
+                self.bump_live();
+                return Ok(None);
+            }
+            Command::AutoTempo => {
+                self.live.lock().unwrap().tempo.clear();
+                self.bump_live();
+                return Ok(None);
+            }
+            Command::NewShow { keep_lights } => return self.new_show(*keep_lights),
+            Command::ExportShow => return self.export_show(),
             _ => {}
         }
         {
@@ -150,7 +192,10 @@ impl Shared {
             }
             *show = next;
         }
-        if let Command::SetAudio { source, sensitivity } = command {
+        if let Command::SetAudio {
+            source, sensitivity, ..
+        } = command
+        {
             if let Some(source) = source {
                 self.audio.set_source(source);
             }
@@ -160,6 +205,191 @@ impl Shared {
         }
         self.bump();
         Ok(None)
+    }
+
+    /// A key went down or came up.
+    fn trigger(self: &Arc<Self>, binding: u32, down: bool) -> Result<Option<String>, String> {
+        let (action, mode) = {
+            let show = self.show.lock().unwrap();
+            let found = show.bindings.iter().find(|b| b.id == binding);
+            match found {
+                Some(b) => (b.action, b.mode),
+                // Letting go of a key that was unset meanwhile must still
+                // release it.
+                None if !down => {
+                    self.release(binding);
+                    return Ok(None);
+                }
+                None => return Err("that key is no longer set up".into()),
+            }
+        };
+        if action.is_switch() && mode == KeyMode::Hold {
+            if self.live.lock().unwrap().hold(binding, down) {
+                self.bump_live();
+            }
+            return Ok(None);
+        }
+        if !down {
+            return Ok(None);
+        }
+        match action {
+            Action::Scene { id } => self.recall_scene(id),
+            Action::TapTempo => self.execute(&Command::Tap),
+            Action::Hit => self.execute(&Command::Hit),
+            Action::Layer { .. } | Action::LayerGroup { .. } | Action::LightGroup { .. } | Action::Blackout => {
+                self.flip(action);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Flips the thing a key is tied to, for good. Nothing happens if it
+    /// is not in what is playing now (an effect from another scene, say).
+    fn flip(&self, action: Action) {
+        let mut show = self.show.lock().unwrap();
+        let flipped = match action {
+            Action::Layer { id } => show.layer_mut(id).map(|l| l.enabled = !l.enabled),
+            Action::LayerGroup { id } => show
+                .layer_groups
+                .iter_mut()
+                .find(|g| g.id == id)
+                .map(|g| g.enabled = !g.enabled),
+            Action::LightGroup { id } => show
+                .light_groups
+                .iter_mut()
+                .find(|g| g.id == id)
+                .map(|g| g.enabled = !g.enabled),
+            Action::Blackout => {
+                show.master.blackout = !show.master.blackout;
+                Some(())
+            }
+            Action::Scene { .. } | Action::TapTempo | Action::Hit => None,
+        };
+        drop(show);
+        if flipped.is_some() {
+            self.bump();
+        }
+    }
+
+    /// Starts again: no effects but the default one, no scenes, no keys.
+    /// The lights and their groups stay if asked.
+    fn new_show(&self, keep_lights: bool) -> Result<Option<String>, String> {
+        let mut next = Show::default();
+        if keep_lights {
+            let show = self.show.lock().unwrap();
+            next.devices = show.devices.clone();
+            next.fixtures = show.fixtures.clone();
+            next.light_groups = show.light_groups.clone();
+            next.audio = show.audio.clone();
+            next.output = show.output.clone();
+            next.master.limit = show.master.limit;
+            // Ids are never reused, so the new show carries on counting.
+            next.next_id = show.next_id.max(next.next_id);
+            next.layers[0].id = next.alloc_id();
+        }
+        Ok(self.replace_show(next))
+    }
+
+    /// Replaces the whole show, keeping the one it replaces in a file
+    /// beside the show file. Returns a note saying where that is.
+    pub fn replace_show(&self, mut next: Show) -> Option<String> {
+        next.repair();
+        let previous = std::mem::replace(&mut *self.show.lock().unwrap(), next.clone());
+        let kept = self.save_path.as_ref().and_then(|path| {
+            let backup = path.with_file_name("show.previous.json");
+            match save_show(&backup, &previous) {
+                Ok(()) => Some(format!("The show as it was is kept in {}.", backup.display())),
+                Err(e) => {
+                    log::warn!("could not keep the previous show in {}: {e}", backup.display());
+                    None
+                }
+            }
+        });
+        self.audio.set_source(&next.audio.source);
+        self.audio.set_sensitivity(next.audio.sensitivity.clamp(0.25, 4.0));
+        // Nothing held or waiting belongs to the new show.
+        self.live.lock().unwrap().let_go();
+        self.bump_live();
+        self.bump();
+        kept
+    }
+
+    /// Takes a show from outside the program (a file the user picked) in
+    /// place of the current one, after the same checks a show file gets.
+    pub fn import_show(&self, json: &str) -> Result<Option<String>, String> {
+        let show: Show = serde_json::from_str(json).map_err(|e| format!("that file is not a darkRGB show ({e})"))?;
+        show.validate().map_err(|e| format!("that show cannot be used: {e}"))?;
+        if show.version > darkrgb_core::show::SHOW_VERSION {
+            return Err("that show was saved by a newer version of darkRGB".into());
+        }
+        Ok(self.replace_show(show))
+    }
+
+    /// Writes a copy of the show to the Documents folder and says where.
+    fn export_show(&self) -> Result<Option<String>, String> {
+        let show = self.show.lock().unwrap().clone();
+        let folder = dirs::document_dir()
+            .or_else(dirs::home_dir)
+            .ok_or("could not find a folder to save to")?
+            .join(APP_NAME);
+        let path = free_path(&folder, &show.name);
+        save_show(&path, &show).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        Ok(Some(format!("Saved a copy to {}", path.display())))
+    }
+
+    /// Lets go of a held key, however many times it was pressed. Used when
+    /// the client that held it goes away.
+    pub fn release(&self, binding: u32) {
+        let mut live = self.live.lock().unwrap();
+        let mut changed = false;
+        while live.is_held(binding) {
+            changed |= live.hold(binding, false);
+        }
+        drop(live);
+        if changed {
+            self.bump_live();
+        }
+    }
+
+    /// Switches to a scene: at once, or on a coming beat when the show is
+    /// set to wait for one and there is a tempo to wait for.
+    fn recall_scene(&self, id: u32) -> Result<Option<String>, String> {
+        let launch = {
+            let show = self.show.lock().unwrap();
+            if !show.scenes.iter().any(|s| s.id == id) {
+                return Err("that scene no longer exists".into());
+            }
+            show.live.launch
+        };
+        let now = self.now();
+        let waits = launch != Launch::Now && self.features().bpm > 0.0;
+        if waits {
+            self.live.lock().unwrap().pending = Some(Pending { scene: id, since: now });
+            self.bump_live();
+        } else {
+            self.launch_scene(id);
+        }
+        Ok(None)
+    }
+
+    /// Switches to a scene now and forgets any scene that was waiting.
+    pub fn launch_scene(&self, id: u32) {
+        let changed = {
+            let mut show = self.show.lock().unwrap();
+            let before = show.clone();
+            show.recall_scene(id) && *show != before
+        };
+        {
+            let mut live = self.live.lock().unwrap();
+            live.pending = None;
+            if changed {
+                live.scene_serial += 1;
+            }
+        }
+        self.bump_live();
+        if changed {
+            self.bump();
+        }
     }
 
     fn add_device(&self, address: &str) -> Result<Option<String>, String> {
@@ -267,7 +497,10 @@ pub fn load_show(path: &Path) -> (Show, Option<String>) {
         .map_err(|e| e.to_string())
         .and_then(|show| show.validate().map(|()| show));
     match parsed {
-        Ok(show) if show.version <= darkrgb_core::show::SHOW_VERSION => (show, None),
+        Ok(mut show) if show.version <= darkrgb_core::show::SHOW_VERSION => {
+            show.repair();
+            (show, None)
+        }
         Ok(show) => {
             let backup = set_aside(path);
             (
@@ -290,6 +523,32 @@ pub fn load_show(path: &Path) -> (Show, Option<String>) {
             )
         }
     }
+}
+
+/// A file name for a show that is safe on any system and not yet taken:
+/// `Name.json`, then `Name (2).json`, and so on.
+fn free_path(folder: &Path, show_name: &str) -> PathBuf {
+    let mut stem: String = show_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || " -_".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    stem = stem.trim().chars().take(60).collect();
+    if stem.is_empty() {
+        stem = "show".into();
+    }
+    let mut path = folder.join(format!("{stem}.json"));
+    let mut n = 2;
+    while path.exists() {
+        path = folder.join(format!("{stem} ({n}).json"));
+        n += 1;
+    }
+    path
 }
 
 fn set_aside(path: &Path) -> String {
@@ -377,6 +636,83 @@ mod tests {
         assert_eq!(loaded, Show::default());
         assert!(notice.unwrap().contains("too large"));
         assert!(path.with_extension("json.bak").exists());
+    }
+
+    #[test]
+    fn exported_files_get_safe_names_that_are_not_taken() {
+        let dir = temp_dir("export");
+        let first = free_path(&dir, "My/Show: one?");
+        assert_eq!(first.file_name().unwrap(), "My_Show_ one_.json");
+        std::fs::write(&first, "x").unwrap();
+        let second = free_path(&dir, "My/Show: one?");
+        assert_eq!(second.file_name().unwrap(), "My_Show_ one_ (2).json");
+        assert_eq!(free_path(&dir, "  ").file_name().unwrap(), "show.json");
+        assert_eq!(free_path(&dir, "../../etc").file_name().unwrap(), "______etc.json");
+    }
+
+    #[test]
+    fn a_new_show_can_keep_the_lights_and_the_old_show_is_kept_beside_it() {
+        let dir = temp_dir("newshow");
+        let path = dir.join("show.json");
+        let mut show = Show::default();
+        show.add_device(darkrgb_core::Device::wled("d", "127.0.0.1", 4048, 10), None);
+        let group = show.add_light_group("Ceiling");
+        show.fixtures[0].group = Some(group);
+        show.add_layer("solid");
+        show.save_scene("One");
+        let shared = Shared::new(show.clone(), Some(path.clone()), None);
+
+        let note = shared.execute(&Command::NewShow { keep_lights: true }).unwrap();
+        assert!(note.unwrap().contains("show.previous.json"));
+        let (kept, _) = load_show(&path.with_file_name("show.previous.json"));
+        assert_eq!(kept, show);
+        {
+            let now = shared.show.lock().unwrap();
+            assert_eq!((now.devices.len(), now.light_groups.len()), (1, 1));
+            assert_eq!(now.fixtures[0].group, Some(group));
+            assert_eq!((now.layers.len(), now.scenes.len(), now.bindings.len()), (1, 0, 0));
+            // No id is handed out twice.
+            let mut ids: Vec<u32> = vec![now.devices[0].id, now.fixtures[0].id, group, now.layers[0].id];
+            ids.dedup();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(ids.len(), 4);
+        }
+
+        shared.execute(&Command::NewShow { keep_lights: false }).unwrap();
+        assert_eq!(*shared.show.lock().unwrap(), Show::default());
+    }
+
+    #[test]
+    fn an_imported_show_is_checked_like_a_show_file() {
+        let shared = Shared::new(Show::default(), None, None);
+        assert!(
+            shared
+                .import_show("not json")
+                .unwrap_err()
+                .contains("not a darkRGB show")
+        );
+        assert!(
+            shared
+                .import_show(r#"{"version":999,"name":"future"}"#)
+                .unwrap_err()
+                .contains("newer version")
+        );
+        let absurd =
+            r#"{"version":1,"name":"x","devices":[{"id":1,"name":"d","address":"a","pixel_count":4000000000}]}"#;
+        assert!(shared.import_show(absurd).unwrap_err().contains("cannot be used"));
+        assert_eq!(
+            *shared.show.lock().unwrap(),
+            Show::default(),
+            "a refused file changes nothing"
+        );
+
+        // A good file replaces the show, and loose ends in it are mended.
+        let good = r#"{"version":1,"name":"Imported","layers":[{"id":3,"effect":"solid","group":77}]}"#;
+        assert_eq!(shared.import_show(good).unwrap(), None, "nowhere to keep the old show");
+        let show = shared.show.lock().unwrap();
+        assert_eq!(show.name, "Imported");
+        assert_eq!(show.layers[0].group, None);
     }
 
     #[test]

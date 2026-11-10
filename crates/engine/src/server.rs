@@ -6,23 +6,26 @@
 //! - text `state`: the whole show, sent on connect and after every change.
 //! - text `audio`: the current audio features, 30 times a second.
 //! - text `status`: frame rate, audio status, discovered devices, once a second.
+//! - text `live`: held keys, a waiting scene and the tapped tempo, on change.
 //! - text `result`: the outcome of a command that carried an `id`.
 //! - binary: byte 0 says what it is (1 preview colours, 2 pixel positions),
 //!   bytes 4..8 are the layout serial, the payload starts at byte 8.
 //!
 //! Messages from the client are commands (see `commands.rs`), as JSON text.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::header::{self, HeaderMap, HeaderValue};
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use darkrgb_core::audio::{BAND_MAX_HZ, BASS, MID, TREBLE, band_edge_hz, group_bands};
+use darkrgb_core::show::FRAME_RATES;
 use darkrgb_core::{BANDS, color, effects};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -31,7 +34,6 @@ use tokio::time::MissedTickBehavior;
 
 use crate::app::{APP_NAME, BUILD, Discovered, Shared, VERSION};
 use crate::commands::Command;
-use crate::render_loop::FRAME_RATE;
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "$OUT_DIR/ui"]
@@ -53,11 +55,34 @@ struct AppState {
     access: Access,
 }
 
+/// Largest show file that can be imported. Far more than any real show.
+const MAX_IMPORT_BYTES: usize = 8 * 1024 * 1024;
+
 pub fn router(shared: Arc<Shared>, access: Access) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
+        .route(
+            "/api/import",
+            post(import_handler).layer(DefaultBodyLimit::max(MAX_IMPORT_BYTES)),
+        )
         .fallback(static_handler)
         .with_state(AppState { shared, access })
+}
+
+/// Takes a show file the user picked in the UI. A whole show does not
+/// fit in a WebSocket message, so it comes as the body of a POST. The
+/// same checks on who is asking apply; a page on another site cannot
+/// send this without the browser first asking, and being refused.
+async fn import_handler(State(state): State<AppState>, headers: HeaderMap, body: String) -> Response {
+    if !allowed(&headers, &state.access) || headers.get(header::ORIGIN).is_none() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let outcome = state.shared.import_show(&body);
+    let (status, body) = match outcome {
+        Ok(note) => (StatusCode::OK, json!({ "ok": true, "note": note })),
+        Err(error) => (StatusCode::BAD_REQUEST, json!({ "ok": false, "error": error })),
+    };
+    (status, [(header::CONTENT_TYPE, "application/json")], body.to_string()).into_response()
 }
 
 /// The host part of a `Host` header or origin, without port or brackets.
@@ -163,7 +188,7 @@ fn hello() -> String {
         "app": APP_NAME,
         "version": VERSION,
         "build": BUILD,
-        "frame_rate": FRAME_RATE,
+        "frame_rates": FRAME_RATES,
         // First band and one past the last band of bass, mids and treble.
         "band_groups": ([BASS, MID, TREBLE].map(group_bands)),
         // Edges of the frequency bands in Hz, so the UI can label ranges.
@@ -176,11 +201,26 @@ fn hello() -> String {
 
 fn state_message(shared: &Shared, revision: u64) -> String {
     let show = shared.show.lock().unwrap();
-    json!({ "type": "state", "revision": revision, "show": &*show }).to_string()
+    json!({
+        "type": "state",
+        "revision": revision,
+        "show": &*show,
+        // The scene that is playing exactly as it was saved, if any.
+        "current_scene": show.current_scene(),
+    })
+    .to_string()
+}
+
+fn live_message(shared: &Shared) -> String {
+    let mut value = serde_json::to_value(shared.live.lock().unwrap().status()).unwrap_or(Value::Null);
+    if let Value::Object(map) = &mut value {
+        map.insert("type".into(), "live".into());
+    }
+    value.to_string()
 }
 
 fn audio_message(shared: &Shared) -> String {
-    let mut value = serde_json::to_value(shared.audio.features()).unwrap_or(Value::Null);
+    let mut value = serde_json::to_value(shared.features()).unwrap_or(Value::Null);
     if let Value::Object(map) = &mut value {
         map.insert("type".into(), "audio".into());
     }
@@ -222,6 +262,7 @@ fn status_message(shared: &Shared) -> String {
         "scan": &*shared.scan.lock().unwrap(),
         "discovered": discovered,
         "notice": &*shared.notice.lock().unwrap(),
+        "show_file": shared.save_path.as_ref().map(|p| p.display().to_string()),
     })
     .to_string()
 }
@@ -243,6 +284,10 @@ async fn client(socket: WebSocket, shared: Arc<Shared>) {
 
     let mut revision = shared.revision.subscribe();
     revision.mark_changed();
+    let mut live = shared.live_rev.subscribe();
+    live.mark_changed();
+    // Keys this client is holding down, to let go of if it disappears.
+    let mut holding: HashSet<u32> = HashSet::new();
     let mut layout = shared.layout.subscribe();
     layout.mark_changed();
     let mut preview = shared.preview.subscribe();
@@ -261,6 +306,11 @@ async fn client(socket: WebSocket, shared: Arc<Shared>) {
                 let rev = *revision.borrow_and_update();
                 Some(Message::Text(state_message(&shared, rev).into()))
             }
+            changed = live.changed() => {
+                if changed.is_err() { break; }
+                live.mark_unchanged();
+                Some(Message::Text(live_message(&shared).into()))
+            }
             changed = layout.changed() => {
                 if changed.is_err() { break; }
                 let bytes = layout.borrow_and_update().clone();
@@ -276,7 +326,7 @@ async fn client(socket: WebSocket, shared: Arc<Shared>) {
             Some(text) = result_rx.recv() => Some(Message::Text(text.into())),
             incoming = rx.next() => match incoming {
                 Some(Ok(Message::Text(text))) => {
-                    handle(&shared, text.as_str(), &result_tx).map(|t| Message::Text(t.into()))
+                    handle(&shared, text.as_str(), &result_tx, &mut holding).map(|t| Message::Text(t.into()))
                 }
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                 Some(Ok(_)) => None,
@@ -288,11 +338,20 @@ async fn client(socket: WebSocket, shared: Arc<Shared>) {
             break;
         }
     }
+    // A key must not stay down because the window that held it closed.
+    for binding in holding {
+        shared.release(binding);
+    }
 }
 
 /// Runs one message from a client. Returns a reply to send straight away,
 /// if there is one.
-fn handle(shared: &Arc<Shared>, text: &str, results: &mpsc::Sender<String>) -> Option<String> {
+fn handle(
+    shared: &Arc<Shared>,
+    text: &str,
+    results: &mpsc::Sender<String>,
+    holding: &mut HashSet<u32>,
+) -> Option<String> {
     let value: Value = match serde_json::from_str(text) {
         Ok(value) => value,
         Err(_) => return result_message(None, Err("that message was not valid JSON".into())),
@@ -306,6 +365,13 @@ fn handle(shared: &Arc<Shared>, text: &str, results: &mpsc::Sender<String>) -> O
         Ok(command) => command,
         Err(e) => return result_message(id.as_ref(), Err(format!("unknown or malformed command: {e}"))),
     };
+    if let Command::Trigger { binding, down } = command {
+        if down {
+            holding.insert(binding);
+        } else {
+            holding.remove(&binding);
+        }
+    }
     if matches!(command, Command::AddDevice { .. }) {
         // Talks to the device over the network; keep it off this task so
         // the preview does not stall while it waits.

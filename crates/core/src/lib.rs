@@ -18,4 +18,4 @@ pub use effect::{Effect, EffectInfo, FrameCtx};
 pub use layout::{Device, DeviceKind, Fixture, Shape};
 pub use params::{ParamKind, ParamSpec, ParamValue, Params};
 pub use render::Renderer;
-pub use show::{Blend, Layer, Scene, Show, Sound};
+pub use show::{Action, Binding, Blend, KeyMode, Launch, Layer, LayerGroup, LightGroup, Scene, Show, Sound};

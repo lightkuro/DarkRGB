@@ -1,17 +1,50 @@
 //! The frame loop: render, send to devices, publish the preview.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use darkrgb_core::{Renderer, Show};
+use darkrgb_core::{AudioFeatures, Renderer, Show};
 use darkrgb_output::Outputs;
 
 use crate::app::Shared;
 
-pub const FRAME_RATE: u32 = 60;
-/// The preview is sent every this many frames (30 per second).
-const PREVIEW_EVERY: u64 = 2;
+/// The preview is sent about this many times a second, whatever the
+/// frame rate.
+const PREVIEW_RATE: u32 = 30;
+
+/// The scene being left while the next one fades in. It keeps playing,
+/// with its own renderer, until the fade is over.
+struct Fade {
+    show: Show,
+    from: Renderer,
+    started: Instant,
+    seconds: f32,
+}
+
+/// What the audio analysis said a while ago, for speakers that play late.
+#[derive(Default)]
+struct Delay {
+    history: VecDeque<(f64, AudioFeatures)>,
+}
+
+impl Delay {
+    /// Takes the newest features and returns the ones from `delay_ms` ago.
+    fn step(&mut self, now: f64, newest: AudioFeatures, delay_ms: f32) -> AudioFeatures {
+        if delay_ms <= 0.0 {
+            self.history.clear();
+            return newest;
+        }
+        self.history.push_back((now, newest));
+        let due = now - delay_ms as f64 / 1000.0;
+        // Keep the newest entry that is old enough at the front.
+        while self.history.len() > 1 && self.history[1].0 <= due {
+            self.history.pop_front();
+        }
+        self.history.front().map_or(newest, |(_, features)| *features)
+    }
+}
 
 /// First byte of a binary WebSocket message.
 pub const MSG_PREVIEW: u8 = 1;
@@ -36,7 +69,17 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
     };
     let mut renderer = Renderer::new();
     let mut revisions = shared.revision.subscribe();
-    let mut show: Show = shared.show.lock().unwrap().clone();
+    let mut live_revisions = shared.live_rev.subscribe();
+    // The show as saved, and as the lights see it: with held keys applied.
+    let mut base: Show = shared.show.lock().unwrap().clone();
+    let (mut show, mut scene_serial) = {
+        let live = shared.live.lock().unwrap();
+        (live.overlay(&base), live.scene_serial)
+    };
+    let mut fade: Option<Fade> = None;
+    let mut delay = Delay::default();
+    let mut last_beat = 0u32;
+    let mut last_now = 0.0f64;
     let mut needs_sync = true;
     // Counts layout changes, so a client can tell which positions a preview
     // frame belongs to.
@@ -44,7 +87,8 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
     let mut last_positions: Vec<[f32; 2]> = Vec::new();
     let mut preview_bytes = Vec::new();
 
-    let period = Duration::from_secs_f64(1.0 / FRAME_RATE as f64);
+    let period_of = |show: &Show| Duration::from_secs_f64(1.0 / show.output.frame_rate.clamp(1, 240) as f64);
+    let mut period = period_of(&show);
     let sleeper = spin_sleep::SpinSleeper::default();
     let started = Instant::now();
     let mut deadline = started + period;
@@ -59,9 +103,34 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
     while !stop.load(Ordering::Relaxed) {
         let frame_start = Instant::now();
 
-        if revisions.has_changed().unwrap_or(false) {
+        let show_changed = revisions.has_changed().unwrap_or(false);
+        let live_changed = live_revisions.has_changed().unwrap_or(false);
+        if show_changed {
             revisions.mark_unchanged();
-            show = shared.show.lock().unwrap().clone();
+            base = shared.show.lock().unwrap().clone();
+        }
+        if show_changed || live_changed {
+            live_revisions.mark_unchanged();
+            let (next, serial) = {
+                let live = shared.live.lock().unwrap();
+                (live.overlay(&base), live.scene_serial)
+            };
+            let previous = std::mem::replace(&mut show, next);
+            // A change of scene fades in, if the show asks for that. The
+            // scene being left keeps its renderer and plays on underneath;
+            // the new one starts fresh, which the fade hides.
+            if serial != scene_serial {
+                scene_serial = serial;
+                if show.live.fade > 0.0 && show.fixtures == previous.fixtures {
+                    fade = Some(Fade {
+                        show: previous,
+                        from: std::mem::replace(&mut renderer, Renderer::new()),
+                        started: frame_start,
+                        seconds: show.live.fade,
+                    });
+                }
+            }
+            period = period_of(&show);
             needs_sync = true;
         }
         if needs_sync {
@@ -83,11 +152,41 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
         let dt = frame_start.duration_since(last_frame).as_secs_f32().min(0.25);
         last_frame = frame_start;
         let time = frame_start.duration_since(started).as_secs_f64();
-        let audio = shared.audio.features();
+        let now = shared.now();
+        let heard = delay.step(now, shared.audio.features(), show.audio.delay_ms);
+        let (audio, launch) = {
+            let live = shared.live.lock().unwrap();
+            let clocked = live.clocked(now, heard);
+            let beat = clocked.beat_count != last_beat;
+            last_beat = clocked.beat_count;
+            let launch = live
+                .should_launch(now, last_now, show.live.launch, &clocked, beat)
+                .then(|| live.pending.map(|p| p.scene))
+                .flatten();
+            (live.with_hits(now, clocked), launch)
+        };
+        last_now = now;
+        if let Some(scene) = launch {
+            // Seen by this loop on its next frame, like any other change.
+            shared.launch_scene(scene);
+        }
+
         renderer.render(&show, time, dt, &audio);
+        if let Some(leaving) = &mut fade {
+            let t = frame_start.duration_since(leaving.started).as_secs_f32() / leaving.seconds;
+            if t >= 1.0 {
+                fade = None;
+            } else {
+                leaving.from.render(&leaving.show, time, dt, &audio);
+                // Ease in and out, so the change has no hard edge.
+                let eased = t * t * (3.0 - 2.0 * t);
+                renderer.mix_in(leaving.from.frame(), 1.0 - eased);
+            }
+        }
         outputs.send(&show, &renderer);
 
-        if frame_index.is_multiple_of(PREVIEW_EVERY) && shared.preview.receiver_count() > 0 {
+        let preview_every = (show.output.frame_rate / PREVIEW_RATE).max(1) as u64;
+        if frame_index.is_multiple_of(preview_every) && shared.preview.receiver_count() > 0 {
             renderer.preview_bytes(&mut preview_bytes);
             let mut msg = message(MSG_PREVIEW, layout_serial, preview_bytes.len());
             msg.extend_from_slice(&preview_bytes);
@@ -121,5 +220,34 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
             sleeper.sleep_until(deadline);
         }
         deadline += period;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delayed_sound_is_what_was_heard_that_long_ago() {
+        let mut delay = Delay::default();
+        let at = |level: f32| AudioFeatures {
+            level,
+            ..AudioFeatures::default()
+        };
+        // One frame every 10 ms, each with its own level.
+        let mut out = Vec::new();
+        for frame in 0..30 {
+            let now = frame as f64 * 0.01;
+            out.push(delay.step(now, at(frame as f32), 95.0).level);
+        }
+        assert_eq!(out[0], 0.0, "until enough time has passed, the oldest is used");
+        assert_eq!(out[10], 0.0);
+        assert_eq!(out[15], 5.0);
+        assert_eq!(out[29], 19.0);
+        assert!(delay.history.len() <= 12, "old entries are dropped");
+
+        // Switching the delay off returns to the present at once.
+        assert_eq!(delay.step(0.31, at(99.0), 0.0).level, 99.0);
+        assert!(delay.history.is_empty());
     }
 }
