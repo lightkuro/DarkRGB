@@ -1,7 +1,7 @@
 //! The frame loop: render, send to devices, publish the preview.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use ols_core::{Renderer, Show};

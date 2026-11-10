@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use ols_audio::{AudioCapture, InputDevice};
 use ols_core::{Device, Show};
-use ols_output::{wled, DeviceStats};
+use ols_output::{DeviceStats, wled};
 use serde::Serialize;
 use tokio::sync::watch;
 
@@ -176,8 +176,11 @@ pub fn load_show(path: &Path) -> (Show, Option<String>) {
         Err(e) => {
             return (
                 Show::default(),
-                Some(format!("Could not read {}: {e}. Started with an empty show.", path.display())),
-            )
+                Some(format!(
+                    "Could not read {}: {e}. Started with an empty show.",
+                    path.display()
+                )),
+            );
         }
     };
     match serde_json::from_str::<Show>(&text) {
@@ -249,8 +252,10 @@ mod tests {
     fn shows_round_trip_through_disk() {
         let dir = temp_dir("roundtrip");
         let path = dir.join("nested").join("show.json");
-        let mut show = Show::default();
-        show.name = "Saved".into();
+        let mut show = Show {
+            name: "Saved".into(),
+            ..Show::default()
+        };
         show.add_layer("solid");
         save_show(&path, &show).unwrap();
         let (loaded, notice) = load_show(&path);

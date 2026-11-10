@@ -7,12 +7,12 @@
 //! server provides that carries whatever is being played.
 
 use std::ffi::CString;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use futures::executor::block_on;
-use pulseaudio::protocol;
 use pulseaudio::Client;
+use pulseaudio::protocol;
 use rtrb::RingBuffer;
 
 use crate::capture::{Health, InputDevice, Open, SYSTEM_SOURCE};

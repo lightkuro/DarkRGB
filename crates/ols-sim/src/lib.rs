@@ -91,7 +91,11 @@ pub struct Sim {
 
 impl Sim {
     pub fn start(config: SimConfig) -> io::Result<Self> {
-        let bind_ip = if config.public { Ipv4Addr::UNSPECIFIED } else { Ipv4Addr::LOCALHOST };
+        let bind_ip = if config.public {
+            Ipv4Addr::UNSPECIFIED
+        } else {
+            Ipv4Addr::LOCALHOST
+        };
         let udp = UdpSocket::bind(SocketAddr::from((bind_ip, config.ddp_port)))?;
         udp.set_read_timeout(Some(Duration::from_millis(100)))?;
         let ddp_port = udp.local_addr()?.port();
@@ -131,7 +135,7 @@ impl Sim {
         }
 
         let mdns = if config.mdns {
-            match advertise(&config.name, http_port, &mac) {
+            match advertise(&config.name, http_port, &mac, config.public) {
                 Ok(daemon) => Some(daemon),
                 Err(e) => {
                     log::warn!("could not advertise {}: {e}", config.name);
@@ -266,7 +270,13 @@ fn serve(
         let Ok(Some(request)) = http.recv_timeout(Duration::from_millis(100)) else {
             continue;
         };
-        let path = request.url().split('?').next().unwrap_or("").trim_end_matches('/').to_string();
+        let path = request
+            .url()
+            .split('?')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/')
+            .to_string();
         let body = {
             let s = state.lock().unwrap();
             let live = s.last_packet.filter(|(at, _)| at.elapsed() < LIVE_TIMEOUT);
@@ -322,13 +332,19 @@ fn fake_mac(name: &str, port: u16) -> String {
     format!("{:012x}", h & 0xffff_ffff_ffff)
 }
 
-fn advertise(name: &str, http_port: u16, mac: &str) -> Result<mdns_sd::ServiceDaemon, String> {
+fn advertise(name: &str, http_port: u16, mac: &str, public: bool) -> Result<mdns_sd::ServiceDaemon, String> {
     let daemon = mdns_sd::ServiceDaemon::new().map_err(|e| e.to_string())?;
     let host = format!("wled-{mac}.local.");
     let props = std::collections::HashMap::from([("mac".to_string(), mac.to_string())]);
-    let service = mdns_sd::ServiceInfo::new("_wled._tcp.local.", name, &host, (), http_port, props)
-        .map_err(|e| e.to_string())?
-        .enable_addr_auto();
+    // Advertise only addresses the simulator actually listens on.
+    let service = if public {
+        mdns_sd::ServiceInfo::new("_wled._tcp.local.", name, &host, (), http_port, props)
+            .map_err(|e| e.to_string())?
+            .enable_addr_auto()
+    } else {
+        mdns_sd::ServiceInfo::new("_wled._tcp.local.", name, &host, "127.0.0.1", http_port, props)
+            .map_err(|e| e.to_string())?
+    };
     daemon.register(service).map_err(|e| e.to_string())?;
     Ok(daemon)
 }

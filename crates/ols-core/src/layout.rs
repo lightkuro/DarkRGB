@@ -113,15 +113,15 @@ impl Fixture {
                     place(cell(i, count, self.width), 0.0)
                 })
                 .collect(),
-            Shape::Matrix {
-                cols,
-                rows,
-                serpentine,
-            } => {
+            Shape::Matrix { cols, rows, serpentine } => {
                 let mut out = Vec::with_capacity((cols * rows) as usize);
                 for row in 0..rows {
                     for col in 0..cols {
-                        let col = if serpentine && row % 2 == 1 { cols - 1 - col } else { col };
+                        let col = if serpentine && row % 2 == 1 {
+                            cols - 1 - col
+                        } else {
+                            col
+                        };
                         out.push(place(cell(col, cols, self.width), cell(row, rows, self.height)));
                     }
                 }

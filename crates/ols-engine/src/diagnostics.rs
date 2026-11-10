@@ -2,7 +2,7 @@
 //! system audio capture, and steady frames to a real device.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use ols_audio::{AudioCapture, AudioState};
@@ -67,7 +67,11 @@ pub fn audio_test(source: &str, seconds: u64) -> bool {
     };
     let received = capture.samples_received() - samples_at_start;
     let expected = since.elapsed().as_secs_f64() * sample_rate as f64;
-    let share = if expected > 0.0 { received as f64 / expected * 100.0 } else { 0.0 };
+    let share = if expected > 0.0 {
+        received as f64 / expected * 100.0
+    } else {
+        0.0
+    };
 
     if loudest < 0.05 {
         // Windows delivers nothing at all while nothing plays, so a low
@@ -107,7 +111,9 @@ pub fn ddp_test(address: &str, fps: u32, seconds: u64) -> bool {
         info.name,
         info.version,
         info.led_count,
-        info.matrix.map(|(w, h)| format!(", {w}x{h} matrix")).unwrap_or_default()
+        info.matrix
+            .map(|(w, h)| format!(", {w}x{h} matrix"))
+            .unwrap_or_default()
     );
     if let (true, Some(source)) = (info.live, &info.live_source) {
         println!("Warning: it is already receiving a stream ({source}). Stop that first for a clean test.");
@@ -260,20 +266,33 @@ pub fn discover(seconds: u64) -> bool {
         let Ok(Event::Found(found)) = rx.recv_timeout(left) else {
             continue;
         };
-        if seen.contains(&found.host) {
+        if seen.contains(&found.key) {
             continue;
         }
-        seen.push(found.host.clone());
-        match wled::fetch_info(&found.host, found.http_port, Duration::from_secs(3)) {
-            Ok(info) => println!(
-                "  {:<24} {:<16} {:>5} LEDs{}  version {}",
-                info.name,
-                found.host,
-                info.led_count,
-                info.matrix.map(|(w, h)| format!(" ({w}x{h})")).unwrap_or_default(),
-                info.version
-            ),
-            Err(e) => println!("  {:<24} {:<16} did not answer: {e}", "?", found.host),
+        seen.push(found.key.clone());
+        let answer = found.hosts.iter().find_map(|host| {
+            Some((
+                host,
+                wled::fetch_info(host, found.http_port, Duration::from_secs(3)).ok()?,
+            ))
+        });
+        match answer {
+            Some((host, info)) => {
+                let address = if found.http_port == 80 {
+                    host.clone()
+                } else {
+                    format!("{host}:{}", found.http_port)
+                };
+                println!(
+                    "  {:<24} {:<22} {:>5} LEDs{}  version {}",
+                    info.name,
+                    address,
+                    info.led_count,
+                    info.matrix.map(|(w, h)| format!(" ({w}x{h})")).unwrap_or_default(),
+                    info.version
+                );
+            }
+            None => println!("  advertised at {} but did not answer", found.hosts.join(", ")),
         }
     }
     if seen.is_empty() {

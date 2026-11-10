@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use ols_audio::{list_inputs, AudioCapture, SYSTEM_SOURCE};
+use ols_audio::{AudioCapture, SYSTEM_SOURCE, list_inputs};
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();

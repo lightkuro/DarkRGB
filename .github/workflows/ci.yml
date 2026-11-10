@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch replaces the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build the UI
+        working-directory: ui
+        run: |
+          npm install --global pnpm@10
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Check formatting and lints
+        if: runner.os == 'Linux'
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build release programs
+        run: cargo build --release -p ols-engine -p ols-sim
+
+      - name: Collect programs
+        shell: bash
+        run: |
+          mkdir dist
+          cp target/release/openlightshow${{ runner.os == 'Windows' && '.exe' || '' }} dist/
+          cp target/release/ols-sim${{ runner.os == 'Windows' && '.exe' || '' }} dist/
+          cp LICENSE CHANGELOG.md dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openlightshow-${{ runner.os }}
+          path: dist/
+          retention-days: 30

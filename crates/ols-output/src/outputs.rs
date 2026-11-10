@@ -122,15 +122,4 @@ impl Outputs {
             }
         }
     }
-
-    /// Sends one black frame to every enabled device, so lights do not
-    /// freeze on the last colour when the app closes.
-    pub fn blackout(&mut self, show: &Show) {
-        for device in &show.devices {
-            if let (true, Some((_, _, Target::Ready(addr)))) = (device.enabled, self.targets.get(&device.id)) {
-                let frame = vec![0u8; device.pixel_count as usize * 3];
-                let _ = self.sender.send_frame(*addr, &frame);
-            }
-        }
-    }
 }

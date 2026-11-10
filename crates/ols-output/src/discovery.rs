@@ -12,8 +12,9 @@ pub const WLED_SERVICE: &str = "_wled._tcp.local.";
 pub struct Found {
     /// mDNS instance name, unique on the network. Used to notice removal.
     pub key: String,
-    /// The device's IPv4 address.
-    pub host: String,
+    /// The device's IPv4 addresses. A device can advertise several (one
+    /// per network it is on); not all of them need be reachable from here.
+    pub hosts: Vec<String>,
     pub http_port: u16,
     pub mac: Option<String>,
 }
@@ -43,11 +44,18 @@ impl Discovery {
                     match event {
                         ServiceEvent::ServiceResolved(info) => {
                             // WLED streams over IPv4, so ignore v6-only answers.
-                            let v4 = info.addresses.iter().map(|a| a.to_ip_addr()).find(IpAddr::is_ipv4);
-                            if let Some(ip) = v4 {
+                            let mut hosts: Vec<String> = info
+                                .addresses
+                                .iter()
+                                .map(|a| a.to_ip_addr())
+                                .filter(IpAddr::is_ipv4)
+                                .map(|ip| ip.to_string())
+                                .collect();
+                            hosts.sort();
+                            if !hosts.is_empty() {
                                 on_event(Event::Found(Found {
                                     key: info.fullname.clone(),
-                                    host: ip.to_string(),
+                                    hosts,
                                     http_port: info.port,
                                     mac: info.txt_properties.get_property_val_str("mac").map(str::to_string),
                                 }));

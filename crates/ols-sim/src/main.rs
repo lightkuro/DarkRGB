@@ -34,7 +34,10 @@ struct Args {
     public: bool,
 }
 
-fn parse_device(spec: &str) -> Result<(String, u32, Option<(u32, u32)>), String> {
+/// Name, LED count, and columns by rows for a matrix.
+type DeviceSpec = (String, u32, Option<(u32, u32)>);
+
+fn parse_device(spec: &str) -> Result<DeviceSpec, String> {
     let (name, size) = spec
         .rsplit_once(':')
         .ok_or_else(|| format!("{spec:?} should look like NAME:120 or NAME:16x16"))?;
@@ -110,7 +113,10 @@ mod tests {
     #[test]
     fn parses_strips_and_matrices() {
         assert_eq!(parse_device("Desk:120").unwrap(), ("Desk".into(), 120, None));
-        assert_eq!(parse_device("Panel:16x8").unwrap(), ("Panel".into(), 128, Some((16, 8))));
+        assert_eq!(
+            parse_device("Panel:16x8").unwrap(),
+            ("Panel".into(), 128, Some((16, 8)))
+        );
         assert_eq!(parse_device("A:B:5").unwrap(), ("A:B".into(), 5, None));
         assert!(parse_device("no size").is_err());
         assert!(parse_device("x:0").is_err());

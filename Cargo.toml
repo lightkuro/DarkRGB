@@ -7,7 +7,6 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/lightkuro/OpenLightShow"
-rust-version = "1.85"
 
 [profile.release]
 opt-level = 3
@@ -15,5 +14,8 @@ lto = "thin"
 strip = true
 
 # Audio analysis and effect rendering are too slow to judge unoptimised.
+[profile.dev]
+opt-level = 1
+
 [profile.dev.package."*"]
 opt-level = 2

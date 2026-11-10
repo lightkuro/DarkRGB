@@ -15,20 +15,20 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::Router;
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::header::{self, HeaderMap, HeaderValue};
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use ols_core::{color, effects};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
-use crate::app::{Shared, APP_NAME, VERSION};
+use crate::app::{APP_NAME, Discovered, Shared, VERSION};
 use crate::commands::Command;
 use crate::render_loop::FRAME_RATE;
 
@@ -181,6 +181,16 @@ fn audio_message(shared: &Shared) -> String {
     value.to_string()
 }
 
+/// Whether a device seen on the network is this one from the show.
+/// Hardware addresses decide when both are known; several devices can
+/// share one IP address (simulators do), so the IP is only a fallback.
+fn already_added(found: &Discovered, device: &ols_core::Device) -> bool {
+    match (&found.mac, &device.mac) {
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        _ => found.address.split(':').next() == Some(device.address.as_str()),
+    }
+}
+
 fn status_message(shared: &Shared) -> String {
     let discovered: Vec<Value> = {
         let show = shared.show.lock().unwrap();
@@ -190,9 +200,7 @@ fn status_message(shared: &Shared) -> String {
             .unwrap()
             .iter()
             .map(|d| {
-                let added = show.devices.iter().any(|dev| {
-                    (d.mac.is_some() && dev.mac == d.mac) || d.address.split(':').next() == Some(dev.address.as_str())
-                });
+                let added = show.devices.iter().any(|dev| already_added(d, dev));
                 let mut v = serde_json::to_value(d).unwrap_or(Value::Null);
                 v["added"] = added.into();
                 v
@@ -332,8 +340,14 @@ mod tests {
     #[test]
     fn the_served_page_and_plain_programs_may_connect() {
         let local = Access::default();
-        assert!(allowed(&headers(Some("127.0.0.1:7420"), Some("http://127.0.0.1:7420")), &local));
-        assert!(allowed(&headers(Some("localhost:7420"), Some("http://localhost:7420")), &local));
+        assert!(allowed(
+            &headers(Some("127.0.0.1:7420"), Some("http://127.0.0.1:7420")),
+            &local
+        ));
+        assert!(allowed(
+            &headers(Some("localhost:7420"), Some("http://localhost:7420")),
+            &local
+        ));
         assert!(allowed(&headers(Some("[::1]:7420"), Some("http://[::1]:7420")), &local));
         assert!(allowed(&headers(Some("127.0.0.1:7420"), None), &local));
     }
@@ -342,12 +356,24 @@ mod tests {
     fn other_web_pages_may_not_connect() {
         let local = Access::default();
         // A page on another site opening a socket to this machine.
-        assert!(!allowed(&headers(Some("127.0.0.1:7420"), Some("https://evil.example")), &local));
-        assert!(!allowed(&headers(Some("127.0.0.1:7420"), Some("http://localhost:7420")), &local));
-        assert!(!allowed(&headers(Some("127.0.0.1:7420"), Some("http://127.0.0.1:9999")), &local));
+        assert!(!allowed(
+            &headers(Some("127.0.0.1:7420"), Some("https://evil.example")),
+            &local
+        ));
+        assert!(!allowed(
+            &headers(Some("127.0.0.1:7420"), Some("http://localhost:7420")),
+            &local
+        ));
+        assert!(!allowed(
+            &headers(Some("127.0.0.1:7420"), Some("http://127.0.0.1:9999")),
+            &local
+        ));
         assert!(!allowed(&headers(Some("127.0.0.1:7420"), Some("null")), &local));
         // DNS rebinding: the hostile name resolves here, so the origin matches the host.
-        assert!(!allowed(&headers(Some("evil.example:7420"), Some("http://evil.example:7420")), &local));
+        assert!(!allowed(
+            &headers(Some("evil.example:7420"), Some("http://evil.example:7420")),
+            &local
+        ));
         assert!(!allowed(&headers(None, None), &local));
     }
 
@@ -357,8 +383,14 @@ mod tests {
             lan: true,
             dev_origin: None,
         };
-        assert!(allowed(&headers(Some("192.168.1.20:7420"), Some("http://192.168.1.20:7420")), &lan));
-        assert!(!allowed(&headers(Some("192.168.1.20:7420"), Some("https://evil.example")), &lan));
+        assert!(allowed(
+            &headers(Some("192.168.1.20:7420"), Some("http://192.168.1.20:7420")),
+            &lan
+        ));
+        assert!(!allowed(
+            &headers(Some("192.168.1.20:7420"), Some("https://evil.example")),
+            &lan
+        ));
     }
 
     #[test]
@@ -370,6 +402,42 @@ mod tests {
         let h = headers(Some("127.0.0.1:7420"), Some("http://localhost:5173"));
         assert!(allowed(&h, &dev));
         assert!(!allowed(&h, &Access::default()));
+    }
+
+    #[test]
+    fn found_devices_are_matched_by_hardware_address_first() {
+        let found = |mac: Option<&str>, address: &str| Discovered {
+            key: "k".into(),
+            name: "n".into(),
+            address: address.into(),
+            leds: 1,
+            matrix: None,
+            version: "v".into(),
+            mac: mac.map(str::to_string),
+        };
+        let device = |mac: Option<&str>, address: &str| ols_core::Device {
+            id: 1,
+            name: "d".into(),
+            address: address.into(),
+            port: 4048,
+            pixel_count: 1,
+            enabled: true,
+            gamma: 2.2,
+            brightness: 1.0,
+            mac: mac.map(str::to_string),
+            version: None,
+        };
+        // Two simulators on one IP address are different devices.
+        assert!(!already_added(
+            &found(Some("aa"), "127.0.0.1:8082"),
+            &device(Some("bb"), "127.0.0.1")
+        ));
+        assert!(
+            already_added(&found(Some("AA"), "10.0.0.9"), &device(Some("aa"), "10.0.0.5")),
+            "same device, new IP"
+        );
+        assert!(already_added(&found(None, "10.0.0.5"), &device(Some("aa"), "10.0.0.5")));
+        assert!(!already_added(&found(None, "10.0.0.6"), &device(None, "10.0.0.5")));
     }
 
     #[test]
@@ -389,9 +457,20 @@ mod tests {
         let effects = hello["effects"].as_array().unwrap();
         assert!(effects.len() >= 10);
         let plasma = effects.iter().find(|e| e["id"] == "plasma").unwrap();
-        let speed = plasma["params"].as_array().unwrap().iter().find(|p| p["id"] == "speed").unwrap();
+        let speed = plasma["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "speed")
+            .unwrap();
         assert_eq!(speed["kind"], "float");
         assert_eq!(speed["min"], 0.0);
-        assert!(hello["palettes"].as_array().unwrap().iter().any(|p| p["id"] == "rainbow"));
+        assert!(
+            hello["palettes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["id"] == "rainbow")
+        );
     }
 }

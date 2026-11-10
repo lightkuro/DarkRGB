@@ -6,8 +6,10 @@
 //! Per step (about every 11 ms):
 //!
 //! 1. A windowed FFT gives the spectrum, which is summed into mel-spaced bands.
-//! 2. Automatic gain follows the loudest recent band, so quiet and loud
-//!    sources produce the same picture.
+//! 2. Automatic gain makes quiet and loud sources produce the same picture.
+//!    Each band is also levelled against its own recent peaks, because
+//!    treble carries far less energy than bass and would otherwise never
+//!    show next to a kick drum.
 //! 3. The rise in band energy since the last step ("spectral flux") marks
 //!    onsets: the starts of notes and drum hits.
 //! 4. The rhythm of those onsets over the last few seconds gives the tempo,
@@ -27,8 +29,11 @@ const BAND_MAX_HZ: f32 = 16_000.0;
 const BASS_MAX_HZ: f32 = 250.0;
 const TREBLE_MIN_HZ: f32 = 2_500.0;
 
-/// A band this far below the loudest one shows as zero.
-const BAND_RANGE_DB: f32 = 30.0;
+/// A band this far below its own recent peak shows as zero.
+const BAND_RANGE_DB: f32 = 24.0;
+/// A band is never levelled up by more than this relative to the loudest
+/// band (30 dB), so bands holding only noise stay dark.
+const BAND_FLOOR: f32 = 0.03;
 const LEVEL_RANGE_DB: f32 = 24.0;
 /// Input quieter than this (about -80 dBFS) counts as silence.
 const SILENCE_RMS: f32 = 1e-4;
@@ -64,9 +69,14 @@ pub struct Analyzer {
     band_class: [u8; BANDS],
 
     sensitivity: f32,
+    /// Recent peak of the loudest band, and of each band by itself.
     band_ref: f32,
+    band_peaks: [f32; BANDS],
     level_ref: f32,
     prev_log: [f32; BANDS],
+    /// As `prev_log`, but measured against the loudest band, not each
+    /// band's own peak. The tempo tracker uses this one.
+    prev_log_natural: [f32; BANDS],
     quiet_steps: usize,
 
     flux_history: VecDeque<f32>,
@@ -148,8 +158,10 @@ impl Analyzer {
             band_class,
             sensitivity: 1.0,
             band_ref: MIN_REFERENCE,
+            band_peaks: [0.0; BANDS],
             level_ref: MIN_REFERENCE,
             prev_log: [0.0; BANDS],
+            prev_log_natural: [0.0; BANDS],
             quiet_steps: usize::MAX / 2,
             flux_history: VecDeque::new(),
             steps_since_onset: usize::MAX / 2,
@@ -254,13 +266,26 @@ impl Analyzer {
         // Rise per group (bass, mid, treble), for the tempo tracker.
         let mut group_flux = [0.0f32; 3];
         let mut group_size = [0u32; 3];
+        let floor = self.band_ref * BAND_FLOOR;
         for b in 0..BANDS {
-            let relative = bands[b] / self.band_ref;
+            let peak = &mut self.band_peaks[b];
+            *peak = if bands[b] > *peak {
+                *peak + (bands[b] - *peak) * 0.3
+            } else {
+                *peak * release
+            };
+            let relative = bands[b] / peak.max(floor);
             let log = (1.0 + 50.0 * relative).ln();
             let rise = (log - self.prev_log[b]).max(0.0);
             self.prev_log[b] = log;
             flux += rise;
-            group_flux[self.band_class[b] as usize] += rise;
+
+            // For rhythm, keep the natural balance: a kick should outweigh
+            // a hi-hat, which levelling each band would undo.
+            let natural = (1.0 + 50.0 * bands[b] / self.band_ref).ln();
+            let natural_rise = (natural - self.prev_log_natural[b]).max(0.0);
+            self.prev_log_natural[b] = natural;
+            group_flux[self.band_class[b] as usize] += natural_rise;
             group_size[self.band_class[b] as usize] += 1;
 
             let target = if active {
@@ -306,7 +331,11 @@ impl Analyzer {
             self.recent_onsets.push_back(self.step_index);
         }
         let horizon = (self.step_rate * TEMPO_WINDOW_S) as u64;
-        while self.recent_onsets.front().is_some_and(|at| self.step_index - at > horizon) {
+        while self
+            .recent_onsets
+            .front()
+            .is_some_and(|at| self.step_index - at > horizon)
+        {
             self.recent_onsets.pop_front();
         }
         let fade = (-1.0 / (self.step_rate * 0.10)).exp();
@@ -358,8 +387,7 @@ impl Analyzer {
         self.steps_since_beat = self.steps_since_beat.saturating_add(1);
         // A couple of hits that happen to be evenly spaced are not a tempo.
         let enough_hits = self.recent_onsets.len() >= TEMPO_MIN_ONSETS;
-        let locked =
-            self.out.active && enough_hits && self.period > 0.0 && self.confidence >= TEMPO_MIN_CONFIDENCE;
+        let locked = self.out.active && enough_hits && self.period > 0.0 && self.confidence >= TEMPO_MIN_CONFIDENCE;
         let mut beat = false;
         if locked {
             self.phase += 1.0 / self.period;
@@ -631,7 +659,12 @@ mod tests {
             a.features()
         };
         let (quiet, loud) = (run(0.01), run(0.8));
-        assert!((quiet.level - loud.level).abs() < 0.05, "{} vs {}", quiet.level, loud.level);
+        assert!(
+            (quiet.level - loud.level).abs() < 0.05,
+            "{} vs {}",
+            quiet.level,
+            loud.level
+        );
         assert!((quiet.mid - loud.mid).abs() < 0.05);
     }
 

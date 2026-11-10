@@ -61,10 +61,14 @@ impl Rgb {
         Rgb::new(self.r * k, self.g * k, self.b * k)
     }
 
+    // `add` and `mul` are plain methods on purpose: operators would hide
+    // that these are per-channel and unclamped.
+    #[allow(clippy::should_implement_trait)]
     pub fn add(self, o: Rgb) -> Self {
         Rgb::new(self.r + o.r, self.g + o.g, self.b + o.b)
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn mul(self, o: Rgb) -> Self {
         Rgb::new(self.r * o.r, self.g * o.g, self.b * o.b)
     }
@@ -82,11 +86,7 @@ impl Rgb {
     }
 
     pub fn clamp(self) -> Self {
-        Rgb::new(
-            self.r.clamp(0.0, 1.0),
-            self.g.clamp(0.0, 1.0),
-            self.b.clamp(0.0, 1.0),
-        )
+        Rgb::new(self.r.clamp(0.0, 1.0), self.g.clamp(0.0, 1.0), self.b.clamp(0.0, 1.0))
     }
 
     /// 8-bit values with no gamma, for previews and hex strings.
@@ -188,15 +188,52 @@ pub fn palettes() -> &'static [Palette] {
                 "rainbow",
                 "Rainbow",
                 true,
-                &["#ff0000", "#ffb000", "#b0ff00", "#00ff40", "#00ffe0", "#0060ff", "#7000ff", "#ff00b0"],
+                &[
+                    "#ff0000", "#ffb000", "#b0ff00", "#00ff40", "#00ffe0", "#0060ff", "#7000ff", "#ff00b0",
+                ],
             ),
-            make("sunset", "Sunset", false, &["#1b0a3c", "#7a1e6c", "#e0364f", "#ff8a3d", "#ffd86b"]),
-            make("ocean", "Ocean", false, &["#020b2a", "#053a8c", "#0a84d8", "#2fd6d0", "#d6fff5"]),
-            make("fire", "Fire", false, &["#140000", "#8a0a00", "#ff3a00", "#ffa200", "#fff3b0"]),
-            make("forest", "Forest", false, &["#03140a", "#0b5a2a", "#2fae3f", "#b6e64a", "#f4ffb8"]),
-            make("neon", "Neon", true, &["#ff2bd6", "#7a2bff", "#2b8cff", "#2bffd9", "#f5ff2b"]),
-            make("ice", "Ice", false, &["#02060f", "#12356e", "#3f8fe0", "#a9e2ff", "#ffffff"]),
-            make("candy", "Candy", true, &["#ff5fa2", "#ffc35f", "#5fffd4", "#5f9bff", "#c45fff"]),
+            make(
+                "sunset",
+                "Sunset",
+                false,
+                &["#1b0a3c", "#7a1e6c", "#e0364f", "#ff8a3d", "#ffd86b"],
+            ),
+            make(
+                "ocean",
+                "Ocean",
+                false,
+                &["#020b2a", "#053a8c", "#0a84d8", "#2fd6d0", "#d6fff5"],
+            ),
+            make(
+                "fire",
+                "Fire",
+                false,
+                &["#140000", "#8a0a00", "#ff3a00", "#ffa200", "#fff3b0"],
+            ),
+            make(
+                "forest",
+                "Forest",
+                false,
+                &["#03140a", "#0b5a2a", "#2fae3f", "#b6e64a", "#f4ffb8"],
+            ),
+            make(
+                "neon",
+                "Neon",
+                true,
+                &["#ff2bd6", "#7a2bff", "#2b8cff", "#2bffd9", "#f5ff2b"],
+            ),
+            make(
+                "ice",
+                "Ice",
+                false,
+                &["#02060f", "#12356e", "#3f8fe0", "#a9e2ff", "#ffffff"],
+            ),
+            make(
+                "candy",
+                "Candy",
+                true,
+                &["#ff5fa2", "#ffc35f", "#5fffd4", "#5f9bff", "#c45fff"],
+            ),
             make("mono", "White", false, &["#000000", "#ffffff"]),
         ]
     })

@@ -311,12 +311,18 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
                 .effect
                 .clone();
             let value = checked_param(&effect, param, value)?;
-            show.layer_mut(*layer).expect("checked above").params.insert(param.clone(), value);
+            show.layer_mut(*layer)
+                .expect("checked above")
+                .params
+                .insert(param.clone(), value);
             Ok(())
         }
 
         Command::ResetParams { layer } => {
-            show.layer_mut(*layer).ok_or("that layer no longer exists")?.params.clear();
+            show.layer_mut(*layer)
+                .ok_or("that layer no longer exists")?
+                .params
+                .clear();
             Ok(())
         }
 

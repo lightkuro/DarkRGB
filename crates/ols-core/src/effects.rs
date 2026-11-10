@@ -2,8 +2,8 @@
 
 use std::sync::OnceLock;
 
-use crate::color::{palette, Palette, Rgb};
-use crate::effect::{hash2, smoothstep, Effect, EffectDef, EffectInfo, FrameCtx};
+use crate::color::{Palette, Rgb, palette};
+use crate::effect::{Effect, EffectDef, EffectInfo, FrameCtx, hash2, smoothstep};
 use crate::params::{ParamReader, ParamSpec};
 
 /// The effect a new show starts with. It moves without sound, so a first
@@ -487,7 +487,11 @@ impl Effect for Ripple {
         if fired && self.rings.len() < 16 {
             self.hue = (self.hue + 0.27).fract();
             // Skip the dark end of non-cyclic palettes.
-            let t = if self.palette.cyclic { self.hue } else { 0.35 + self.hue * 0.65 };
+            let t = if self.palette.cyclic {
+                self.hue
+            } else {
+                0.35 + self.hue * 0.65
+            };
             self.rings.push(Ring {
                 radius: 0.0,
                 colour: self.palette.sample(t),
@@ -804,7 +808,11 @@ mod tests {
             for flat in [true, false] {
                 let mut fx = make(def.info.id);
                 for frame in 0..180u32 {
-                    let audio = if frame < 60 { AudioFeatures::default() } else { loud(frame / 30) };
+                    let audio = if frame < 60 {
+                        AudioFeatures::default()
+                    } else {
+                        loud(frame / 30)
+                    };
                     let c = ctx(frame as f64 / 60.0, audio, flat);
                     fx.configure(&ParamReader::new(&def.info.params, &Params::new()));
                     fx.update(&c);

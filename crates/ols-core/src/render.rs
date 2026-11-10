@@ -116,7 +116,9 @@ impl Renderer {
                 aspect: state.aspect,
                 flat: state.flat,
             };
-            state.effect.configure(&ParamReader::new(&def.info.params, &layer.params));
+            state
+                .effect
+                .configure(&ParamReader::new(&def.info.params, &layer.params));
             state.effect.update(&ctx);
             let opacity = layer.opacity.clamp(0.0, 1.0);
             for t in &state.targets {
@@ -130,7 +132,11 @@ impl Renderer {
                 };
             }
         }
-        let master = if show.master.blackout { 0.0 } else { show.master.brightness.clamp(0.0, 1.0) };
+        let master = if show.master.blackout {
+            0.0
+        } else {
+            show.master.brightness.clamp(0.0, 1.0)
+        };
         if master < 1.0 {
             for px in &mut self.frame {
                 *px = px.scale(master);
@@ -239,7 +245,11 @@ fn build_targets(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> (Vec<Tar
             let (x, y) = (norm(p[0], min[0], w), norm(p[1], min[1], h));
             // A vertical line still runs along x as far as effects care.
             if flat && h > w {
-                Target { index: *index, x: y, y: 0.5 }
+                Target {
+                    index: *index,
+                    x: y,
+                    y: 0.5,
+                }
             } else {
                 Target { index: *index, x, y }
             }
@@ -427,9 +437,11 @@ mod tests {
         show.add_device(device(20), None);
         let mut r = Renderer::new();
         r.sync(&show);
-        let mut audio = AudioFeatures::default();
-        audio.active = true;
-        audio.bass = 1.0;
+        let audio = AudioFeatures {
+            active: true,
+            bass: 1.0,
+            ..AudioFeatures::default()
+        };
         for i in 0..30 {
             r.render(&show, i as f64 / 60.0, 1.0 / 60.0, &audio);
         }

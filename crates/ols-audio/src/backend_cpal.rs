@@ -3,8 +3,8 @@
 //! Opening the default *output* device as an input turns on loopback
 //! capture: WASAPI loopback on Windows, a CoreAudio tap on macOS 14.6+.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -50,7 +50,11 @@ pub(crate) fn open(source: &str) -> Result<Open, String> {
         SampleFormat::U8 => build::<u8>(&device, stream_config, producer, failed.clone()),
         SampleFormat::I8 => build::<i8>(&device, stream_config, producer, failed.clone()),
         SampleFormat::F64 => build::<f64>(&device, stream_config, producer, failed.clone()),
-        other => return Err(format!("{device_name} uses a sample format this app cannot read ({other}).")),
+        other => {
+            return Err(format!(
+                "{device_name} uses a sample format this app cannot read ({other})."
+            ));
+        }
     }
     .map_err(|e| format!("Could not listen to {device_name}: {e}"))?;
     stream
@@ -130,8 +134,8 @@ fn chosen_input(id: &str) -> Result<Source, String> {
     let device_id: cpal::DeviceId = id
         .parse()
         .map_err(|_| "The chosen audio input is not valid. Pick another one.".to_string())?;
-    let host = cpal::host_from_id(device_id.host())
-        .map_err(|e| format!("The chosen audio input is not available: {e}"))?;
+    let host =
+        cpal::host_from_id(device_id.host()).map_err(|e| format!("The chosen audio input is not available: {e}"))?;
     let device = host
         .device_by_id(&device_id)
         .ok_or("The chosen audio input is not connected. Plug it in or pick another one.")?;
@@ -152,5 +156,9 @@ fn device_name(device: &cpal::Device) -> String {
 /// Id of the current default output, to notice when the user switches
 /// speakers or headphones.
 fn default_output_id() -> Option<String> {
-    cpal::default_host().default_output_device()?.id().ok().map(|id| id.to_string())
+    cpal::default_host()
+        .default_output_device()?
+        .id()
+        .ok()
+        .map(|id| id.to_string())
 }

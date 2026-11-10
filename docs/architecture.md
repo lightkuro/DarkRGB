@@ -1,7 +1,8 @@
 # Architecture
 
-Decided on 2026-11-10. Nothing here is built yet. Items marked **(to verify)** are assumptions that the risk
-spikes in [roadmap.md](roadmap.md) test first.
+Decided on 2026-11-10. As of version 0.1.0 the engine, the device simulator and the UI exist; the desktop
+shell, live mode and the timeline do not. Sections say which parts are built. Items marked **(to verify)** are
+assumptions that the checks in [roadmap.md](roadmap.md) test.
 
 ## Why installed software, not a website
 
@@ -24,7 +25,7 @@ a phone on the same network can open it as a remote. A public website is only ne
 |---|---|---|
 | Engine | Rust, a headless process | Steady 60 fps with no garbage-collector pauses; good audio, MIDI and network crates |
 | UI | TypeScript, React, Vite | Largest contributor pool; modern look is easy; WebGL2 for the preview, Canvas for the timeline |
-| Desktop shell | Tauri v2 | Small installers, auto-update, Windows and Linux packaging |
+| Desktop shell | Tauri v2 (not built yet; the UI opens in the browser) | Small installers, auto-update, Windows and Linux packaging |
 | Engine to UI | WebSocket and HTTP on localhost | Keeps the shell replaceable; also serves the phone remote and a headless mode |
 
 ```mermaid
@@ -95,16 +96,19 @@ not WebGPU.
 - **Record live into the timeline:** because live triggers and timeline clips are the same thing, a keyboard
   performance played over a song can be recorded as clips and then edited. This is the intended fast path for
   making pre-programmed shows.
-- Every change goes through a command (with undo). The same commands serve the UI, the phone remote, MIDI
-  mappings and recording.
+- Every change goes through a command. The same commands will serve the UI, the phone remote, MIDI mappings
+  and recording. Commands are validated in one place (`crates/ols-engine/src/commands.rs`). Undo is not built.
+
+Built so far: layers that are always on (the audio-reactive case), four blend modes, scenes. Clips with start
+and stop times, modulators other than audio, and recording are not built.
 
 ### Effects
 
 - An effect is a function of time, audio features, parameters and pixel positions that writes colours.
 - Each effect declares its parameters (name, type, range) so the UI builds controls automatically.
 - Built-in effects are Rust. Later, user effects as WGSL shaders or WASM plugins.
-- Colours stay in linear floating point until output. Gamma, brightness cap, colour order and RGBW conversion
-  happen per device at the end.
+- Effects work with the colours a colour picker shows, as floating point. Gamma and the brightness cap are
+  applied per device at the end; colour order and RGBW conversion will go there too.
 
 ### Timing and threads
 
@@ -118,14 +122,24 @@ not WebGPU.
 
 ## Audio with zero setup
 
-| OS | Method | Notes |
+| OS | Method | Status |
 |---|---|---|
-| Windows | WASAPI loopback of the default output | Needs no driver or user setting. In `cpal`, opening an output device as an input stream enables loopback. [Microsoft](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording) |
-| Linux | Monitor of the default sink through PipeWire or PulseAudio | `cpal` 0.18 has native PipeWire and PulseAudio hosts. Whether it exposes the sink monitor is **(to verify)**; the fallback is the PipeWire API directly (`stream.capture.sink`). |
+| Windows | WASAPI loopback of the default output, through `cpal`: opening an output device as an input stream enables loopback. Needs no driver or user setting. [Microsoft](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording) | Written and compiles for Windows; not yet run on Windows |
+| Linux | The monitor source of the default sink, through the PulseAudio protocol with the pure-Rust `pulseaudio` client. PipeWire answers the same protocol. | Tested on PulseAudio 16.1 and PipeWire 1.0.5 |
+| macOS | A CoreAudio tap on the default output through `cpal` (macOS 14.6+) | Same code path as Windows; untested |
 
-- Follow the default device when the user switches headphones or speakers.
-- Analysis: mono mix, windowed FFT (`rustfft`), mel bands, volume, onset detection by spectral flux, and a tempo
-  and beat tracker, with tap tempo as an override.
+Why Linux does not use `cpal`: in `cpal` 0.18.2 the PulseAudio host either delivers recordings in chunks of
+about two seconds (default buffer) or drops about half the audio (fixed buffer). Both were measured on
+2026-11-10. A fix is unreleased upstream. Talking to the server directly with a 10 ms fragment size delivers
+all of it.
+
+- Follows the default device when the user switches headphones or speakers (checked every two seconds), and
+  reconnects if the sound server restarts.
+- Analysis (`crates/ols-audio/src/analysis.rs`): mono mix, a 2048-sample windowed FFT every 512 samples at
+  48 kHz, 32 mel bands, automatic gain, onset detection by spectral flux, and a tempo and beat tracker
+  (autocorrelation of onset strength, 70 to 190 BPM). Tap tempo is not built.
+- Each band is levelled against its own recent peaks, so treble shows next to a loud kick. The tempo tracker
+  uses the unlevelled signal, weighted toward bass, so hi-hats are not mistaken for the beat.
 - Latency offset per device. Loopback audio arrives before a Bluetooth speaker plays it, so lights sometimes need
   to be delayed, not sped up.
 - Optional later on Windows: capture one application only, so notification sounds do not flash the lights
@@ -174,47 +188,74 @@ Hyperion. None is needed for the first four milestones.
 
 ## Engine to UI protocol
 
-- One WebSocket per client.
-- JSON for commands and state changes.
-- Binary frames for the live preview: a small header and RGB bytes per fixture, sent only for fixtures the
-  client subscribed to, at up to 30 fps.
-- The engine also serves the built UI over HTTP.
-- Bound to localhost by default. The LAN remote is opt-in and paired with a code.
+Built. One WebSocket per client at `/ws`; the engine also serves the UI over HTTP from the same port (7420).
+
+| From the engine | Content |
+|---|---|
+| text `hello` | Version, the effect list with each effect's parameters, palettes. Sent once. |
+| text `state` | The whole show. Sent on connect and after every change. |
+| text `audio` | Audio features, 30 times a second. |
+| text `status` | Frame rate, per-device send counts, audio status, discovered devices. Once a second. |
+| text `result` | Outcome of a command that carried an `id`. |
+| binary, first byte 1 | Preview colours: RGB per pixel, 30 times a second. |
+| binary, first byte 2 | Canvas position of every pixel, sent when the layout changes. |
+
+Binary messages carry a layout serial in bytes 4 to 8, and the payload starts at byte 8. A client only applies
+colours whose serial matches the positions it holds.
+
+Clients send commands as JSON text. The UI builds effect controls from the `hello` message, so adding an effect
+needs no UI code.
+
+### Who may connect
+
+- The server listens on this computer only (127.0.0.1) unless started with `--lan`.
+- Any web page can try to open a WebSocket to localhost, so the server checks two headers. `Host` must name
+  this machine, which defeats DNS rebinding. `Origin` must be the page the server itself served.
+- With `--lan` there is no password yet: anyone on the network can control the lights, and the `Host` check is
+  off. A pairing code is planned before this is recommended.
 
 ## Project files
 
-A show is a folder: `project.json` (versioned schema, human-readable, friendly to git) plus a `media/` folder
-for songs and images. Shared shows leave the songs out.
+Built: the show is one human-readable JSON file with a format version, saved a moment after each change to the
+user's config folder (or the path given with `--show`). It is written to a temporary file and renamed, so a
+crash cannot truncate it. A file that cannot be read, or that comes from a newer version, is kept as `.bak` and
+reported in the UI.
 
-## Rust crates to build on
+Planned: a folder per show with a `media/` folder for songs and images. Shared shows leave the songs out.
+
+## Rust crates in use
 
 | Need | Crate | Note |
 |---|---|---|
-| Audio in/out | `cpal` 0.18 | WASAPI loopback, PipeWire, PulseAudio, ALSA, JACK |
-| FFT | `rustfft` / `realfft` | |
+| Audio capture, Windows and macOS | `cpal` 0.18 | WASAPI loopback, CoreAudio tap |
+| Audio capture, Linux | `pulseaudio` 0.3 | Pure-Rust client for the PulseAudio protocol |
+| FFT | `rustfft` | |
 | Beat tracking | own code | `aubio` bindings are GPL-3 and stale |
-| MIDI | `midir` | |
 | mDNS | `mdns-sd` | |
-| sACN | `sacn` 0.11 | E1.31-2018 |
-| DDP | `ddp-rs` or own code | The header is 10 bytes; own code is small |
-| Art-Net | own code | Simple packet format |
-| Song decoding | `symphonia` | |
-| Async, serialisation | `tokio`, `serde` | |
+| DDP | own code | The header is 10 bytes (`crates/ols-output/src/ddp.rs`) |
+| WLED HTTP | `ureq` | Requests never go through a system proxy |
+| Server | `axum`, `tokio` | |
+| Embedding the UI | `rust-embed` | The built UI is compiled into the program |
+| Frame pacing | `spin_sleep` | |
+
+Planned: `midir` (MIDI), `sacn` (sACN), own code for Art-Net, `symphonia` (song decoding).
 
 Open-source projects worth reading: [LedFx](https://github.com/LedFx/LedFx) (audio effects),
 [Mizer](https://github.com/maxjoehnk/Mizer) (Rust lighting engine with a Flutter UI),
 [Rustmas](https://github.com/mrozycki/rustmas), [xLights](https://github.com/xLightsSequencer/xLights) (effects
 and file formats).
 
-## Proposed repo layout
+## Repo layout
 
 ```
 crates/
-  ols-core/     layout, clips, layers, effects, modulators (no I/O)
+  ols-core/     layout, layers, effects, renderer (no I/O)
   ols-audio/    capture and analysis
-  ols-output/   DDP, sACN, Art-Net, WLED discovery and API
-  ols-engine/   the binary: clock, input, API server
+  ols-output/   DDP, WLED info, discovery
+  ols-engine/   the program: frame loop, commands, server, diagnostics
+  ols-sim/      a pretend WLED device for tests and demos
 ui/             React + Vite
-apps/desktop/   Tauri shell
 docs/
 ```
+
+Planned: `apps/desktop/` for the Tauri shell.

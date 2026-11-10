@@ -71,7 +71,11 @@ pub fn parse(bytes: &[u8]) -> Option<Packet<'_>> {
         return None;
     }
     // A timecode flag adds four bytes we do not use.
-    let header = if bytes[0] & 0x10 != 0 { HEADER_LEN + 4 } else { HEADER_LEN };
+    let header = if bytes[0] & 0x10 != 0 {
+        HEADER_LEN + 4
+    } else {
+        HEADER_LEN
+    };
     let offset = u32::from_be_bytes(bytes[4..8].try_into().ok()?) as usize;
     let len = u16::from_be_bytes(bytes[8..10].try_into().ok()?) as usize;
     let data = bytes.get(header..header + len)?;
@@ -168,7 +172,10 @@ mod tests {
     #[test]
     fn parse_rejects_junk() {
         assert!(parse(&[]).is_none());
-        assert!(parse(&[0x41, 1, 0x0B, 1, 0, 0, 0, 0, 0, 9, 1, 2]).is_none(), "length past the end");
+        assert!(
+            parse(&[0x41, 1, 0x0B, 1, 0, 0, 0, 0, 0, 9, 1, 2]).is_none(),
+            "length past the end"
+        );
         assert!(parse(&[0x01, 1, 0x0B, 1, 0, 0, 0, 0, 0, 0]).is_none(), "wrong version");
     }
 
@@ -183,7 +190,9 @@ mod tests {
     #[test]
     fn sender_delivers_frames_over_udp() {
         let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
-        receiver.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+        receiver
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
         let addr = receiver.local_addr().unwrap();
         let mut sender = Sender::new().unwrap();
         let frame: Vec<u8> = (0..600 * 3).map(|i| (i % 200) as u8).collect();

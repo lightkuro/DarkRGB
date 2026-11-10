@@ -10,8 +10,8 @@ mod server;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -19,7 +19,7 @@ use clap::{Parser, Subcommand};
 use ols_output::discovery::{Discovery, Event};
 use ols_output::wled;
 
-use app::{Discovered, Shared, APP_NAME, VERSION};
+use app::{APP_NAME, Discovered, Shared, VERSION};
 
 #[derive(Parser)]
 #[command(name = "openlightshow", version, about = "LED show controller for WLED and friends")]
@@ -105,7 +105,11 @@ fn default_show_path() -> Option<PathBuf> {
 }
 
 fn run(cli: Cli) -> anyhow::Result<()> {
-    let save_path = if cli.no_save { None } else { cli.show.clone().or_else(default_show_path) };
+    let save_path = if cli.no_save {
+        None
+    } else {
+        cli.show.clone().or_else(default_show_path)
+    };
     let (show, notice) = match &save_path {
         Some(path) => app::load_show(path),
         None => (ols_core::Show::default(), None),
@@ -146,7 +150,11 @@ async fn serve(cli: Cli, shared: Arc<Shared>) -> anyhow::Result<()> {
     tokio::spawn(save_when_changed(shared.clone()));
     tokio::spawn(refresh_inputs(shared.clone()));
 
-    let ip = if cli.lan { Ipv4Addr::UNSPECIFIED } else { Ipv4Addr::LOCALHOST };
+    let ip = if cli.lan {
+        Ipv4Addr::UNSPECIFIED
+    } else {
+        Ipv4Addr::LOCALHOST
+    };
     let listener = tokio::net::TcpListener::bind(SocketAddr::from((ip, cli.port)))
         .await
         .with_context(|| {
@@ -158,7 +166,10 @@ async fn serve(cli: Cli, shared: Arc<Shared>) -> anyhow::Result<()> {
     let url = format!("http://127.0.0.1:{}", cli.port);
     println!("{APP_NAME} {VERSION} is running. Open {url}");
     if cli.lan {
-        println!("Other devices on your network can open it too, at this computer's address, port {}.", cli.port);
+        println!(
+            "Other devices on your network can open it too, at this computer's address, port {}.",
+            cli.port
+        );
         println!("There is no password yet: anyone on the network can control the lights.");
     }
     println!("Press Ctrl+C to stop.");
@@ -226,21 +237,27 @@ fn start_discovery(shared: Arc<Shared>) -> Result<Discovery, String> {
             // Ask the device about itself off the discovery thread.
             let shared = shared.clone();
             std::thread::spawn(move || {
-                match wled::fetch_info(&found.host, found.http_port, Duration::from_secs(3)) {
-                    Ok(info) => shared.note_discovered(Discovered {
-                        key: found.key,
-                        name: info.name,
-                        address: if found.http_port == 80 {
-                            found.host
-                        } else {
-                            format!("{}:{}", found.host, found.http_port)
-                        },
-                        leds: info.led_count,
-                        matrix: info.matrix,
-                        version: info.version,
-                        mac: info.mac.or(found.mac),
-                    }),
-                    Err(e) => log::debug!("{} advertised itself but did not answer: {e}", found.host),
+                // Use the first advertised address that actually answers.
+                for host in &found.hosts {
+                    match wled::fetch_info(host, found.http_port, Duration::from_secs(3)) {
+                        Ok(info) => {
+                            shared.note_discovered(Discovered {
+                                key: found.key,
+                                name: info.name,
+                                address: if found.http_port == 80 {
+                                    host.clone()
+                                } else {
+                                    format!("{host}:{}", found.http_port)
+                                },
+                                leds: info.led_count,
+                                matrix: info.matrix,
+                                version: info.version,
+                                mac: info.mac.or(found.mac),
+                            });
+                            return;
+                        }
+                        Err(e) => log::debug!("{host} advertised itself but did not answer: {e}"),
+                    }
                 }
             });
         }

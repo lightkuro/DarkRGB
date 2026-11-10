@@ -166,7 +166,11 @@ impl Show {
     /// stacking effects on LEDs usually wants.
     pub fn add_layer(&mut self, effect: &str) -> u32 {
         let id = self.alloc_id();
-        let blend = if self.layers.is_empty() { Blend::Normal } else { Blend::Add };
+        let blend = if self.layers.is_empty() {
+            Blend::Normal
+        } else {
+            Blend::Add
+        };
         self.layers.push(Layer {
             id,
             effect: effect.to_string(),
@@ -216,7 +220,11 @@ impl Show {
             .iter()
             .map(|f| f.y + f.height.max(0.04) / 2.0)
             .fold(f32::NEG_INFINITY, f32::max);
-        let y = if bottom.is_finite() { bottom + 0.1 + height / 2.0 } else { 0.0 };
+        let y = if bottom.is_finite() {
+            bottom + 0.1 + height / 2.0
+        } else {
+            0.0
+        };
 
         self.fixtures.push(Fixture {
             id: fixture_id,
@@ -325,7 +333,10 @@ mod tests {
         show.add_device(device("matrix", 256), Some((16, 16)));
         show.add_device(device("strip 2", 30), None);
         assert_eq!(show.fixtures.len(), 3);
-        assert!(matches!(show.fixtures[1].shape, Shape::Matrix { cols: 16, rows: 16, .. }));
+        assert!(matches!(
+            show.fixtures[1].shape,
+            Shape::Matrix { cols: 16, rows: 16, .. }
+        ));
         let ys: Vec<f32> = show.fixtures.iter().map(|f| f.y).collect();
         assert!(ys[0] < ys[1] && ys[1] < ys[2], "{ys:?}");
         assert_eq!(show.pixel_count(), 60 + 256 + 30);

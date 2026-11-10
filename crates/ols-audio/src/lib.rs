@@ -8,4 +8,4 @@ mod backend_pulse;
 pub mod capture;
 
 pub use analysis::Analyzer;
-pub use capture::{list_inputs, AudioCapture, AudioState, AudioStatus, InputDevice, SYSTEM_SOURCE};
+pub use capture::{AudioCapture, AudioState, AudioStatus, InputDevice, SYSTEM_SOURCE, list_inputs};

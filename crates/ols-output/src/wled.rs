@@ -186,7 +186,10 @@ mod tests {
     #[test]
     fn parses_what_people_type() {
         assert_eq!(parse_address("192.168.1.50").unwrap(), ("192.168.1.50".into(), 80));
-        assert_eq!(parse_address(" http://wled-desk.local/ ").unwrap(), ("wled-desk.local".into(), 80));
+        assert_eq!(
+            parse_address(" http://wled-desk.local/ ").unwrap(),
+            ("wled-desk.local".into(), 80)
+        );
         assert_eq!(parse_address("127.0.0.1:8081").unwrap(), ("127.0.0.1".into(), 8081));
         assert!(parse_address("").is_err());
         assert!(parse_address("https://x").is_err());

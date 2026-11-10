@@ -156,6 +156,7 @@ pub(crate) enum Health {
     /// The default output is now a different device.
     DefaultChanged,
     /// The connection to the sound system is gone.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Lost,
 }
 
@@ -260,7 +261,9 @@ fn run(shared: Arc<Shared>, commands: Receiver<Command>, mut source: String, mut
                     buffer.extend_from_slice(a);
                     buffer.extend_from_slice(b);
                     chunk.commit_all();
-                    shared.samples_received.fetch_add(buffer.len() as u64, Ordering::Relaxed);
+                    shared
+                        .samples_received
+                        .fetch_add(buffer.len() as u64, Ordering::Relaxed);
                     analyzer.push(&buffer);
                     publish(analyzer.features());
                 }
