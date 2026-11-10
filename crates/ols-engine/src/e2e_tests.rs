@@ -259,10 +259,11 @@ async fn next_binary(
             .unwrap_or_else(|_| panic!("no binary message of kind {kind} arrived"))
             .expect("socket closed")
             .expect("socket error");
-        if let Message::Binary(bytes) = message {
-            if bytes[0] == kind && bytes.len() >= min_len {
-                return bytes.to_vec();
-            }
+        if let Message::Binary(bytes) = message
+            && bytes[0] == kind
+            && bytes.len() >= min_len
+        {
+            return bytes.to_vec();
         }
     }
 }

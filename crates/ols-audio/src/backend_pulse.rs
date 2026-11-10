@@ -123,8 +123,8 @@ pub(crate) fn open(source: &str) -> Result<Open, String> {
     let stream = block_on(client.create_record_stream(params, move |data: &[u8]| {
         // Runs on the client's I/O thread. If the worker falls behind,
         // samples are dropped rather than waited on.
-        for bytes in data.chunks_exact(4) {
-            let _ = producer.push(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
+        for bytes in data.as_chunks::<4>().0 {
+            let _ = producer.push(f32::from_le_bytes(*bytes));
         }
     }))
     .map_err(|e| format!("Could not listen to {device_name}: {e}"))?;

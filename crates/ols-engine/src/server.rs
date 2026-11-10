@@ -274,10 +274,10 @@ async fn client(socket: WebSocket, shared: Arc<Shared>) {
                 Some(Ok(_)) => None,
             },
         };
-        if let Some(message) = outgoing {
-            if tx.send(message).await.is_err() {
-                break;
-            }
+        if let Some(message) = outgoing
+            && tx.send(message).await.is_err()
+        {
+            break;
         }
     }
 }

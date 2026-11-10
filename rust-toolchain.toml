@@ -1,0 +1,5 @@
+# One Rust version for everyone and for CI, so a new compiler release cannot
+# break the build by adding lints. Raise it deliberately.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

@@ -253,24 +253,24 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             enabled,
             targets,
         } => {
-            if let Some(effect) = effect {
-                if effects::find(effect).is_none() {
-                    return Err(format!("unknown effect {effect:?}"));
-                }
+            if let Some(effect) = effect
+                && effects::find(effect).is_none()
+            {
+                return Err(format!("unknown effect {effect:?}"));
             }
             let opacity = opacity.map(|o| finite(o, "Opacity")).transpose()?;
-            if let Some(targets) = targets {
-                if let Some(missing) = targets.iter().find(|t| !show.fixtures.iter().any(|f| f.id == **t)) {
-                    return Err(format!("fixture {missing} no longer exists"));
-                }
+            if let Some(targets) = targets
+                && let Some(missing) = targets.iter().find(|t| !show.fixtures.iter().any(|f| f.id == **t))
+            {
+                return Err(format!("fixture {missing} no longer exists"));
             }
             let layer = show.layer_mut(*id).ok_or("that layer no longer exists")?;
-            if let Some(effect) = effect {
-                if *effect != layer.effect {
-                    // Settings belong to the old effect.
-                    layer.effect = effect.clone();
-                    layer.params.clear();
-                }
+            if let Some(effect) = effect
+                && *effect != layer.effect
+            {
+                // Settings belong to the old effect.
+                layer.effect = effect.clone();
+                layer.params.clear();
             }
             if let Some(o) = opacity {
                 layer.opacity = o.clamp(0.0, 1.0);

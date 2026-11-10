@@ -87,7 +87,7 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
         renderer.render(&show, time, dt, &audio);
         outputs.send(&show, &renderer);
 
-        if frame_index % PREVIEW_EVERY == 0 && shared.preview.receiver_count() > 0 {
+        if frame_index.is_multiple_of(PREVIEW_EVERY) && shared.preview.receiver_count() > 0 {
             renderer.preview_bytes(&mut preview_bytes);
             let mut msg = message(MSG_PREVIEW, layout_serial, preview_bytes.len());
             msg.extend_from_slice(&preview_bytes);

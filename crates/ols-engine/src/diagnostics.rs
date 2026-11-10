@@ -145,15 +145,13 @@ pub fn ddp_test(address: &str, fps: u32, seconds: u64) -> bool {
             let mut last_sim = None;
             while !stop.load(Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_secs(2));
-                if let Ok(now) = wled::fetch_info(&host, http_port, Duration::from_secs(2)) {
-                    if let Some(f) = now.fps {
-                        device_fps.push(f);
-                    }
+                if let Ok(now) = wled::fetch_info(&host, http_port, Duration::from_secs(2))
+                    && let Some(f) = now.fps
+                {
+                    device_fps.push(f);
                 }
-                if is_sim {
-                    if let Ok(body) = wled::get(&host, http_port, "/sim/stats", Duration::from_secs(2)) {
-                        last_sim = Some(body);
-                    }
+                if is_sim && let Ok(body) = wled::get(&host, http_port, "/sim/stats", Duration::from_secs(2)) {
+                    last_sim = Some(body);
                 }
             }
             if is_sim {
@@ -191,7 +189,7 @@ pub fn ddp_test(address: &str, fps: u32, seconds: u64) -> bool {
         deadline += period;
         let t = started.elapsed().as_secs_f32();
         let dot = (t * 0.5).fract() * pixels as f32;
-        for (i, px) in frame.chunks_exact_mut(3).enumerate() {
+        for (i, px) in frame.as_chunks_mut::<3>().0.iter_mut().enumerate() {
             let colour = if (i as f32 - dot).abs() < 1.5 {
                 Rgb::WHITE
             } else {

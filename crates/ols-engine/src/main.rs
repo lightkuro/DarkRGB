@@ -173,10 +173,10 @@ async fn serve(cli: Cli, shared: Arc<Shared>) -> anyhow::Result<()> {
         println!("There is no password yet: anyone on the network can control the lights.");
     }
     println!("Press Ctrl+C to stop.");
-    if !cli.no_open {
-        if let Err(e) = open::that(&url) {
-            log::info!("could not open a browser ({e}); open {url} yourself");
-        }
+    if !cli.no_open
+        && let Err(e) = open::that(&url)
+    {
+        log::info!("could not open a browser ({e}); open {url} yourself");
     }
 
     let access = server::Access {

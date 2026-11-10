@@ -28,11 +28,11 @@ fn main() {
             last_status = Some(status);
         }
         let f = capture.features();
-        if let Some(status) = &last_status {
-            if status.sample_rate > 0 {
-                let expected = started.elapsed().as_secs_f64() * status.sample_rate as f64;
-                print!("got {:3.0}% ", capture.samples_received() as f64 / expected * 100.0);
-            }
+        if let Some(status) = &last_status
+            && status.sample_rate > 0
+        {
+            let expected = started.elapsed().as_secs_f64() * status.sample_rate as f64;
+            print!("got {:3.0}% ", capture.samples_received() as f64 / expected * 100.0);
         }
         let bar = "#".repeat((f.level * 30.0) as usize);
         println!(
