@@ -165,8 +165,9 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
                 .iter_mut()
                 .find(|d| d.id == *id)
                 .ok_or("that device no longer exists")?;
+            let mut renamed = None;
             if let Some(n) = new_name {
-                device.name = n;
+                renamed = Some((std::mem::replace(&mut device.name, n.clone()), n));
             }
             if let Some(e) = enabled {
                 device.enabled = *e;
@@ -176,6 +177,13 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(b) = brightness {
                 device.brightness = b.clamp(0.0, 1.0);
+            }
+            // A fixture that still carries its device's old name follows
+            // the rename, so the lists that name fixtures stay in step.
+            if let Some((old, new)) = renamed {
+                for fixture in show.fixtures.iter_mut().filter(|f| f.device == *id && f.name == old) {
+                    fixture.name = new.clone();
+                }
             }
             Ok(())
         }
@@ -591,6 +599,26 @@ mod tests {
         assert_eq!(f.height, 0.0, "a strip stays flat");
         assert_eq!(f.rotation, 270.0);
         assert!(matches!(f.shape, Shape::Strip { reverse: true, .. }));
+    }
+
+    #[test]
+    fn renaming_a_device_renames_the_fixture_named_after_it() {
+        let mut show = show_with_device();
+        let id = show.devices[0].id;
+        let rename = |name: &str| Command::UpdateDevice {
+            id,
+            name: Some(name.into()),
+            enabled: None,
+            gamma: None,
+            brightness: None,
+        };
+        apply(&mut show, &rename("Desk")).unwrap();
+        assert_eq!(show.fixtures[0].name, "Desk");
+        // A fixture the user named separately keeps its own name.
+        show.fixtures[0].name = "Left half".into();
+        apply(&mut show, &rename("Desk 2")).unwrap();
+        assert_eq!(show.devices[0].name, "Desk 2");
+        assert_eq!(show.fixtures[0].name, "Left half");
     }
 
     #[test]

@@ -38,7 +38,7 @@ Left before 0.1 is done:
   synthetic test song.
 - Desktop window (Tauri) and installers. Today the UI opens in the browser.
 - Warn when a WLED setting fights the stream (its own brightness or gamma on realtime data).
-- Rename devices and fixtures in the UI; split one device into several fixtures.
+- Rename fixtures in the UI (devices can be renamed); split one device into several fixtures.
 - Undo.
 
 Done when a new user can install the app, see their WLED devices, and have them reacting to music in under two

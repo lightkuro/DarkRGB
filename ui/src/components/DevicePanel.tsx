@@ -46,6 +46,34 @@ function deviceSetter(id: number, field: "brightness" | "gamma") {
   return send;
 }
 
+/** A name that is saved when the field loses focus or Enter is pressed. */
+function NameField({ device }: { device: Device }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    const next = draft?.trim();
+    if (next && next !== device.name) engine.send({ type: "update_device", id: device.id, name: next });
+    setDraft(null);
+  };
+  return (
+    <label className="field">
+      <span className="field-head">
+        <span>Name</span>
+      </span>
+      <input
+        type="text"
+        maxLength={80}
+        value={draft ?? device.name}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          if (e.key === "Escape") setDraft(null);
+        }}
+      />
+    </label>
+  );
+}
+
 function DeviceRow({ device, fixtures, stats }: { device: Device; fixtures: Fixture[]; stats?: DeviceStats }) {
   const [open, setOpen] = useState(false);
   const status = statusOf(device, stats);
@@ -82,6 +110,7 @@ function DeviceRow({ device, fixtures, stats }: { device: Device; fixtures: Fixt
       {open && (
         <div className="device-settings">
           <p className={`device-status ${status.tone}`}>{status.text}</p>
+          <NameField device={device} />
           <Slider
             label="Brightness limit"
             min={0}
