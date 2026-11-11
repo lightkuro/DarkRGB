@@ -8,7 +8,7 @@
 use crate::audio::Band;
 use crate::effects;
 use crate::params::{ParamValue, Params};
-use crate::show::{Blend, Kind, Layer, Only, Show, Sound};
+use crate::show::{Blend, Kind, LINK_STRENGTH, Layer, Link, Only, Show, Sound, Source};
 
 pub struct LookLayer {
     pub effect: &'static str,
@@ -20,6 +20,9 @@ pub struct LookLayer {
     pub only: Only,
     /// On each light by itself, not once across all of them.
     pub each: bool,
+    /// Sliders that follow the music: the setting, what it follows, and
+    /// by how much of its range.
+    pub links: &'static [(&'static str, Source, f32)],
 }
 
 /// A parameter value that can be written as a constant.
@@ -46,6 +49,7 @@ const fn layer(effect: &'static str, params: &'static [(&'static str, Value)]) -
         opacity: 1.0,
         only: Only::Any,
         each: false,
+        links: &[],
     }
 }
 
@@ -76,6 +80,8 @@ pub const LOOKS: &[Look] = &[
             },
             LookLayer {
                 band: Band::Treble,
+                // More sparks in the big parts of a song.
+                links: &[("density", Source::Energy, 0.4)],
                 ..layer("sparkle", &[("colour", T("#ffffff")), ("density", N(0.3))])
             },
         ],
@@ -87,6 +93,8 @@ pub const LOOKS: &[Look] = &[
             LookLayer {
                 blend: Blend::Normal,
                 opacity: 0.18,
+                // The glow underneath swells with the bass.
+                links: &[(LINK_STRENGTH, Source::Bass, 0.25)],
                 ..layer("plasma", &[("palette", T("ocean")), ("speed", N(0.2))])
             },
             LookLayer {
@@ -177,6 +185,8 @@ pub const LOOKS: &[Look] = &[
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
+                // Drifts a little faster as the music gets louder.
+                links: &[("speed", Source::Level, 0.1)],
                 ..layer("plasma", &[("palette", T("sunset")), ("speed", N(0.2))])
             },
             LookLayer {
@@ -191,6 +201,9 @@ pub const LOOKS: &[Look] = &[
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
+                opacity: 0.7,
+                // Swells and settles by itself, music or not.
+                links: &[(LINK_STRENGTH, Source::Wave { beats: 32.0 }, 0.3)],
                 ..layer("plasma", &[("palette", T("aurora")), ("speed", N(0.15))])
             },
             LookLayer {
@@ -421,6 +434,15 @@ impl Show {
                 // Kept as a rule, not as a list of lights, so the look
                 // lands where it should on lights added later too.
                 only: part.only,
+                links: part
+                    .links
+                    .iter()
+                    .map(|(param, source, amount)| Link {
+                        param: (*param).to_string(),
+                        source: *source,
+                        amount: *amount,
+                    })
+                    .collect(),
             });
         }
         // The bottom layer of what is left must cover what is under it.
@@ -475,6 +497,15 @@ mod tests {
                     assert!(ok, "{}: {} = {value:?} is not valid for {}", look.name, id, part.effect);
                 }
                 assert!((0.0..=1.0).contains(&part.opacity));
+                for (param, _, amount) in part.links {
+                    assert!(
+                        crate::show::linkable(part.effect, param),
+                        "{}: {} has no slider {param}",
+                        look.name,
+                        part.effect
+                    );
+                    assert!((-1.0..=1.0).contains(amount));
+                }
             }
         }
         let mut names: Vec<_> = LOOKS.iter().map(|l| l.name).collect();

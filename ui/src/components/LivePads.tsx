@@ -43,6 +43,27 @@ import { Slider, Switch, useDismiss } from "./ui";
 
 const setSpeed = perFrame((speed: number) => engine.quiet({ type: "set_live", speed }));
 const setSensitivity = perFrame((sensitivity: number) => engine.quiet({ type: "set_audio", sensitivity }));
+const setFader = [1, 2, 3, 4].map((n) => perFrame((value: number) => engine.quiet({ type: "set_fader", n, value })));
+
+/**
+ * The faders that something follows, with what each one moves. A fader
+ * nothing follows would do nothing, so it is not shown.
+ */
+function fadersInUse(show: Show, hello: Hello): { n: number; moves: string[] }[] {
+  const moves = new Map<number, string[]>();
+  for (const layer of [...show.layers, ...show.scenes.flatMap((s) => s.layers)]) {
+    const effect = hello.effects.find((e) => e.id === layer.effect);
+    for (const link of layer.links ?? []) {
+      if (link.source.type !== "fader") continue;
+      const what = link.param === "opacity" ? "strength" : (effect?.params.find((p) => p.id === link.param)?.label ?? link.param);
+      const line = `${layer.name ?? effect?.name ?? layer.effect}: ${what.toLowerCase()}`;
+      const list = moves.get(link.source.n) ?? [];
+      if (!list.includes(line)) list.push(line);
+      moves.set(link.source.n, list);
+    }
+  }
+  return [...moves.entries()].sort((a, b) => a[0] - b[0]).map(([n, list]) => ({ n, moves: list }));
+}
 
 /** A layer by id, in what is playing or in any scene. */
 function findLayer(show: Show, id: number): Layer | undefined {
@@ -404,6 +425,18 @@ export function LivePads() {
         )}
         <span className="spacer" />
         <div className="live-faders">
+          {fadersInUse(show, hello).map(({ n, moves }) => (
+            <div key={n} className="live-fader" title={`Moves ${moves.join("; ")}`}>
+              <Slider
+                label={`Fader ${n}`}
+                min={0}
+                max={1}
+                value={show.live.faders[n - 1] ?? 0}
+                format={(v) => `${Math.round(v * 100)}%`}
+                onChange={setFader[n - 1]!}
+              />
+            </div>
+          ))}
           <Slider
             label="Speed"
             min={-2}

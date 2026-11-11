@@ -51,6 +51,7 @@ import {
   type Show,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
+import { LinkedSlider, STRENGTH } from "./Links";
 import { ConfirmButton, IconButton, NameField, Slider, Switch, useDismiss } from "./ui";
 
 const BLENDS: { id: Blend; name: string; hint: string }[] = [
@@ -172,14 +173,17 @@ function PalettePicker({ value, onChange, label }: { value: string; onChange: (i
   );
 }
 
-function ParamControl({ layer, spec }: { layer: Layer; spec: ParamSpec }) {
+function ParamControl({ layer, spec, full }: { layer: Layer; spec: ParamSpec; full: boolean }) {
   const value: ParamValue = layer.params[spec.id] ?? spec.default;
   const set = (next: ParamValue) => engine.send({ type: "set_param", layer: layer.id, param: spec.id, value: next });
 
   switch (spec.kind) {
     case "float":
       return (
-        <Slider
+        <LinkedSlider
+          layer={layer}
+          param={spec.id}
+          offer={full}
           label={spec.label}
           min={spec.min ?? 0}
           max={spec.max ?? 1}
@@ -641,12 +645,15 @@ function LayerBody({
       )}
 
       {basic.map((spec) => (
-        <ParamControl key={spec.id} layer={layer} spec={spec} />
+        <ParamControl key={spec.id} layer={layer} spec={spec} full={advanced} />
       ))}
       {usesSound && !layer.sound.manual && <SoundControls layer={layer} hello={hello} advanced={advanced} />}
       {layer.sound.manual && !advanced && <ManualSwitch layer={layer} />}
       <Targets layer={layer} fixtures={fixtures} groups={show.light_groups} full={advanced} />
-      <Slider
+      <LinkedSlider
+        layer={layer}
+        param={STRENGTH}
+        offer={advanced}
         label="Strength"
         min={0}
         max={1}
@@ -684,7 +691,7 @@ function LayerBody({
             <SlidersHorizontal size={12} aria-hidden /> Advanced
           </h3>
           {extra.map((spec) => (
-            <ParamControl key={spec.id} layer={layer} spec={spec} />
+            <ParamControl key={spec.id} layer={layer} spec={spec} full={advanced} />
           ))}
           {effect?.audio && <ManualSwitch layer={layer} />}
           <Slider
@@ -775,6 +782,8 @@ function summary(layer: Layer, show: Show, hello: Hello): string[] {
     parts.push(`${layer.targets.length} places`);
   }
   if (layer.opacity < 0.995) parts.push(`${Math.round(layer.opacity * 100)}%`);
+  const links = layer.links?.length ?? 0;
+  if (links > 0) parts.push(links === 1 ? "1 slider follows" : `${links} sliders follow`);
   return parts;
 }
 

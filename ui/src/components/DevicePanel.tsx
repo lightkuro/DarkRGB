@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
+  addingLights,
   engine,
   perFrame,
   select,
@@ -327,6 +328,7 @@ export function AddByAddress({ autoFocus }: { autoFocus?: boolean }) {
     if (!value || busy || needsLastNumber) return;
     setBusy(true);
     setError(null);
+    addingLights();
     const result = await engine.request({ type: "add_device", address: value });
     setBusy(false);
     if (result.ok) {
@@ -448,6 +450,7 @@ export function FoundDevices() {
   if (found.length === 0) return null;
   const add = async (address: string) => {
     setAdding(address);
+    addingLights();
     const result = await engine.request({ type: "add_device", address });
     setAdding(null);
     if (!result.ok) engine.toast("error", result.error ?? "Could not add that device.");
@@ -496,6 +499,7 @@ function AddVirtual() {
         ? ({ type: "strip", count: Number(count) } as const)
         : ({ type: "matrix", cols: Number(cols), rows: Number(rows) } as const);
     const fallback = kind === "strip" ? "Virtual strip" : "Virtual matrix";
+    addingLights();
     const result = await engine.request({ type: "add_virtual", name: name.trim() || fallback, shape });
     if (result.ok) {
       setOpen(false);
@@ -566,7 +570,14 @@ export function DemoSwitch() {
         Demo lights
         <span className="hint"> Two strips and a matrix in the preview, to try effects without hardware.</span>
       </span>
-      <Switch checked={on} label="Demo lights" onChange={(enabled) => engine.send({ type: "set_demo", enabled })} />
+      <Switch
+        checked={on}
+        label="Demo lights"
+        onChange={(enabled) => {
+          addingLights();
+          engine.send({ type: "set_demo", enabled });
+        }}
+      />
     </div>
   );
 }

@@ -25,6 +25,7 @@ import {
   select,
   selection,
   settingsPage,
+  takeFirstKind,
   useFirstKind,
   useFull,
   useSelection,
@@ -152,8 +153,9 @@ export function Stage() {
   const hadLights = useRef(true);
   useEffect(() => {
     const has = fixtures.length > 0;
-    if (has && !hadLights.current && fresh && firstKind.get() !== "custom") {
-      engine.send({ type: "begin", kind: firstKind.get(), demo: false });
+    if (has && !hadLights.current && fresh) {
+      const mine = takeFirstKind();
+      if (mine && mine !== "custom") engine.send({ type: "begin", kind: mine, demo: false });
     }
     hadLights.current = has;
   }, [fixtures.length, fresh]);

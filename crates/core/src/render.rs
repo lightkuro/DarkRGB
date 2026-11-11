@@ -7,8 +7,9 @@ use crate::color::{OutputCurve, Rgb};
 use crate::effect::{Effect, FlashUse, FrameCtx};
 use crate::effects;
 use crate::layout::{Fixture, Shape};
-use crate::params::ParamReader;
+use crate::params::{ParamKind, ParamReader, ParamSpec, ParamValue, Params};
 use crate::show::{Blend, Layer, Show};
+use crate::show::{LINK_STRENGTH, Source};
 
 /// A hit fired by hand for one layer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -129,8 +130,9 @@ impl Renderer {
             // A folder can switch its layers off and scale their strength.
             let folder = layer.group.and_then(|g| show.layer_groups.iter().find(|x| x.id == g));
             let folder_strength = folder.map_or(1.0, |f| if f.enabled { f.opacity } else { 0.0 });
-            let opacity = (layer.opacity * folder_strength).clamp(0.0, 1.0);
-            if !layer.enabled || opacity <= 0.0 {
+            // A link can raise a strength of nothing, so only a layer with
+            // no links is skipped for being set to nothing.
+            if !layer.enabled || folder_strength <= 0.0 || (layer.opacity <= 0.0 && layer.links.is_empty()) {
                 continue;
             }
             let (Some(state), Some(def)) = (self.layers.get_mut(&layer.id), effects::find(&layer.effect)) else {
@@ -165,7 +167,11 @@ impl Renderer {
             } else {
                 0.0
             };
-            let opacity = opacity * (1.0 - 0.7 * lull);
+            // Settings that follow the music or a fader, moved for this frame.
+            let (linked, own_strength) = linked_settings(layer, &def.info.params, |source| {
+                source.value(&heard, audio, &show.live.faders, time)
+            });
+            let opacity = (own_strength * folder_strength).clamp(0.0, 1.0) * (1.0 - 0.7 * lull);
             let dt = dt * (1.0 - 0.5 * lull);
             let Some(first) = state.segments.first() else {
                 continue;
@@ -179,9 +185,10 @@ impl Renderer {
                 flat: first.flat,
                 flash_cap: show.flash.cap(),
             };
-            state
-                .effect
-                .configure(&ParamReader::new(&def.info.params, &layer.params));
+            state.effect.configure(&ParamReader::new(
+                &def.info.params,
+                linked.as_ref().unwrap_or(&layer.params),
+            ));
             // The effect moves on once a frame, whatever it is drawn on.
             state.effect.update(&ctx);
             // "Brightness follows sound": dim the layer by how quiet its
@@ -298,6 +305,33 @@ impl Renderer {
 
 /// The frames of reference a layer draws in: one around everything it
 /// plays on, or one per light when it draws on each by itself.
+/// A layer's settings with its links applied, and its strength likewise.
+/// The settings are `None` when no link touches them, which is the usual
+/// case and costs nothing.
+fn linked_settings(layer: &Layer, specs: &[ParamSpec], value_of: impl Fn(Source) -> f32) -> (Option<Params>, f32) {
+    let mut strength = layer.opacity;
+    let mut params: Option<Params> = None;
+    for link in &layer.links {
+        let push = value_of(link.source) * link.amount.clamp(-1.0, 1.0);
+        if link.param == LINK_STRENGTH {
+            strength = (strength + push).clamp(0.0, 1.0);
+            continue;
+        }
+        let Some(spec) = specs.iter().find(|s| s.id == link.param) else {
+            continue;
+        };
+        let ParamKind::Float { min, max, .. } = spec.kind else {
+            continue;
+        };
+        let set = ParamReader::new(specs, &layer.params).float(spec.id);
+        let moved = (set + push * (max - min)).clamp(min, max);
+        params
+            .get_or_insert_with(|| layer.params.clone())
+            .insert(link.param.clone(), ParamValue::Number(moved));
+    }
+    (params, strength)
+}
+
 fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Segment> {
     if !layer.each {
         let (targets, aspect, flat) = build_targets(show, layer, positions);
@@ -974,6 +1008,82 @@ mod tests {
         assert!(!lit(&show), "left out while the limit is on");
         show.flash = crate::show::FlashSettings::off();
         assert!(lit(&show), "and there with it off");
+    }
+
+    #[test]
+    fn a_strength_linked_to_the_music_moves_with_it() {
+        use crate::show::Link;
+        // A white layer at a fifth of its strength, which loudness raises.
+        let mut show = solid_show("#ffffff");
+        show.add_device(device(4), None);
+        show.layers[0].opacity = 0.2;
+        show.layers[0].links.push(Link {
+            param: LINK_STRENGTH.into(),
+            source: Source::Level,
+            amount: 0.8,
+        });
+        let at = |show: &Show, level: f32| {
+            let mut r = Renderer::new();
+            r.sync(show);
+            let audio = AudioFeatures {
+                level,
+                active: true,
+                ..AudioFeatures::default()
+            };
+            r.render(show, 0.0, 1.0 / 60.0, &audio)[0].r
+        };
+        assert!((at(&show, 0.0) - 0.2).abs() < 0.01, "silence leaves it where it is set");
+        assert!((at(&show, 0.5) - 0.6).abs() < 0.01);
+        assert!((at(&show, 1.0) - 1.0).abs() < 0.01);
+        // A negative amount goes the other way: dimmer as it gets louder.
+        show.layers[0].opacity = 1.0;
+        show.layers[0].links[0].amount = -1.0;
+        assert!(at(&show, 0.0) > 0.99 && at(&show, 1.0) < 0.01);
+        // A strength of nothing is still drawn when a link can raise it.
+        show.layers[0].opacity = 0.0;
+        show.layers[0].links[0].amount = 1.0;
+        assert!(at(&show, 0.0) < 0.01 && at(&show, 1.0) > 0.99);
+        // The show itself is not changed by any of this.
+        assert_eq!(show.layers[0].opacity, 0.0);
+    }
+
+    #[test]
+    fn a_linked_slider_stays_in_its_range_and_can_follow_a_fader() {
+        use crate::show::Link;
+        // Beat pulse's resting brightness runs from 0 to 0.5. Here it is
+        // set to nothing and follows the second fader.
+        let mut show = Show::default();
+        show.add_device(device(4), None);
+        show.layers[0].effect = "beat_pulse".into();
+        show.layers[0].params.insert("floor".into(), ParamValue::Number(0.0));
+        show.layers[0].links.push(Link {
+            param: "floor".into(),
+            source: Source::Fader { n: 2 },
+            amount: 1.0,
+        });
+        let brightest = |show: &Show| {
+            let mut r = Renderer::new();
+            r.sync(show);
+            r.render(show, 0.0, 1.0 / 60.0, &AudioFeatures::default())
+                .iter()
+                .fold(0.0f32, |m, px| m.max(px.r).max(px.g).max(px.b))
+        };
+        assert!(brightest(&show) < 0.01, "fader down: dark in silence");
+        show.live.faders[1] = 1.0;
+        let up = brightest(&show);
+        assert!(up > 0.3 && up <= 0.51, "fader up: the top of the slider's range, {up}");
+        show.live.faders[1] = 0.5;
+        let half = brightest(&show);
+        assert!(half > 0.15 && half < up, "{half}");
+        // Another fader does nothing to it.
+        show.live.faders = [1.0, 0.0, 1.0, 1.0];
+        assert!(brightest(&show) < 0.01);
+        // The stored setting is as it was.
+        assert_eq!(show.layers[0].params["floor"], ParamValue::Number(0.0));
+        // A link to a setting the effect does not have is ignored.
+        show.layers[0].links[0].param = "no_such_setting".into();
+        show.live.faders[1] = 1.0;
+        assert!(brightest(&show) < 0.01);
     }
 
     #[test]

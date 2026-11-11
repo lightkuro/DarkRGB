@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::audio::Band;
+use crate::audio::{AudioFeatures, Band};
 use crate::effects;
 use crate::layout::{Device, Fixture, MAX_PIXELS, Shape};
 use crate::params::Params;
@@ -121,6 +121,91 @@ pub enum Kind {
     Custom,
 }
 
+/// Something a setting can follow, so that it moves by itself. Every
+/// source runs from 0 to 1.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Source {
+    /// How loud the part of the sound is that the effect hears.
+    Level,
+    Bass,
+    Mid,
+    Treble,
+    /// Jumps on every beat and falls away.
+    Beat,
+    /// Jumps on every hit in the part of the sound the effect hears.
+    Hit,
+    /// How big this part of the song is: low in a breakdown, full in a drop.
+    Energy,
+    /// A slow swing out and back, once every so many beats.
+    Wave {
+        beats: f32,
+    },
+    /// One of the faders in the Live view, numbered from 1.
+    Fader {
+        n: u8,
+    },
+}
+
+/// How many faders the Live view has for links to follow.
+pub const FADERS: usize = 4;
+/// Most links one effect can have.
+pub const MAX_LINKS: usize = 8;
+/// The name a link uses for the layer's own strength, which is not one of
+/// the effect's settings.
+pub const LINK_STRENGTH: &str = "opacity";
+
+impl Source {
+    /// Where the source is now, 0..1. `heard` is the sound as the layer
+    /// hears it, `whole` the sound as it is.
+    pub fn value(self, heard: &AudioFeatures, whole: &AudioFeatures, faders: &[f32; FADERS], time: f64) -> f32 {
+        let v = match self {
+            Source::Level => heard.level,
+            Source::Bass => whole.bass,
+            Source::Mid => whole.mid,
+            Source::Treble => whole.treble,
+            Source::Beat => heard.beat,
+            Source::Hit => heard.onset,
+            // With nothing playing there is no song to be big.
+            Source::Energy => {
+                if whole.active {
+                    whole.intensity
+                } else {
+                    0.0
+                }
+            }
+            Source::Wave { beats } => {
+                let period = if beats.is_finite() {
+                    beats.clamp(0.25, 64.0)
+                } else {
+                    8.0
+                } as f64;
+                // In time with the music when there is a tempo; otherwise
+                // as if it were playing at 120.
+                let turns = if whole.bpm > 0.0 {
+                    (whole.beat_count as f64 + whole.beat_phase.clamp(0.0, 1.0) as f64) / period
+                } else {
+                    time * 2.0 / period
+                };
+                (0.5 - 0.5 * (turns * std::f64::consts::TAU).cos()) as f32
+            }
+            Source::Fader { n } => faders.get((n as usize).wrapping_sub(1)).copied().unwrap_or(0.0),
+        };
+        if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
+    }
+}
+
+/// Ties one setting of an effect to a source: the setting moves from
+/// where its slider is, by `amount` of its range when the source is full.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Link {
+    /// The setting's id, or [`LINK_STRENGTH`].
+    pub param: String,
+    pub source: Source,
+    /// -1..1. Negative moves the setting down as the source rises.
+    pub amount: f32,
+}
+
 /// One effect running on some or all fixtures.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
@@ -155,6 +240,9 @@ pub struct Layer {
     /// Keep to one kind of light, among whatever `targets` allows.
     #[serde(default)]
     pub only: Only,
+    /// Settings that move by themselves, following the music or a fader.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
 }
 
 /// A saved set of layers that can be recalled in one click.
@@ -314,6 +402,9 @@ pub struct LiveSettings {
     pub speed: f32,
     #[serde(default)]
     pub auto: Autopilot,
+    /// Where the faders of the Live view stand, 0..1. Links follow them.
+    #[serde(default)]
+    pub faders: [f32; FADERS],
 }
 
 impl Default for LiveSettings {
@@ -323,6 +414,7 @@ impl Default for LiveSettings {
             fade: 0.0,
             speed: 1.0,
             auto: Autopilot::default(),
+            faders: [0.0; FADERS],
         }
     }
 }
@@ -524,6 +616,52 @@ fn first_id() -> u32 {
     1
 }
 
+/// Whether an effect has a slider called `param` that a link can move.
+/// The layer's strength always can be.
+pub fn linkable(effect: &str, param: &str) -> bool {
+    param == LINK_STRENGTH
+        || effects::find(effect).is_some_and(|def| {
+            def.info
+                .params
+                .iter()
+                .any(|p| p.id == param && matches!(p.kind, crate::params::ParamKind::Float { .. }))
+        })
+}
+
+/// Drops links to settings the layer's effect does not have, keeps one per
+/// setting, and brings their numbers into range.
+fn mend_links(layer: &mut Layer) {
+    if layer.links.is_empty() {
+        return;
+    }
+    let effect = layer.effect.clone();
+    let mut seen: Vec<String> = Vec::new();
+    layer.links.retain(|link| {
+        let keep = linkable(&effect, &link.param) && !seen.contains(&link.param);
+        seen.push(link.param.clone());
+        keep
+    });
+    layer.links.truncate(MAX_LINKS);
+    for link in &mut layer.links {
+        link.amount = if link.amount.is_finite() {
+            link.amount.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        match &mut link.source {
+            Source::Wave { beats } => {
+                *beats = if beats.is_finite() {
+                    beats.clamp(0.25, 64.0)
+                } else {
+                    8.0
+                }
+            }
+            Source::Fader { n } => *n = (*n).clamp(1, FADERS as u8),
+            _ => {}
+        }
+    }
+}
+
 /// See [`Show::tidy_layers`].
 fn tidy(layers: &mut Vec<Layer>, groups: &[LayerGroup]) {
     for layer in layers.iter_mut() {
@@ -652,6 +790,7 @@ impl Show {
                 group,
                 each: false,
                 only: Only::Any,
+                links: Vec::new(),
             },
         );
         id
@@ -1083,6 +1222,16 @@ impl Show {
             self.output.frame_rate = OutputSettings::default().frame_rate;
         }
         self.live.auto.every_bars = self.live.auto.every_bars.clamp(1, 64);
+        for fader in &mut self.live.faders {
+            *fader = if fader.is_finite() { fader.clamp(0.0, 1.0) } else { 0.0 };
+        }
+        for layer in self
+            .layers
+            .iter_mut()
+            .chain(self.scenes.iter_mut().flat_map(|s| s.layers.iter_mut()))
+        {
+            mend_links(layer);
+        }
         self.prune_bindings();
     }
 
@@ -1606,5 +1755,91 @@ mod tests {
         assert!(show.recall_scene(scene));
         assert_eq!(show.layers.len(), 1);
         assert!(!show.recall_scene(9999));
+    }
+
+    #[test]
+    fn sources_run_from_nothing_to_full() {
+        let faders = [0.0, 0.25, 0.0, 1.0];
+        let quiet = AudioFeatures::default();
+        let loud = AudioFeatures {
+            level: 0.8,
+            bass: 0.9,
+            mid: 0.4,
+            treble: 0.2,
+            beat: 1.0,
+            onset: 0.7,
+            intensity: 0.6,
+            active: true,
+            ..AudioFeatures::default()
+        };
+        let heard = AudioFeatures { level: 0.3, ..loud };
+        let value = |source: Source| source.value(&heard, &loud, &faders, 0.0);
+        assert_eq!(value(Source::Level), 0.3, "loudness is what the layer hears");
+        assert_eq!(value(Source::Bass), 0.9, "bass is the whole sound's");
+        assert_eq!((value(Source::Mid), value(Source::Treble)), (0.4, 0.2));
+        assert_eq!((value(Source::Beat), value(Source::Hit)), (1.0, 0.7));
+        assert_eq!(value(Source::Energy), 0.6);
+        assert_eq!(
+            Source::Energy.value(&quiet, &quiet, &faders, 0.0),
+            0.0,
+            "no song, no energy"
+        );
+        assert_eq!(
+            (value(Source::Fader { n: 2 }), value(Source::Fader { n: 4 })),
+            (0.25, 1.0)
+        );
+        assert_eq!(value(Source::Fader { n: 0 }), 0.0);
+        assert_eq!(value(Source::Fader { n: 9 }), 0.0);
+
+        // A wave goes out and back once every so many beats.
+        let at = |beat: f64| {
+            let audio = AudioFeatures {
+                bpm: 120.0,
+                beat_count: beat.floor() as u32,
+                beat_phase: beat.fract() as f32,
+                ..loud
+            };
+            Source::Wave { beats: 8.0 }.value(&audio, &audio, &faders, 0.0)
+        };
+        assert!(at(0.0) < 0.01 && at(8.0) < 0.01);
+        assert!((at(4.0) - 1.0).abs() < 0.01);
+        assert!((at(2.0) - 0.5).abs() < 0.01 && (at(6.0) - 0.5).abs() < 0.01);
+        // With no tempo it keeps time as if at 120: 8 beats in 4 seconds.
+        let free = |time: f64| Source::Wave { beats: 8.0 }.value(&quiet, &quiet, &faders, time);
+        assert!(free(0.0) < 0.01 && (free(2.0) - 1.0).abs() < 0.01 && free(4.0) < 0.01);
+        // Nonsense in, something sane out.
+        let odd = Source::Wave { beats: f32::NAN }.value(&quiet, &quiet, &faders, 1.0);
+        assert!((0.0..=1.0).contains(&odd));
+    }
+
+    #[test]
+    fn repair_mends_links_a_file_should_not_have() {
+        let mut show = Show::default();
+        let layer = &mut show.layers[0];
+        layer.effect = "beat_pulse".into();
+        let link = |param: &str, source, amount| Link {
+            param: param.into(),
+            source,
+            amount,
+        };
+        layer.links = vec![
+            link("floor", Source::Fader { n: 200 }, 7.0),
+            link("floor", Source::Bass, 0.5),
+            link("palette", Source::Bass, 0.5),
+            link("nothing", Source::Bass, 0.5),
+            link(LINK_STRENGTH, Source::Wave { beats: f32::NAN }, f32::NAN),
+        ];
+        show.live.faders = [f32::NAN, 3.0, -1.0, 0.5];
+        show.repair();
+        let links = &show.layers[0].links;
+        assert_eq!(links.len(), 2, "one per slider, and only sliders: {links:?}");
+        assert_eq!(links[0], link("floor", Source::Fader { n: 4 }, 1.0));
+        assert_eq!(links[1], link(LINK_STRENGTH, Source::Wave { beats: 8.0 }, 0.0));
+        assert_eq!(show.live.faders, [0.0, 1.0, 0.0, 0.5]);
+        assert!(linkable("beat_pulse", "decay") && !linkable("beat_pulse", "palette"));
+        assert!(linkable("anything", LINK_STRENGTH));
+        let again = show.clone();
+        show.repair();
+        assert_eq!(show, again);
     }
 }

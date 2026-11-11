@@ -5,8 +5,8 @@ use darkrgb_core::color;
 use darkrgb_core::effects;
 use darkrgb_core::layout::MAX_PIXELS;
 use darkrgb_core::params::{ParamKind, ParamValue};
-use darkrgb_core::show::{Blend, FRAME_RATES};
-use darkrgb_core::{Action, Band, FlashSettings, KeyMode, Kind, Launch, Only, Rgb, Shape, Show};
+use darkrgb_core::show::{Blend, FADERS, FRAME_RATES, LINK_STRENGTH, MAX_LINKS, linkable};
+use darkrgb_core::{Action, Band, FlashSettings, KeyMode, Kind, Launch, Link, Only, Rgb, Shape, Show, Source};
 use serde::Deserialize;
 
 const MAX_NAME: usize = 80;
@@ -281,6 +281,27 @@ pub enum Command {
     },
     ResetParams {
         layer: u32,
+    },
+    /// Makes one slider of an effect follow a source: the music, a slow
+    /// wave or a fader. `param` is the slider's id, or "opacity" for the
+    /// effect's strength. A slider follows one source; setting another
+    /// replaces it.
+    SetLink {
+        layer: u32,
+        param: String,
+        source: Source,
+        /// -1..1: how far it moves, as a share of the slider's range.
+        amount: f32,
+    },
+    /// Lets a slider go back to staying where it is put.
+    RemoveLink {
+        layer: u32,
+        param: String,
+    },
+    /// Moves one of the Live view's faders, numbered from 1.
+    SetFader {
+        n: u8,
+        value: f32,
     },
     SetMaster {
         brightness: Option<f32>,
@@ -822,9 +843,11 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             if let Some(effect) = effect
                 && *effect != layer.effect
             {
-                // Settings belong to the old effect.
+                // Settings belong to the old effect, and so do the links to
+                // them. A link to the strength carries over.
                 layer.effect = effect.clone();
                 layer.params.clear();
+                layer.links.retain(|l| l.param == LINK_STRENGTH);
             }
             if let Some(o) = opacity {
                 layer.opacity = o.clamp(0.0, 1.0);
@@ -1238,10 +1261,67 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
         }
 
         Command::ResetParams { layer } => {
-            show.layer_mut(*layer)
-                .ok_or("that layer no longer exists")?
-                .params
-                .clear();
+            let layer = show.layer_mut(*layer).ok_or("that layer no longer exists")?;
+            layer.params.clear();
+            layer.links.clear();
+            Ok(())
+        }
+
+        Command::SetLink {
+            layer,
+            param,
+            source,
+            amount,
+        } => {
+            let amount = finite(*amount, "The amount")?.clamp(-1.0, 1.0);
+            let source = match *source {
+                Source::Wave { beats } => Source::Wave {
+                    beats: finite(beats, "The length of the wave")?.clamp(0.25, 64.0),
+                },
+                Source::Fader { n } if !(1..=FADERS as u8).contains(&n) => {
+                    return Err(format!("there are {FADERS} faders"));
+                }
+                other => other,
+            };
+            let layer = show.layer_mut(*layer).ok_or("that layer no longer exists")?;
+            if !linkable(&layer.effect, param) {
+                return Err("that setting cannot follow anything".into());
+            }
+            match layer.links.iter_mut().find(|l| l.param == *param) {
+                Some(link) => {
+                    link.source = source;
+                    link.amount = amount;
+                }
+                None => {
+                    if layer.links.len() >= MAX_LINKS {
+                        return Err(format!(
+                            "an effect can have at most {MAX_LINKS} settings that follow something"
+                        ));
+                    }
+                    layer.links.push(Link {
+                        param: param.clone(),
+                        source,
+                        amount,
+                    });
+                }
+            }
+            Ok(())
+        }
+
+        Command::RemoveLink { layer, param } => {
+            let layer = show.layer_mut(*layer).ok_or("that layer no longer exists")?;
+            layer.links.retain(|l| l.param != *param);
+            Ok(())
+        }
+
+        Command::SetFader { n, value } => {
+            let value = finite(*value, "The fader")?.clamp(0.0, 1.0);
+            let fader = show
+                .live
+                .faders
+                .get_mut((*n as usize).wrapping_sub(1))
+                .ok_or_else(|| format!("there are {FADERS} faders"))?;
+            *fader = value;
             Ok(())
         }
 
@@ -2253,7 +2333,7 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 43 {
+            let command = match r.next() % 46 {
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {
@@ -2364,6 +2444,27 @@ mod tests {
                 },
                 33 => Command::SetOutput {
                     frame_rate: r.maybe(|r| [0, 30, 40, 60, 61, 120, u32::MAX][r.next() as usize % 7]),
+                },
+                43 => Command::SetLink {
+                    layer,
+                    param: ["opacity", "speed", "palette", "floor", "decay", "nope"][r.next() as usize % 6].into(),
+                    source: match r.next() % 6 {
+                        0 => Source::Level,
+                        1 => Source::Beat,
+                        2 => Source::Energy,
+                        3 => Source::Wave { beats: r.number() },
+                        4 => Source::Fader { n: r.next() as u8 },
+                        _ => Source::Bass,
+                    },
+                    amount: r.number(),
+                },
+                44 => Command::RemoveLink {
+                    layer,
+                    param: ["opacity", "speed", "floor"][r.next() as usize % 3].into(),
+                },
+                45 => Command::SetFader {
+                    n: r.next() as u8 % 6,
+                    value: r.number(),
                 },
                 42 => Command::SetFlash {
                     limit: r.maybe(Awkward::number),
@@ -2589,6 +2690,131 @@ mod tests {
         assert!(show.layer_groups[0].pinned);
         // Pinned effects are always on top.
         assert!(show.layers[MAX_LAYERS..].iter().all(|l| l.group == Some(folder)));
+    }
+
+    #[test]
+    fn a_slider_can_follow_a_source_and_be_let_go() {
+        let mut show = show_with_device();
+        let layer = show.layers[0].id;
+        let link = |show: &mut Show, param: &str, source, amount| {
+            apply(
+                show,
+                &Command::SetLink {
+                    layer,
+                    param: param.into(),
+                    source,
+                    amount,
+                },
+            )
+        };
+        // The default effect has a speed; anything has a strength.
+        link(&mut show, "speed", Source::Bass, 0.4).unwrap();
+        link(&mut show, "opacity", Source::Fader { n: 1 }, -5.0).unwrap();
+        assert_eq!(show.layers[0].links.len(), 2);
+        assert_eq!(show.layers[0].links[1].amount, -1.0, "amounts are kept in range");
+        // The same slider again replaces what it follows.
+        link(&mut show, "speed", Source::Wave { beats: 1000.0 }, 0.2).unwrap();
+        assert_eq!(show.layers[0].links.len(), 2);
+        assert_eq!(show.layers[0].links[0].source, Source::Wave { beats: 64.0 });
+        // Things that are not sliders, and faders that do not exist, are refused.
+        assert!(link(&mut show, "palette", Source::Bass, 0.5).is_err());
+        assert!(link(&mut show, "nope", Source::Bass, 0.5).is_err());
+        assert!(link(&mut show, "speed", Source::Fader { n: 0 }, 0.5).is_err());
+        assert!(link(&mut show, "speed", Source::Fader { n: 5 }, 0.5).is_err());
+        assert!(link(&mut show, "speed", Source::Bass, f32::NAN).is_err());
+        assert!(
+            apply(
+                &mut show,
+                &Command::SetLink {
+                    layer: 9999,
+                    param: "speed".into(),
+                    source: Source::Bass,
+                    amount: 0.5
+                }
+            )
+            .is_err()
+        );
+        // The wire format the UI sends.
+        let sent =
+            parse(r#"{"type":"set_link","layer":1,"param":"speed","source":{"type":"wave","beats":8},"amount":0.5}"#);
+        assert!(matches!(
+            sent,
+            Command::SetLink {
+                source: Source::Wave { .. },
+                ..
+            }
+        ));
+        let sent = parse(r#"{"type":"set_link","layer":1,"param":"speed","source":{"type":"fader","n":2},"amount":1}"#);
+        assert!(matches!(
+            sent,
+            Command::SetLink {
+                source: Source::Fader { n: 2 },
+                ..
+            }
+        ));
+
+        // Changing the effect drops links to the old effect's sliders, not the one to its strength.
+        apply(
+            &mut show,
+            &Command::UpdateLayer {
+                id: layer,
+                effect: Some("solid".into()),
+                opacity: None,
+                blend: None,
+                enabled: None,
+                targets: None,
+                each: None,
+                only: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(show.layers[0].links.len(), 1);
+        assert_eq!(show.layers[0].links[0].param, "opacity");
+        // Letting go, and resetting, clear them.
+        apply(
+            &mut show,
+            &Command::RemoveLink {
+                layer,
+                param: "opacity".into(),
+            },
+        )
+        .unwrap();
+        assert!(show.layers[0].links.is_empty());
+        link(&mut show, "opacity", Source::Level, 0.5).unwrap();
+        apply(&mut show, &Command::ResetParams { layer }).unwrap();
+        assert!(show.layers[0].links.is_empty());
+
+        // Faders: four of them, kept between nothing and full.
+        let fader = |show: &mut Show, n, value| apply(show, &Command::SetFader { n, value });
+        fader(&mut show, 1, 0.5).unwrap();
+        fader(&mut show, 4, 7.0).unwrap();
+        assert_eq!(show.live.faders, [0.5, 0.0, 0.0, 1.0]);
+        assert!(fader(&mut show, 0, 0.5).is_err());
+        assert!(fader(&mut show, 5, 0.5).is_err());
+        assert!(fader(&mut show, 2, f32::NAN).is_err());
+
+        // No more than eight on one effect.
+        let mut show = show_with_device();
+        let layer = show.layers[0].id;
+        show.layers[0].links = (0..MAX_LINKS)
+            .map(|i| Link {
+                param: format!("made_up_{i}"),
+                source: Source::Bass,
+                amount: 0.1,
+            })
+            .collect();
+        assert!(
+            apply(
+                &mut show,
+                &Command::SetLink {
+                    layer,
+                    param: "speed".into(),
+                    source: Source::Bass,
+                    amount: 0.5
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]

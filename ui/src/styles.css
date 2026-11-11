@@ -2502,6 +2502,75 @@ input.number {
   color: var(--danger);
 }
 
+/* A slider that follows the music or a fader. */
+.field-extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.link-button:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.link-button.linked {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+
+.linked-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Where the setting is at this moment, under the slider's own track. */
+.link-track {
+  position: relative;
+  height: 3px;
+  margin: 0 7px;
+  border-radius: 2px;
+  background: var(--line);
+}
+
+.link-mark {
+  position: absolute;
+  top: -2px;
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  border-radius: 50%;
+  background: var(--teal);
+}
+
+.link-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--bg);
+}
+
+.live-fader {
+  min-width: 150px;
+}
+
 /* ------------------------------------------------------------- scenes */
 
 .scenes {

@@ -47,6 +47,21 @@ export interface Palette {
 /** Who a show is for. */
 export type Kind = "room" | "display" | "club" | "custom";
 
+/** Something a setting can follow. Each runs from 0 to 1. */
+export type Source =
+  | { type: "level" | "bass" | "mid" | "treble" | "beat" | "hit" | "energy" }
+  | { type: "wave"; beats: number }
+  | { type: "fader"; n: number };
+
+/** One setting of an effect that moves by itself. */
+export interface Link {
+  /** The setting's id, or "opacity" for the effect's strength. */
+  param: string;
+  source: Source;
+  /** -1 to 1: how far it moves, as a share of the slider's range. */
+  amount: number;
+}
+
 /** A kind of light an effect can be kept to. */
 export type Only = "any" | "strips" | "matrices";
 
@@ -193,6 +208,8 @@ export interface Layer {
   each: boolean;
   /** Kept to strips or to matrices, among whatever it plays on. */
   only: Only;
+  /** Settings that follow something. Left out when there are none. */
+  links?: Link[];
 }
 
 export interface Scene {
@@ -230,6 +247,8 @@ export interface Show {
     speed: number;
     /** Autopilot: changes scene by itself, in time with the music. */
     auto: { enabled: boolean; every_bars: number; shuffle: boolean; on_drops: boolean };
+    /** Where the four faders of the Live view stand, 0 to 1. */
+    faders: number[];
   };
   output: {
     frame_rate: number;
@@ -426,6 +445,9 @@ export type Command =
     }
   | { type: "set_param"; layer: number; param: string; value: ParamValue }
   | { type: "reset_params"; layer: number }
+  | { type: "set_link"; layer: number; param: string; source: Source; amount: number }
+  | { type: "remove_link"; layer: number; param: string }
+  | { type: "set_fader"; n: number; value: number }
   | { type: "set_master"; brightness?: number; blackout?: boolean; limit?: number }
   | { type: "set_audio"; source?: string; sensitivity?: number; delay_ms?: number; dynamics?: number }
   | { type: "save_scene"; name: string }
@@ -723,6 +745,22 @@ export function select(ids: number[], add = false): void {
  */
 export const firstKind = new Store<Kind>("room");
 export const useFirstKind = () => useSyncExternalStore(firstKind.subscribe, firstKind.get);
+
+let lightsAskedAt = 0;
+/**
+ * Called by whatever adds lights on this device. Only the device that
+ * added a fresh show's first lights then sets the show up for its kind, so
+ * a phone that happens to have the same screen open does not do it too.
+ */
+export function addingLights(): void {
+  lightsAskedAt = Date.now();
+}
+/** The kind to set a fresh show up as, if this device just added its lights. */
+export function takeFirstKind(): Kind | null {
+  const mine = Date.now() - lightsAskedAt < 20000;
+  lightsAskedAt = 0;
+  return mine ? firstKind.get() : null;
+}
 
 /** Whether the window that lists the shows is open. */
 export const libraryOpen = new Store(false);

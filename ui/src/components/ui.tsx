@@ -13,6 +13,8 @@ interface SliderProps {
   format?: (value: number) => string;
   /** Hide the label and value, for sliders inside a row that names them. */
   bare?: boolean;
+  /** Something small to sit beside the value, such as a button. */
+  extra?: ReactNode;
 }
 
 /**
@@ -20,7 +22,7 @@ interface SliderProps {
  * handle follows the pointer exactly instead of waiting for the engine to
  * echo each change back.
  */
-export function Slider({ value, min, max, step = 0.01, label, onChange, format, bare }: SliderProps) {
+export function Slider({ value, min, max, step = 0.01, label, onChange, format, bare, extra }: SliderProps) {
   // The value the user last set, shown until the engine reports it back.
   // Dropping it the moment the pointer or key is released would snap the
   // handle to the engine's older value for a frame, and rapid key presses
@@ -56,6 +58,21 @@ export function Slider({ value, min, max, step = 0.01, label, onChange, format, 
     />
   );
   if (bare) return input;
+  if (extra) {
+    // Not a label: a button inside one would be part of the slider's name.
+    return (
+      <div className="field">
+        <span className="field-head">
+          <span>{label}</span>
+          <span className="field-extra">
+            {extra}
+            <output>{text}</output>
+          </span>
+        </span>
+        {input}
+      </div>
+    );
+  }
   return (
     <label className="field">
       <span className="field-head">
