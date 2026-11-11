@@ -274,8 +274,11 @@ export function EffectPicker({ onPick, current }: { onPick: (id: string) => void
 
 function Targets({ layer, fixtures, groups }: { layer: Layer; fixtures: Fixture[]; groups: LightGroup[] }) {
   const picked = useSelection();
-  if (fixtures.length < 2 && groups.length === 0) return null;
-  const all = layer.targets.length === 0;
+  const strips = fixtures.filter((f) => f.shape.type === "strip").length;
+  // Offered when the show has both kinds of light, or the effect is kept to one already.
+  const kinds = (strips > 0 && strips < fixtures.length) || layer.only !== "any";
+  if (fixtures.length < 2 && groups.length === 0 && !kinds) return null;
+  const all = layer.targets.length === 0 && layer.only === "any";
   // What is picked on the stage, when it is not already what this plays on.
   const pickedIsNew =
     picked.length > 0 &&
@@ -297,10 +300,25 @@ function Targets({ layer, fixtures, groups }: { layer: Layer; fixtures: Fixture[
           type="button"
           className={`chip ${all ? "selected" : ""}`}
           aria-pressed={all}
-          onClick={() => engine.send({ type: "update_layer", id: layer.id, targets: [] })}
+          onClick={() => engine.send({ type: "update_layer", id: layer.id, targets: [], only: "any" })}
         >
           All lights
         </button>
+        {kinds &&
+          (["strips", "matrices"] as const).map((only) => (
+            <button
+              key={only}
+              type="button"
+              className={`chip ${layer.only === only ? "selected" : ""}`}
+              aria-pressed={layer.only === only}
+              title={`Only on ${only}, including ones added later`}
+              onClick={() =>
+                engine.send({ type: "update_layer", id: layer.id, only: layer.only === only ? "any" : only })
+              }
+            >
+              {only === "strips" ? "Strips" : "Matrices"}
+            </button>
+          ))}
         {pickedIsNew && (
           <button
             type="button"
@@ -735,6 +753,7 @@ function summary(layer: Layer, show: Show, hello: Hello): string[] {
   if (flash === "needed" && show.flash.limit > 0) parts.push("off: flash limit");
   if (layer.sound.manual) parts.push("when fired");
   else if (layer.sound.band.type !== "all") parts.push(bandName(layer.sound.band, hello));
+  if (layer.only !== "any") parts.push(layer.only);
   if (layer.targets.length === 1) {
     const id = layer.targets[0];
     const name = show.fixtures.find((f) => f.id === id)?.name ?? show.light_groups.find((g) => g.id === id)?.name;

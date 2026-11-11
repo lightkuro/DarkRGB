@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use darkrgb_audio::{AudioCapture, InputDevice};
-use darkrgb_core::{Action, AudioFeatures, Device, KeyMode, Launch, Show};
+use darkrgb_core::{Action, AudioFeatures, Device, KeyMode, Kind, Launch, Show};
 use darkrgb_output::scan::{self, LocalNetwork};
 use darkrgb_output::{DeviceStats, wled};
 use serde::Serialize;
@@ -197,7 +197,11 @@ impl Shared {
                 self.bump_live();
                 return Ok(None);
             }
-            Command::NewShow { name, keep_lights } => return self.new_show(name.as_deref(), *keep_lights),
+            Command::NewShow {
+                name,
+                keep_lights,
+                kind,
+            } => return self.new_show(name.as_deref(), *keep_lights, *kind),
             Command::ExportShow => return self.export_show(),
             Command::OpenShow { file } => return self.open_show(file),
             Command::DuplicateShow { file } => return self.duplicate_show(file),
@@ -536,7 +540,7 @@ impl Shared {
     /// The lights and their groups come along if asked. With a library it
     /// is a new file and the show that was open stays as it is; without
     /// one it replaces the open show, which is kept in a file beside it.
-    fn new_show(&self, name: Option<&str>, keep_lights: bool) -> Result<Option<String>, String> {
+    fn new_show(&self, name: Option<&str>, keep_lights: bool, kind: Option<Kind>) -> Result<Option<String>, String> {
         let mut next = Show::default();
         if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
             next.name = commands::name(name, "The show name")?;
@@ -552,6 +556,9 @@ impl Shared {
             // Ids are never reused, so the new show carries on counting.
             next.next_id = show.next_id.max(next.next_id);
             next.layers[0].id = next.alloc_id();
+        }
+        if let Some(kind) = kind {
+            commands::set_up(&mut next, kind)?;
         }
         match &self.library {
             Some(library) => {
@@ -919,6 +926,7 @@ mod tests {
             .execute(&Command::NewShow {
                 name: None,
                 keep_lights: true,
+                kind: None,
             })
             .unwrap();
         assert!(note.unwrap().contains("show.previous.json"));
@@ -941,6 +949,7 @@ mod tests {
             .execute(&Command::NewShow {
                 name: None,
                 keep_lights: false,
+                kind: None,
             })
             .unwrap();
         assert_eq!(*shared.show.lock().unwrap(), Show::default());
@@ -993,6 +1002,7 @@ mod tests {
         run(Command::NewShow {
             name: Some("Second".into()),
             keep_lights: false,
+            kind: None,
         })
         .unwrap();
         assert_eq!(current(&shared), "Second.json");
@@ -1071,6 +1081,29 @@ mod tests {
         run(Command::RenameShow { name: "Main".into() }).unwrap();
         assert_eq!(current(&shared), "Main.json");
         assert_eq!(files(&library), ["First copy.json", "Main.json"]);
+
+        // A show started for a dance floor comes set up for one, and the
+        // lights can come along.
+        run(Command::NewShow {
+            name: Some("Friday night".into()),
+            keep_lights: true,
+            kind: Some(Kind::Club),
+        })
+        .unwrap();
+        {
+            let show = shared.show.lock().unwrap();
+            assert_eq!((show.kind, show.devices.len()), (Kind::Club, 1));
+            assert!(!show.flash.on() && show.flash.decided, "strobes are expected there");
+            assert_eq!(show.scenes.len(), Kind::Club.looks().len());
+            assert!(show.live.auto.enabled);
+            assert!(show.bindings.iter().any(|b| b.action == Action::Blackout));
+            assert_eq!(show.output.frame_rate, 30, "the computer's settings still come along");
+        }
+        run(Command::OpenShow {
+            file: "Main.json".into(),
+        })
+        .unwrap();
+        delete("Friday night.json").unwrap();
 
         // A show that is not open can be renamed too, file and all.
         run(Command::RenameShowFile {

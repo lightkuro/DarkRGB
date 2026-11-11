@@ -3,7 +3,17 @@
 
 import { Copy, FileDown, FilePlus2, FileUp, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { engine, libraryOpen, useLibrary, useLibraryOpen, useShow, useStatus, type ShowEntry } from "../engine";
+import {
+  engine,
+  libraryOpen,
+  useLibrary,
+  useLibraryOpen,
+  useShow,
+  useStatus,
+  type Kind,
+  type ShowEntry,
+} from "../engine";
+import { KindCards } from "./KindCards";
 import { ConfirmButton, IconButton } from "./ui";
 
 const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
@@ -128,6 +138,7 @@ function NewShow({ replaces, onDone }: { replaces: boolean; onDone: () => void }
   const show = useShow();
   const hasLights = (show?.devices.length ?? 0) > 0;
   const [name, setName] = useState("");
+  const [kind, setKind] = useState<Kind>(show && show.kind !== "custom" ? show.kind : "room");
   const [keepLights, setKeepLights] = useState(true);
   const [sure, setSure] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
@@ -140,6 +151,7 @@ function NewShow({ replaces, onDone }: { replaces: boolean; onDone: () => void }
       type: "new_show",
       name: name.trim() || undefined,
       keep_lights: hasLights && keepLights,
+      kind,
     });
     if (!result.ok) return engine.toast("error", result.error ?? "Could not start a new show.");
     if (result.note) engine.toast("info", result.note);
@@ -155,6 +167,7 @@ function NewShow({ replaces, onDone }: { replaces: boolean; onDone: () => void }
         void create();
       }}
     >
+      <KindCards value={kind} onChange={setKind} />
       <label className="field">
         <span className="field-head">
           <span>Name of the new show</span>

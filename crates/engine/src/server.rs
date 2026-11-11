@@ -28,7 +28,7 @@ use axum::routing::{get, post};
 use darkrgb_core::audio::{BAND_MAX_HZ, BASS, MID, TREBLE, band_edge_hz, group_bands};
 use darkrgb_core::looks::LOOKS;
 use darkrgb_core::show::FRAME_RATES;
-use darkrgb_core::{BANDS, color, effects};
+use darkrgb_core::{BANDS, Kind, color, effects};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -197,8 +197,15 @@ fn hello() -> String {
         "band_hz": (0..=BANDS).map(|i| band_edge_hz(i, BAND_MAX_HZ).round()).collect::<Vec<f32>>(),
         "effects": effects,
         "palettes": color::palettes(),
-        // Names of the starter scenes, so the UI can tell which are missing.
+        // The starter scenes there are, and which of them each kind of
+        // show gets, so the UI can tell which are missing.
         "looks": LOOKS.iter().map(|l| json!({ "name": l.name, "description": l.description })).collect::<Vec<_>>(),
+        "kinds": Kind::ALL.iter().map(|k| json!({
+            "id": k,
+            "name": k.name(),
+            "description": k.description(),
+            "looks": k.looks(),
+        })).collect::<Vec<_>>(),
     })
     .to_string()
 }

@@ -83,6 +83,44 @@ pub struct LightGroup {
     pub brightness: f32,
 }
 
+/// The kind of light an effect can be kept to, whichever lights the show
+/// has now or gets later. A spectrum wants a matrix; a chase wants a strip.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Only {
+    #[default]
+    Any,
+    Strips,
+    Matrices,
+}
+
+impl Only {
+    pub fn allows(self, shape: &Shape) -> bool {
+        match self {
+            Only::Any => true,
+            Only::Strips => matches!(shape, Shape::Strip { .. }),
+            Only::Matrices => !matches!(shape, Shape::Strip { .. }),
+        }
+    }
+}
+
+/// Who a show is for. Chosen when the show is started, it decides what the
+/// show begins with: its starter scenes, its pads, how it treats flashing.
+/// Nothing is locked by it afterwards.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    /// A desk or a room, mostly for whoever lives there.
+    Room,
+    /// A house, a garden or a window: a show for people passing by.
+    Display,
+    /// A dance floor or a stage, with someone playing the lights.
+    Club,
+    /// Nothing assumed.
+    #[default]
+    Custom,
+}
+
 /// One effect running on some or all fixtures.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
@@ -114,6 +152,9 @@ pub struct Layer {
     /// matrix, however the lights are laid out.
     #[serde(default)]
     pub each: bool,
+    /// Keep to one kind of light, among whatever `targets` allows.
+    #[serde(default)]
+    pub only: Only,
 }
 
 /// A saved set of layers that can be recalled in one click.
@@ -443,6 +484,8 @@ pub struct Show {
     pub version: u32,
     pub name: String,
     #[serde(default)]
+    pub kind: Kind,
+    #[serde(default)]
     pub devices: Vec<Device>,
     #[serde(default)]
     pub fixtures: Vec<Fixture>,
@@ -512,6 +555,7 @@ impl Default for Show {
         let mut show = Show {
             version: SHOW_VERSION,
             name: "Untitled show".into(),
+            kind: Kind::Custom,
             devices: Vec::new(),
             fixtures: Vec::new(),
             light_groups: Vec::new(),
@@ -607,6 +651,7 @@ impl Show {
                 enabled: true,
                 group,
                 each: false,
+                only: Only::Any,
             },
         );
         id
@@ -733,9 +778,10 @@ impl Show {
 
     /// Whether a layer draws on a fixture.
     pub fn layer_hits(layer: &Layer, fixture: &Fixture) -> bool {
-        layer.targets.is_empty()
-            || layer.targets.contains(&fixture.id)
-            || fixture.group.is_some_and(|g| layer.targets.contains(&g))
+        layer.only.allows(&fixture.shape)
+            && (layer.targets.is_empty()
+                || layer.targets.contains(&fixture.id)
+                || fixture.group.is_some_and(|g| layer.targets.contains(&g)))
     }
 
     /// Drops keys whose target no longer exists anywhere in the show. A

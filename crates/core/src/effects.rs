@@ -30,10 +30,13 @@ pub fn registry() -> &'static [EffectDef] {
             Meteors::def(),
             Sparkle::def(),
             Strobe::def(),
-            Plasma::def(),
-            Flow::def(),
-            Solid::def(),
         ]
+        .into_iter()
+        .chain(crate::more_effects::hits_and_beats())
+        .chain([Plasma::def(), Flow::def()])
+        .chain(crate::more_effects::ambient())
+        .chain([Solid::def()])
+        .collect()
     })
 }
 

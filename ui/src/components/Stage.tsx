@@ -20,10 +20,12 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   engine,
+  firstKind,
   perFrame,
   select,
   selection,
   settingsPage,
+  useFirstKind,
   useSelection,
   useShow,
   useStatus,
@@ -31,6 +33,7 @@ import {
 } from "../engine";
 import { StageRenderer, type View } from "../stageGl";
 import { AddByAddress, AngleField, FoundDevices } from "./DevicePanel";
+import { KindCards } from "./KindCards";
 
 type Drag =
   | { kind: "pan"; startX: number; startY: number; view: View; moved: boolean }
@@ -140,6 +143,18 @@ export function Stage() {
   const [glError, setGlError] = useState<string | null>(null);
 
   const fixtures = show?.fixtures ?? [];
+  // A show nobody has touched yet is asked who it is for. The answer is
+  // applied when its first lights arrive, by whichever way they are added.
+  const kind = useFirstKind();
+  const fresh = Boolean(show && show.kind === "custom" && show.scenes.length === 0 && show.layers.length <= 1);
+  const hadLights = useRef(true);
+  useEffect(() => {
+    const has = fixtures.length > 0;
+    if (has && !hadLights.current && fresh && firstKind.get() !== "custom") {
+      engine.send({ type: "begin", kind: firstKind.get(), demo: false });
+    }
+    hadLights.current = has;
+  }, [fixtures.length, fresh]);
   const fixturesRef = useRef(fixtures);
   fixturesRef.current = live.length ? fixtures.map((f) => live.find((l) => l.id === f.id) ?? f) : fixtures;
   const shown = fixturesRef.current;
@@ -510,8 +525,14 @@ export function Stage() {
       {glError && <p className="callout error stage-message">{glError}</p>}
 
       {show && fixtures.length === 0 && (
-        <div className="stage-empty" onPointerDown={(e) => e.stopPropagation()}>
-          <h1>Add your lights</h1>
+        <div className="stage-empty" onPointerDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
+          {fresh && (
+            <>
+              <h1>What are you lighting?</h1>
+              <KindCards value={kind} onChange={(k) => firstKind.set(k)} />
+            </>
+          )}
+          <h1>{fresh ? "Then add your lights" : "Add your lights"}</h1>
           <p>
             Devices running WLED on your network appear here by themselves. Add one and it shows up on this stage,
             already reacting to whatever your computer is playing.
@@ -521,12 +542,15 @@ export function Stage() {
           <div className="or">
             <span>or</span>
           </div>
-          <button type="button" className="button wide demo" onClick={() => engine.send({ type: "start_demo" })}>
+          <button
+            type="button"
+            className="button wide demo"
+            onClick={() => engine.send({ type: "begin", kind: fresh ? kind : show.kind, demo: true })}
+          >
             <Sparkles size={15} /> Try it with demo lights
           </button>
           <p className="hint">
-            Demo lights exist only on this screen. They come with a few ready-made scenes that change by
-            themselves in time with the music. Play something and watch.
+            Demo lights exist only on this screen: two strips and a matrix. Play some music and watch.
           </p>
         </div>
       )}

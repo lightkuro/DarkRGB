@@ -235,6 +235,34 @@ pub fn palettes() -> &'static [Palette] {
                 &["#ff5fa2", "#ffc35f", "#5fffd4", "#5f9bff", "#c45fff"],
             ),
             make("mono", "White", false, &["#000000", "#ffffff"]),
+            // For houses and gardens.
+            make("candy_cane", "Candy cane", true, &["#e8112d", "#ffffff"]),
+            make(
+                "christmas",
+                "Christmas",
+                true,
+                &["#e8112d", "#0f9d3a", "#ffd24a", "#ffffff"],
+            ),
+            make(
+                "fairy",
+                "Fairy lights",
+                true,
+                &["#ff3b30", "#ffb020", "#2fd15a", "#2f8bff", "#ff5fc8"],
+            ),
+            make(
+                "warm",
+                "Warm white",
+                false,
+                &["#2a0e00", "#b8560e", "#ffb45a", "#ffe2b0"],
+            ),
+            make("aurora", "Aurora", true, &["#0b6b4f", "#22e39a", "#27b6e6", "#7a4dff"]),
+            // For dance floors.
+            make(
+                "blacklight",
+                "Blacklight",
+                true,
+                &["#3a0ca3", "#7209b7", "#f72585", "#4361ee"],
+            ),
         ]
     })
 }

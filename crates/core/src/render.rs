@@ -951,6 +951,49 @@ mod tests {
     }
 
     #[test]
+    fn an_effect_that_needs_fast_flashes_sits_out_while_the_flash_limit_is_on() {
+        let mut show = Show::default();
+        show.add_device(device(4), None);
+        show.layers[0].effect = "lightning".into();
+        let beat = AudioFeatures {
+            beat_count: 1,
+            bpm: 120.0,
+            active: true,
+            ..AudioFeatures::default()
+        };
+        let lit = |show: &Show| {
+            let mut r = Renderer::new();
+            r.sync(show);
+            (0..10).any(|frame| {
+                r.render(show, frame as f64 / 60.0, 1.0 / 60.0, &beat)
+                    .iter()
+                    .any(|px| px.r > 0.1)
+            })
+        };
+        assert!(show.flash.on());
+        assert!(!lit(&show), "left out while the limit is on");
+        show.flash = crate::show::FlashSettings::off();
+        assert!(lit(&show), "and there with it off");
+    }
+
+    #[test]
+    fn an_effect_can_be_kept_to_strips_or_to_matrices() {
+        let mut show = solid_show("#ffffff");
+        show.add_device(device(6), None);
+        show.add_device(Device::wled("matrix", "127.0.0.2", 4048, 4), Some((2, 2)));
+        let strip_pixels = show.fixtures[0].pixel_count() as usize;
+        let lit = |show: &Show| {
+            let (_, frame) = render(show);
+            (frame[0].r > 0.5, frame[strip_pixels].r > 0.5)
+        };
+        assert_eq!(lit(&show), (true, true));
+        show.layers[0].only = crate::show::Only::Strips;
+        assert_eq!(lit(&show), (true, false));
+        show.layers[0].only = crate::show::Only::Matrices;
+        assert_eq!(lit(&show), (false, true));
+    }
+
+    #[test]
     fn unknown_effects_are_skipped() {
         let mut show = solid_show("#ffffff");
         show.add_device(device(1), None);

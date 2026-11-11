@@ -7,19 +7,8 @@
 
 use crate::audio::Band;
 use crate::effects;
-use crate::layout::Shape;
 use crate::params::{ParamValue, Params};
-use crate::show::{Blend, Layer, Show, Sound};
-
-/// Which lights a layer of a look goes on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum On {
-    All,
-    /// Only strips, when the show also has matrices.
-    Strips,
-    /// Only matrices, when the show also has strips.
-    Matrices,
-}
+use crate::show::{Blend, Kind, Layer, Only, Show, Sound};
 
 pub struct LookLayer {
     pub effect: &'static str,
@@ -27,7 +16,8 @@ pub struct LookLayer {
     pub band: Band,
     pub blend: Blend,
     pub opacity: f32,
-    pub on: On,
+    /// Strips only, matrices only, or everything.
+    pub only: Only,
     /// On each light by itself, not once across all of them.
     pub each: bool,
 }
@@ -54,7 +44,7 @@ const fn layer(effect: &'static str, params: &'static [(&'static str, Value)]) -
         band: Band::All,
         blend: Blend::Add,
         opacity: 1.0,
-        on: On::All,
+        only: Only::Any,
         each: false,
     }
 }
@@ -69,9 +59,9 @@ const fn each(effect: &'static str, params: &'static [(&'static str, Value)]) ->
 
 use Value::{Number as N, Text as T};
 
-/// The starter looks, in the order they are added and autopilot plays them.
-/// Each has something that moves without sound, so none sits dark when
-/// the music stops.
+/// Every starter look. Which of them a show gets, and in what order,
+/// depends on its kind: see [`Kind::looks`]. Each has something that moves
+/// without sound, so none sits dark when the music stops.
 pub const LOOKS: &[Look] = &[
     Look {
         name: "Pulse",
@@ -100,17 +90,17 @@ pub const LOOKS: &[Look] = &[
                 ..layer("plasma", &[("palette", T("ocean")), ("speed", N(0.2))])
             },
             LookLayer {
-                on: On::Strips,
+                only: Only::Strips,
                 ..each("scroll", &[("speed", N(1.2))])
             },
             LookLayer {
-                on: On::Matrices,
+                only: Only::Matrices,
                 ..each("spectrum", &[("palette", T("rainbow"))])
             },
             LookLayer {
                 band: Band::Bass,
                 opacity: 0.5,
-                on: On::Matrices,
+                only: Only::Matrices,
                 ..each("ripple", &[("palette", T("ocean")), ("speed", N(1.4))])
             },
         ],
@@ -125,11 +115,11 @@ pub const LOOKS: &[Look] = &[
                 ..layer("plasma", &[("palette", T("neon")), ("speed", N(0.35))])
             },
             LookLayer {
-                on: On::Strips,
+                only: Only::Strips,
                 ..each("chase", &[("palette", T("candy")), ("blocks", N(5.0))])
             },
             LookLayer {
-                on: On::Matrices,
+                only: Only::Matrices,
                 ..each("sweep", &[("palette", T("neon")), ("time", N(0.4))])
             },
         ],
@@ -195,7 +185,204 @@ pub const LOOKS: &[Look] = &[
             },
         ],
     },
+    Look {
+        name: "Aurora",
+        description: "Slow green and violet light, with a few stars.",
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                ..layer("plasma", &[("palette", T("aurora")), ("speed", N(0.15))])
+            },
+            LookLayer {
+                opacity: 0.6,
+                ..layer(
+                    "twinkle",
+                    &[("palette", T("ice")), ("amount", N(0.12)), ("glow", N(0.0))],
+                )
+            },
+        ],
+    },
+    // For a house, a garden or a window.
+    Look {
+        name: "Fairy lights",
+        description: "A string of coloured bulbs, each slowly brightening and dimming.",
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.2,
+                ..layer("plasma", &[("palette", T("warm")), ("speed", N(0.1))])
+            },
+            layer("twinkle", &[("palette", T("fairy")), ("amount", N(0.7))]),
+        ],
+    },
+    Look {
+        name: "Candy cane",
+        description: "Red and white stripes travelling along every light.",
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                ..each(
+                    "stripes",
+                    &[("palette", T("candy_cane")), ("count", N(8.0)), ("speed", N(0.6))],
+                )
+            },
+            LookLayer {
+                band: Band::Treble,
+                opacity: 0.8,
+                ..layer("sparkle", &[("colour", T("#ffffff")), ("density", N(0.15))])
+            },
+        ],
+    },
+    Look {
+        name: "Snowfall",
+        description: "Snow drifting down over a deep blue night.",
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.3,
+                ..layer("plasma", &[("palette", T("ice")), ("speed", N(0.12))])
+            },
+            each("snow", &[("amount", N(0.75)), ("speed", N(0.3))]),
+        ],
+    },
+    Look {
+        name: "Red and green",
+        description: "Blocks of Christmas colours that swap places with the music.",
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                ..each(
+                    "steps",
+                    &[
+                        ("palette", T("christmas")),
+                        ("blocks", N(6.0)),
+                        ("every", T("2 beats")),
+                        ("fade", N(0.3)),
+                    ],
+                )
+            },
+            LookLayer {
+                band: Band::Treble,
+                opacity: 0.7,
+                ..layer("sparkle", &[("colour", T("#fff4d6")), ("density", N(0.12))])
+            },
+        ],
+    },
+    Look {
+        name: "Warm glow",
+        description: "Candlelight: warm white that breathes, for when the music is off.",
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                ..layer("plasma", &[("palette", T("warm")), ("speed", N(0.12))])
+            },
+            LookLayer {
+                opacity: 0.5,
+                ..layer(
+                    "twinkle",
+                    &[("palette", T("warm")), ("amount", N(0.4)), ("speed", N(0.5))],
+                )
+            },
+        ],
+    },
+    // For a dance floor.
+    Look {
+        name: "Colour hits",
+        description: "Hard blocks of colour that change on every beat.",
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                ..each(
+                    "steps",
+                    &[("palette", T("neon")), ("blocks", N(4.0)), ("fade", N(0.08))],
+                )
+            },
+            LookLayer {
+                band: Band::Treble,
+                ..layer("sparkle", &[("colour", T("#ffffff")), ("density", N(0.25))])
+            },
+        ],
+    },
+    Look {
+        name: "Storm",
+        description: "Fast streaks on every hit over blacklight purple.",
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.4,
+                ..layer("plasma", &[("palette", T("blacklight")), ("speed", N(0.4))])
+            },
+            each(
+                "meteors",
+                &[("palette", T("neon")), ("speed", N(2.0)), ("tail", N(0.25))],
+            ),
+        ],
+    },
 ];
+
+impl Kind {
+    pub const ALL: [Kind; 4] = [Kind::Room, Kind::Display, Kind::Club, Kind::Custom];
+
+    /// What the kind is called where a show is started.
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Room => "Room",
+            Kind::Display => "Light show",
+            Kind::Club => "Club",
+            Kind::Custom => "Blank",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Kind::Room => "A desk, a shelf, a bedroom. The lights follow your music by themselves.",
+            Kind::Display => "A house, a garden, a window. Festive scenes for people passing by.",
+            Kind::Club => "A party, a dance floor, a stage. Pads to play the lights by hand, strobes at full speed.",
+            Kind::Custom => "An empty show. Nothing is set up for you.",
+        }
+    }
+
+    /// The starter looks a show of this kind gets, in the order they are
+    /// added and autopilot plays them.
+    pub fn looks(self) -> &'static [&'static str] {
+        match self {
+            Kind::Room => &[
+                "Calm",
+                "Aurora",
+                "Pulse",
+                "Spectrum",
+                "Fire",
+                "Rain",
+                "Neon chase",
+                "Sweep",
+            ],
+            Kind::Display => &[
+                "Fairy lights",
+                "Candy cane",
+                "Snowfall",
+                "Red and green",
+                "Warm glow",
+                "Spectrum",
+                "Sweep",
+            ],
+            Kind::Club => &[
+                "Pulse",
+                "Neon chase",
+                "Colour hits",
+                "Sweep",
+                "Storm",
+                "Spectrum",
+                "Fire",
+            ],
+            Kind::Custom => &["Pulse", "Spectrum", "Neon chase", "Fire", "Rain", "Sweep", "Calm"],
+        }
+    }
+}
+
+/// Finds a starter look by name.
+pub fn look(name: &str) -> Option<&'static Look> {
+    LOOKS.iter().find(|l| l.name == name)
+}
 
 impl Show {
     /// Adds a starter look as a scene and returns the scene's id. Nothing
@@ -204,29 +391,8 @@ impl Show {
         if self.scenes.iter().any(|s| s.name == look.name) {
             return None;
         }
-        let of_kind = |show: &Show, strips: bool| -> Vec<u32> {
-            show.fixtures
-                .iter()
-                .filter(|f| matches!(f.shape, Shape::Strip { .. }) == strips)
-                .map(|f| f.id)
-                .collect()
-        };
-        let (strips, matrices) = (of_kind(self, true), of_kind(self, false));
         let mut layers = Vec::new();
         for part in look.layers {
-            // "Only strips" means something only when there are matrices
-            // too. In a show of one kind, every layer plays on everything,
-            // and a layer for the kind that is missing is left out if its
-            // partner for the other kind is there to take its place.
-            let targets = match part.on {
-                On::All => Vec::new(),
-                On::Strips if matrices.is_empty() => Vec::new(),
-                On::Matrices if strips.is_empty() => Vec::new(),
-                On::Strips if strips.is_empty() => continue,
-                On::Matrices if matrices.is_empty() => continue,
-                On::Strips => strips.clone(),
-                On::Matrices => matrices.clone(),
-            };
             debug_assert!(effects::find(part.effect).is_some(), "{} is not an effect", part.effect);
             let mut params = Params::new();
             for (id, value) in part.params {
@@ -248,10 +414,13 @@ impl Show {
                 params,
                 opacity: part.opacity,
                 blend: part.blend,
-                targets,
+                targets: Vec::new(),
                 enabled: true,
                 group: None,
                 each: part.each,
+                // Kept as a rule, not as a list of lights, so the look
+                // lands where it should on lights added later too.
+                only: part.only,
             });
         }
         // The bottom layer of what is left must cover what is under it.
@@ -261,10 +430,15 @@ impl Show {
         Some(self.push_scene(look.name, layers, Vec::new()))
     }
 
-    /// Adds every starter look that is not there yet. Returns how many
-    /// were added.
+    /// Adds the starter looks for this show's kind that are not there
+    /// yet. Returns how many were added.
     pub fn add_looks(&mut self) -> usize {
-        LOOKS.iter().filter(|look| self.add_look(look).is_some()).count()
+        let names = self.kind.looks();
+        names
+            .iter()
+            .filter_map(|name| look(name))
+            .filter(|look| self.add_look(look).is_some())
+            .count()
     }
 }
 
@@ -304,8 +478,29 @@ mod tests {
             }
         }
         let mut names: Vec<_> = LOOKS.iter().map(|l| l.name).collect();
+        names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), LOOKS.len(), "names must differ; they identify the scenes");
+        // Every kind of show names looks that exist, none twice, and every look is used somewhere.
+        for kind in Kind::ALL {
+            let wanted = kind.looks();
+            assert!(wanted.len() >= 5, "{kind:?}");
+            for name in wanted {
+                assert!(look(name).is_some(), "{kind:?} asks for {name}");
+                assert_eq!(
+                    wanted.iter().filter(|n| *n == name).count(),
+                    1,
+                    "{kind:?}: {name} twice"
+                );
+            }
+        }
+        for l in LOOKS {
+            assert!(
+                Kind::ALL.iter().any(|k| k.looks().contains(&l.name)),
+                "{} is never offered",
+                l.name
+            );
+        }
     }
 
     fn mixed_show() -> Show {
@@ -318,17 +513,20 @@ mod tests {
     #[test]
     fn looks_become_scenes_with_strip_and_matrix_effects_where_they_belong() {
         let mut show = mixed_show();
-        let (strip, matrix) = (show.fixtures[0].id, show.fixtures[1].id);
-        assert_eq!(show.add_looks(), LOOKS.len());
+        let (strip, matrix) = (show.fixtures[0].clone(), show.fixtures[1].clone());
+        let count = show.kind.looks().len();
+        assert_eq!(show.add_looks(), count);
         assert_eq!(show.add_looks(), 0, "adding them again adds nothing");
-        assert_eq!(show.scenes.len(), LOOKS.len());
+        assert_eq!(show.scenes.len(), count);
         // The first ten scenes take the number keys, as scenes always do.
-        assert_eq!(show.bindings.len(), LOOKS.len().min(10));
+        assert_eq!(show.bindings.len(), count.min(10));
 
         let spectrum = show.scenes.iter().find(|s| s.name == "Spectrum").unwrap();
-        let on = |effect: &str| &spectrum.layers.iter().find(|l| l.effect == effect).unwrap().targets;
-        assert_eq!(on("scroll"), &vec![strip]);
-        assert_eq!(on("spectrum"), &vec![matrix]);
+        let layer = |effect: &str| spectrum.layers.iter().find(|l| l.effect == effect).unwrap();
+        assert_eq!(layer("scroll").only, Only::Strips);
+        assert!(Show::layer_hits(layer("scroll"), &strip) && !Show::layer_hits(layer("scroll"), &matrix));
+        assert!(Show::layer_hits(layer("spectrum"), &matrix) && !Show::layer_hits(layer("spectrum"), &strip));
+        assert!(Show::layer_hits(layer("plasma"), &matrix) && Show::layer_hits(layer("plasma"), &strip));
         assert!(show.validate().is_ok());
         let mut mended = show.clone();
         mended.repair();
@@ -342,9 +540,35 @@ mod tests {
     }
 
     #[test]
-    fn in_a_show_of_only_strips_every_look_still_lights_them() {
+    fn looks_added_before_the_lights_still_land_where_they_belong() {
         let mut show = Show::default();
+        show.add_looks();
         show.add_device(Device::wled("strip", "127.0.0.1", 4048, 60), None);
+        show.add_device(Device::wled("matrix", "127.0.0.2", 4048, 64), Some((8, 8)));
+        let (strip, matrix) = (show.fixtures[0].clone(), show.fixtures[1].clone());
+        let spectrum = show.scenes.iter().find(|s| s.name == "Spectrum").unwrap();
+        let layer = |effect: &str| spectrum.layers.iter().find(|l| l.effect == effect).unwrap();
+        assert!(Show::layer_hits(layer("scroll"), &strip) && !Show::layer_hits(layer("scroll"), &matrix));
+        assert!(Show::layer_hits(layer("spectrum"), &matrix) && !Show::layer_hits(layer("spectrum"), &strip));
+    }
+
+    #[test]
+    fn every_look_of_every_kind_lights_a_show_of_only_strips_and_one_of_only_matrices() {
+        for (kind, matrix) in Kind::ALL.into_iter().flat_map(|k| [(k, false), (k, true)]) {
+            lights_up(kind, matrix);
+        }
+    }
+
+    fn lights_up(kind: Kind, matrix: bool) {
+        let mut show = Show {
+            kind,
+            ..Show::default()
+        };
+        if matrix {
+            show.add_device(Device::wled("matrix", "127.0.0.1", 4048, 256), Some((16, 16)));
+        } else {
+            show.add_device(Device::wled("strip", "127.0.0.1", 4048, 60), None);
+        }
         show.add_looks();
         let loud = AudioFeatures {
             level: 0.9,
@@ -382,7 +606,12 @@ mod tests {
                     brightest = brightest.max(px.r).max(px.g).max(px.b);
                 }
             }
-            assert!(brightest > 0.3, "{} stayed dark: {brightest}", scene.name);
+            assert!(
+                brightest > 0.3,
+                "{kind:?}, {}: {} stayed dark: {brightest}",
+                if matrix { "matrix" } else { "strip" },
+                scene.name
+            );
         }
         // Every setting a look stores is one its effect reads.
         for scene in &show.scenes {

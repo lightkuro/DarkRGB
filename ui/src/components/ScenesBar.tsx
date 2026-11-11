@@ -113,7 +113,8 @@ export function ScenesBar() {
   if (!show) return <footer className="scenes" />;
   const menuScene = menu ? show.scenes.find((s) => s.id === menu.id) : undefined;
   const auto = show.live.auto;
-  const missingLooks = (hello?.looks ?? []).filter((look) => !show.scenes.some((s) => s.name === look.name));
+  const ownLooks = hello?.kinds.find((k) => k.id === show.kind)?.looks ?? [];
+  const missingLooks = ownLooks.filter((look) => !show.scenes.some((s) => s.name === look));
   return (
     <footer className="scenes">
       <span className="scenes-label">Scenes</span>

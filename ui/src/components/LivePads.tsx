@@ -131,6 +131,12 @@ function Pad({ action, show, hello, note, lit, waiting, tone, editing, selected,
   const held = binding ? live.held.includes(binding.id) : false;
   const { name, icon, colour } = describe(action, show, hello);
   const stored = isOn(action, show, live.frozen);
+  // An effect that only works flashing fast does nothing while the show's
+  // flash limit is on. The pad says so, and where to change it.
+  const blocked =
+    action.type === "layer" &&
+    show.flash.limit > 0 &&
+    hello.effects.find((e) => e.id === findLayer(show, action.id)?.effect)?.flash === "needed";
   const missing = stored === undefined;
   // A held key shows the opposite of what is saved; a fired pad has no
   // "on", it only goes off.
@@ -143,9 +149,9 @@ function Pad({ action, show, hello, note, lit, waiting, tone, editing, selected,
   const up = () => {
     if (binding) engine.quiet({ type: "trigger", binding: binding.id, down: false });
   };
-  const classes = `pad ${on ? "on" : ""} ${held ? "held" : ""} ${waiting ? "waiting" : ""} ${missing ? "missing" : ""} ${
-    tone ?? ""
-  } ${editing ? "editing" : ""} ${selected ? "selected" : ""}`;
+  const classes = `pad ${on ? "on" : ""} ${held ? "held" : ""} ${waiting ? "waiting" : ""} ${
+    missing || blocked ? "missing" : ""
+  } ${tone ?? ""} ${editing ? "editing" : ""} ${selected ? "selected" : ""}`;
   const body = (
     <>
       <span className="pad-top">
@@ -153,7 +159,9 @@ function Pad({ action, show, hello, note, lit, waiting, tone, editing, selected,
         {binding && <Keycap binding={binding} held={held} />}
       </span>
       <span className="pad-name">{name}</span>
-      <span className="pad-note">{waiting ? "on the beat…" : (note ?? modeNote(binding))}</span>
+      <span className="pad-note">
+        {blocked ? "flash limit is on" : waiting ? "on the beat…" : (note ?? modeNote(binding))}
+      </span>
       {colour && <span className="pad-colour" style={{ background: colour }} />}
     </>
   );
@@ -170,7 +178,13 @@ function Pad({ action, show, hello, note, lit, waiting, tone, editing, selected,
       className={classes}
       disabled={missing}
       aria-pressed={on}
-      title={missing ? "Not part of the scene that is playing" : undefined}
+      title={
+        missing
+          ? "Not part of the scene that is playing"
+          : blocked
+            ? "This effect only works flashing fast. Switch the flash limit off to use it."
+            : undefined
+      }
       onPointerDown={(e) => {
         // Keep getting the pointer, so letting go outside still lets go.
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -271,7 +285,7 @@ function AddPad({ show, hello, onAdded }: { show: Show; hello: Hello; onAdded: (
     if (result.ok) onAdded(action);
     else engine.toast("error", result.error ?? "Could not add that pad.");
   };
-  const quick = (kind: "flash" | "strobe" | "pulse") => {
+  const quick = (kind: "flash" | "strobe" | "pulse" | "lightning") => {
     setOpen(null);
     engine.send({ type: "add_quick_pad", kind });
   };
@@ -305,6 +319,12 @@ function AddPad({ show, hello, onAdded }: { show: Show; hello: Hello; onAdded: (
           </button>
           <button type="button" role="menuitem" onClick={() => quick("pulse")}>
             Colour pulse <span className="hint">a burst on each press</span>
+          </button>
+          <button type="button" role="menuitem" onClick={() => quick("lightning")}>
+            Lightning{" "}
+            <span className="hint">
+              {show.flash.limit > 0 ? "very fast flashes; needs the flash limit off" : "very fast flashes on each press"}
+            </span>
           </button>
           {candidates
             .filter((group) => group.actions.length > 0)

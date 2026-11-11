@@ -4,10 +4,9 @@
 use darkrgb_core::color;
 use darkrgb_core::effects;
 use darkrgb_core::layout::MAX_PIXELS;
-use darkrgb_core::looks::LOOKS;
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::show::{Blend, FRAME_RATES};
-use darkrgb_core::{Action, Band, KeyMode, Launch, Rgb, Shape, Show};
+use darkrgb_core::{Action, Band, FlashSettings, KeyMode, Kind, Launch, Only, Rgb, Shape, Show};
 use serde::Deserialize;
 
 const MAX_NAME: usize = 80;
@@ -37,9 +36,13 @@ pub enum Command {
     SetDemo {
         enabled: bool,
     },
-    /// The one-click first run: demo lights, the starter scenes, and
-    /// autopilot on, so something worth watching plays at once.
-    StartDemo,
+    /// Sets the show up for the people it is for (see `set_up`), with the
+    /// demo lights if asked. The first run's one click.
+    Begin {
+        kind: Kind,
+        #[serde(default)]
+        demo: bool,
+    },
     /// Adds the starter scenes that are not there yet.
     AddLooks,
     /// Adds a light that exists only in the preview.
@@ -86,6 +89,9 @@ pub enum Command {
         /// Draw on each light by itself instead of once across all.
         #[serde(default)]
         each: Option<bool>,
+        /// Keep to strips, to matrices, or to neither.
+        #[serde(default)]
+        only: Option<Only>,
     },
     /// Gives a layer a label. An empty name goes back to the effect's own.
     RenameLayer {
@@ -196,6 +202,9 @@ pub enum Command {
         name: Option<String>,
         #[serde(default = "yes")]
         keep_lights: bool,
+        /// Who the show is for; it is set up to suit. Left out: blank.
+        #[serde(default)]
+        kind: Option<Kind>,
     },
     /// Opens another show from the library. Handled by the app, as are
     /// the next three.
@@ -309,6 +318,20 @@ pub enum QuickPad {
     Strobe,
     /// A burst of colour on each press.
     Pulse,
+    /// A burst of very fast flashes on each press. Needs the flash limit off.
+    Lightning,
+}
+
+impl QuickPad {
+    /// The effect behind the pad, what the pad is called, and what a press does.
+    fn parts(self) -> (&'static str, &'static str, KeyMode) {
+        match self {
+            QuickPad::Flash => ("solid", "White flash", KeyMode::Hold),
+            QuickPad::Strobe => ("strobe", "Strobe", KeyMode::Hold),
+            QuickPad::Pulse => ("beat_pulse", "Pulse", KeyMode::Fire),
+            QuickPad::Lightning => ("lightning", "Lightning", KeyMode::Fire),
+        }
+    }
 }
 
 /// The folder ready-made pads put their effects in.
@@ -384,10 +407,136 @@ pub(crate) fn name(value: &str, what: &str) -> Result<String, String> {
     Ok(trimmed.chars().take(MAX_NAME).collect())
 }
 
-fn add_looks(show: &mut Show) -> Result<(), String> {
-    let missing = LOOKS
+/// Adds a pad that comes with its own effect, in the pinned folder for
+/// things played by hand.
+fn add_quick_pad(show: &mut Show, kind: QuickPad) -> Result<(), String> {
+    let has_folder = show.layer_groups.iter().any(|g| g.name == QUICK_FOLDER);
+    if show.bindings.len() >= MAX_BINDINGS {
+        return Err(format!("a show can have at most {MAX_BINDINGS} pads"));
+    }
+    if !has_folder && show.layer_groups.len() >= MAX_GROUPS {
+        return Err(format!("a show can have at most {MAX_GROUPS} folders"));
+    }
+    // Pinned, so that changing scene does not take the pads away.
+    let folder = match show.layer_groups.iter().find(|g| g.name == QUICK_FOLDER) {
+        Some(folder) => folder.id,
+        None => {
+            let id = show.add_layer_group(QUICK_FOLDER);
+            show.layer_groups.last_mut().expect("just added").pinned = true;
+            id
+        }
+    };
+    let (effect, label, mode) = kind.parts();
+    let id = show.add_layer_in(effect, Some(folder));
+    let layer = show.layer_mut(id).expect("just added");
+    layer.name = Some(label.to_string());
+    match kind {
+        QuickPad::Flash => {
+            // Off until its key is held; then it covers everything.
+            layer.enabled = false;
+            layer.blend = Blend::Normal;
+            layer.params.insert("colour".into(), ParamValue::Text("#ffffff".into()));
+        }
+        QuickPad::Strobe => {
+            layer.enabled = false;
+            layer.blend = Blend::Normal;
+            layer.params.insert("rate".into(), ParamValue::Number(10.0));
+        }
+        QuickPad::Pulse => {
+            // On, dark, and deaf to the music: it lights when fired.
+            layer.blend = Blend::Add;
+            layer.sound.manual = true;
+            layer.params.insert("floor".into(), ParamValue::Number(0.0));
+        }
+        QuickPad::Lightning => {
+            layer.blend = Blend::Add;
+            layer.sound.manual = true;
+        }
+    }
+    let key = QUICK_KEYS
         .iter()
-        .filter(|look| !show.scenes.iter().any(|s| s.name == look.name))
+        .find(|k| !show.bindings.iter().any(|b| b.key.as_deref() == Some(**k)));
+    let label = key.map(|k| k.trim_start_matches("Key").to_string()).unwrap_or_default();
+    show.add_pad(key.copied(), &label, Action::Layer { id }, mode);
+    Ok(())
+}
+
+/// Keys the built-in pads of a club show get, when they are free.
+const CLUB_KEYS: [(Action, &str, &str); 5] = [
+    (Action::Blackout, "KeyB", "b"),
+    (Action::TapTempo, "KeyT", "t"),
+    (Action::Hit, "Space", ""),
+    (Action::NextScene, "KeyX", "x"),
+    (Action::Freeze, "KeyZ", "z"),
+];
+
+/// Sets a show up for the people it is for: its starter scenes, how its
+/// scenes change, its pads, and how it treats flashing. Meant for a show
+/// that has just been started; on one that is already in use it only adds
+/// what is missing.
+pub(crate) fn set_up(show: &mut Show, kind: Kind) -> Result<(), String> {
+    show.kind = kind;
+    if kind == Kind::Custom {
+        return Ok(());
+    }
+    add_looks(show)?;
+    show.live.auto.enabled = true;
+    show.live.auto.on_drops = true;
+    match kind {
+        Kind::Room => {
+            show.live.auto.every_bars = 8;
+            show.live.fade = 1.0;
+        }
+        Kind::Display => {
+            // Unhurried: long scenes and slow changes, for people walking past.
+            show.live.auto.every_bars = 16;
+            show.live.fade = 2.0;
+        }
+        Kind::Club => {
+            show.live.auto.every_bars = 8;
+            show.live.fade = 0.0;
+            show.live.launch = Launch::Beat;
+            // Whoever runs a dance floor has chosen strobes.
+            show.flash = FlashSettings::off();
+            for pad in [QuickPad::Flash, QuickPad::Strobe, QuickPad::Pulse, QuickPad::Lightning] {
+                let (effect, _, _) = pad.parts();
+                let there = show.layers.iter().any(|l| {
+                    l.effect == effect
+                        && l.group
+                            .is_some_and(|g| show.layer_groups.iter().any(|f| f.id == g && f.name == QUICK_FOLDER))
+                });
+                if !there {
+                    add_quick_pad(show, pad)?;
+                }
+            }
+            for (action, key, label) in CLUB_KEYS {
+                let free = !show.bindings.iter().any(|b| b.key.as_deref() == Some(key));
+                if show.binding_for(action).is_none() && free && show.bindings.len() < MAX_BINDINGS {
+                    show.add_pad(Some(key), label, action, KeyMode::Toggle);
+                }
+            }
+        }
+        Kind::Custom => {}
+    }
+    // Start on the first look, so there is something to see at once.
+    let first = kind.looks().first().copied();
+    if let Some(scene) = show
+        .scenes
+        .iter()
+        .find(|s| Some(s.name.as_str()) == first)
+        .map(|s| s.id)
+    {
+        show.recall_scene(scene);
+    }
+    Ok(())
+}
+
+fn add_looks(show: &mut Show) -> Result<(), String> {
+    let missing = show
+        .kind
+        .looks()
+        .iter()
+        .filter(|look| !show.scenes.iter().any(|s| s.name == **look))
         .count();
     if show.scenes.len() + missing > MAX_SCENES {
         return Err(format!("a show can have at most {MAX_SCENES} scenes"));
@@ -486,18 +635,14 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
-        Command::StartDemo => {
-            if show.devices.len() + 3 > MAX_DEVICES {
-                return Err(format!("a show can have at most {MAX_DEVICES} devices"));
+        Command::Begin { kind, demo } => {
+            if *demo {
+                if !show.has_demo() && show.devices.len() + 3 > MAX_DEVICES {
+                    return Err(format!("a show can have at most {MAX_DEVICES} devices"));
+                }
+                show.set_demo(true);
             }
-            show.set_demo(true);
-            add_looks(show)?;
-            show.live.auto.enabled = true;
-            // Start on the first look, so the change is seen at once.
-            if let Some(first) = show.scenes.iter().find(|s| s.name == LOOKS[0].name).map(|s| s.id) {
-                show.recall_scene(first);
-            }
-            Ok(())
+            set_up(show, *kind)
         }
 
         Command::AddLooks => add_looks(show),
@@ -657,6 +802,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             enabled,
             targets,
             each,
+            only,
         } => {
             if let Some(effect) = effect
                 && effects::find(effect).is_none()
@@ -697,6 +843,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(e) = each {
                 layer.each = *e;
+            }
+            if let Some(o) = only {
+                layer.only = *o;
             }
             Ok(())
         }
@@ -980,57 +1129,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
-        Command::AddQuickPad { kind } => {
-            let has_folder = show.layer_groups.iter().any(|g| g.name == QUICK_FOLDER);
-            if show.bindings.len() >= MAX_BINDINGS {
-                return Err(format!("a show can have at most {MAX_BINDINGS} pads"));
-            }
-            if !has_folder && show.layer_groups.len() >= MAX_GROUPS {
-                return Err(format!("a show can have at most {MAX_GROUPS} folders"));
-            }
-            // Pinned, so that changing scene does not take the pads away.
-            let folder = match show.layer_groups.iter().find(|g| g.name == QUICK_FOLDER) {
-                Some(folder) => folder.id,
-                None => {
-                    let id = show.add_layer_group(QUICK_FOLDER);
-                    show.layer_groups.last_mut().expect("just added").pinned = true;
-                    id
-                }
-            };
-            let (effect, label, mode) = match kind {
-                QuickPad::Flash => ("solid", "White flash", KeyMode::Hold),
-                QuickPad::Strobe => ("strobe", "Strobe", KeyMode::Hold),
-                QuickPad::Pulse => ("beat_pulse", "Pulse", KeyMode::Fire),
-            };
-            let id = show.add_layer_in(effect, Some(folder));
-            let layer = show.layer_mut(id).expect("just added");
-            layer.name = Some(label.to_string());
-            match kind {
-                QuickPad::Flash => {
-                    // Off until its key is held; then it covers everything.
-                    layer.enabled = false;
-                    layer.blend = Blend::Normal;
-                    layer.params.insert("colour".into(), ParamValue::Text("#ffffff".into()));
-                }
-                QuickPad::Strobe => {
-                    layer.enabled = false;
-                    layer.blend = Blend::Normal;
-                    layer.params.insert("rate".into(), ParamValue::Number(10.0));
-                }
-                QuickPad::Pulse => {
-                    // On, dark, and deaf to the music: it lights when fired.
-                    layer.blend = Blend::Add;
-                    layer.sound.manual = true;
-                    layer.params.insert("floor".into(), ParamValue::Number(0.0));
-                }
-            }
-            let key = QUICK_KEYS
-                .iter()
-                .find(|k| !show.bindings.iter().any(|b| b.key.as_deref() == Some(**k)));
-            let label = key.map(|k| k.trim_start_matches("Key").to_string()).unwrap_or_default();
-            show.add_pad(key.copied(), &label, Action::Layer { id }, mode);
-            Ok(())
-        }
+        Command::AddQuickPad { kind } => add_quick_pad(show, *kind),
 
         Command::Unbind { id } => {
             let before = show.bindings.len();
@@ -1358,6 +1457,7 @@ mod tests {
             enabled: None,
             targets: None,
             each: None,
+            only: None,
         };
         // Same effect: settings stay.
         apply(&mut show, &update("flow")).unwrap();
@@ -1745,6 +1845,7 @@ mod tests {
                     enabled: None,
                     targets: Some(targets),
                     each: None,
+                    only: None,
                 },
             )
         };
@@ -2064,6 +2165,7 @@ mod tests {
             enabled: None,
             targets: Some(targets),
             each: None,
+            only: None,
         };
         assert!(apply(&mut show, &target(vec![9999])).is_err());
         apply(&mut show, &target(vec![fixture, fixture])).unwrap();
@@ -2238,7 +2340,8 @@ mod tests {
                     },
                 },
                 38 => Command::AddQuickPad {
-                    kind: [QuickPad::Flash, QuickPad::Strobe, QuickPad::Pulse][r.next() as usize % 3],
+                    kind: [QuickPad::Flash, QuickPad::Strobe, QuickPad::Pulse, QuickPad::Lightning]
+                        [r.next() as usize % 4],
                 },
                 31 => Command::Unbind { id: binding },
                 32 => Command::SetLive {
@@ -2255,7 +2358,10 @@ mod tests {
                     auto: r.flag(),
                 },
                 40 => Command::AddLooks,
-                41 => Command::StartDemo,
+                41 => Command::Begin {
+                    kind: Kind::ALL[r.next() as usize % 4],
+                    demo: r.flag(),
+                },
                 33 => Command::SetOutput {
                     frame_rate: r.maybe(|r| [0, 30, 40, 60, 61, 120, u32::MAX][r.next() as usize % 7]),
                 },
@@ -2337,6 +2443,7 @@ mod tests {
                     enabled: r.maybe(Awkward::flag),
                     targets: r.maybe(|r| vec![fixture, if r.flag() { group } else { r.next() % 50 }]),
                     each: r.maybe(Awkward::flag),
+                    only: r.maybe(|r| [Only::Any, Only::Strips, Only::Matrices][r.next() as usize % 3]),
                 },
                 5 => Command::RemoveDevice { id: device },
                 6 | 7 => Command::SetParam {
@@ -2485,30 +2592,105 @@ mod tests {
     }
 
     #[test]
-    fn the_demo_starts_with_lights_scenes_and_autopilot() {
-        let mut show = Show::default();
-        apply(&mut show, &Command::StartDemo).unwrap();
-        assert_eq!(show.devices.len(), 3);
-        assert_eq!(show.scenes.len(), LOOKS.len());
+    fn a_show_begins_set_up_for_the_people_it_is_for() {
+        let begin = |kind, demo| {
+            let mut show = Show::default();
+            apply(&mut show, &Command::Begin { kind, demo }).unwrap();
+            show
+        };
+        // A room: demo lights, its scenes, autopilot, and the first look playing.
+        let mut show = begin(Kind::Room, true);
+        assert_eq!((show.kind, show.devices.len()), (Kind::Room, 3));
+        let looks = Kind::Room.looks();
+        assert_eq!(
+            show.scenes.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            looks,
+            "its own scenes, in its own order"
+        );
         assert!(show.live.auto.enabled);
         assert_eq!(
             show.current_scene(),
             Some(show.scenes[0].id),
             "the first look is playing"
         );
-        // Strip effects went on the strips and matrix effects on the matrix.
+        assert!(
+            show.flash.on() && !show.flash.decided,
+            "the flash choice is still to be made"
+        );
+        assert!(show.bindings.iter().all(|b| matches!(b.action, Action::Scene { .. })));
+        // Strip effects go on the strips and matrix effects on the matrix.
         let chase = show.scenes.iter().find(|s| s.name == "Neon chase").unwrap();
-        let on = |effect: &str| chase.layers.iter().find(|l| l.effect == effect).unwrap().targets.len();
-        assert_eq!((on("chase"), on("sweep"), on("plasma")), (2, 1, 0));
-        // Doing it again changes nothing but what the user has changed since.
+        let only = |effect: &str| chase.layers.iter().find(|l| l.effect == effect).unwrap().only;
+        assert_eq!(
+            (only("chase"), only("sweep"), only("plasma")),
+            (Only::Strips, Only::Matrices, Only::Any)
+        );
+        // Doing it again changes nothing.
         let before = show.clone();
-        apply(&mut show, &Command::StartDemo).unwrap();
+        apply(
+            &mut show,
+            &Command::Begin {
+                kind: Kind::Room,
+                demo: true,
+            },
+        )
+        .unwrap();
         assert_eq!(show, before);
+
+        // A light show for passers-by: slower, and no demo lights unless asked.
+        let show = begin(Kind::Display, false);
+        assert_eq!(show.devices.len(), 0);
+        assert_eq!(show.scenes.len(), Kind::Display.looks().len());
+        assert_eq!(show.scenes[0].name, "Fairy lights");
+        assert!(show.live.fade >= 1.5 && show.live.auto.every_bars >= 16);
+        assert!(show.flash.on());
+
+        // A dance floor: the limit off, pads to play, changes on the beat.
+        let mut show = begin(Kind::Club, true);
+        assert!(!show.flash.on() && show.flash.decided);
+        assert_eq!(show.live.launch, Launch::Beat);
+        let live: Vec<&str> = show
+            .layers
+            .iter()
+            .filter(|l| l.group.is_some())
+            .filter_map(|l| l.name.as_deref())
+            .collect();
+        assert_eq!(live, ["White flash", "Strobe", "Pulse", "Lightning"]);
+        for action in [
+            Action::Blackout,
+            Action::TapTempo,
+            Action::Hit,
+            Action::NextScene,
+            Action::Freeze,
+        ] {
+            assert!(show.binding_for(action).is_some_and(|b| b.key.is_some()), "{action:?}");
+        }
+        let mut mended = show.clone();
+        mended.repair();
+        assert_eq!(mended, show);
+        // Again: no second set of pads.
+        let pads = show.bindings.len();
+        apply(
+            &mut show,
+            &Command::Begin {
+                kind: Kind::Club,
+                demo: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(show.bindings.len(), pads);
+        assert_eq!(show.layers.iter().filter(|l| l.effect == "lightning").count(), 1);
+
+        // Blank: the kind is noted and nothing else happens.
+        let show = begin(Kind::Custom, false);
+        assert_eq!((show.scenes.len(), show.devices.len()), (0, 0));
+        assert!(!show.live.auto.enabled);
+
         // The starter scenes can be added to a show that has its own.
         let mut own = show_with_device();
         apply(&mut own, &Command::SaveScene { name: "Mine".into() }).unwrap();
         apply(&mut own, &Command::AddLooks).unwrap();
-        assert_eq!(own.scenes.len(), LOOKS.len() + 1);
+        assert_eq!(own.scenes.len(), Kind::Custom.looks().len() + 1);
         assert_eq!(own.scenes[0].name, "Mine");
         assert!(!own.live.auto.enabled, "adding scenes does not switch autopilot on");
     }

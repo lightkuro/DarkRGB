@@ -44,6 +44,12 @@ export interface Palette {
   cyclic: boolean;
 }
 
+/** Who a show is for. */
+export type Kind = "room" | "display" | "club" | "custom";
+
+/** A kind of light an effect can be kept to. */
+export type Only = "any" | "strips" | "matrices";
+
 export interface Hello {
   app: string;
   version: string;
@@ -55,8 +61,10 @@ export interface Hello {
   band_groups: [number, number][];
   /** Frame rates the engine can run at. */
   frame_rates: number[];
-  /** The starter scenes that can be added. */
+  /** Every starter scene there is. */
   looks: { name: string; description: string }[];
+  /** The kinds of show, and the starter scenes each gets. */
+  kinds: { id: Kind; name: string; description: string; looks: string[] }[];
   effects: EffectInfo[];
   palettes: Palette[];
 }
@@ -183,6 +191,8 @@ export interface Layer {
   group: number | null;
   /** Drawn on each light by itself instead of once across all of them. */
   each: boolean;
+  /** Kept to strips or to matrices, among whatever it plays on. */
+  only: Only;
 }
 
 export interface Scene {
@@ -197,6 +207,8 @@ export interface Scene {
 export interface Show {
   version: number;
   name: string;
+  /** Who the show is for; it decided what the show began with. */
+  kind: Kind;
   devices: Device[];
   fixtures: Fixture[];
   light_groups: LightGroup[];
@@ -336,7 +348,6 @@ export type Command =
   | { type: "add_device"; address: string }
   | { type: "scan_network"; prefix: string }
   | { type: "set_demo"; enabled: boolean }
-  | { type: "start_demo" }
   | { type: "add_looks" }
   | { type: "set_scene_auto"; id: number; auto: boolean }
   | {
@@ -375,7 +386,7 @@ export type Command =
   | { type: "clear_key"; id: number }
   | { type: "unbind"; id: number }
   | { type: "arrange_pads"; order: number[] }
-  | { type: "add_quick_pad"; kind: "flash" | "strobe" | "pulse" }
+  | { type: "add_quick_pad"; kind: "flash" | "strobe" | "pulse" | "lightning" }
   | { type: "trigger"; binding: number; down: boolean }
   | { type: "perform"; action: Action }
   | { type: "tap" }
@@ -394,7 +405,8 @@ export type Command =
   | { type: "set_output"; frame_rate?: number }
   | { type: "set_flash"; limit?: number; strict?: boolean; decided?: boolean }
   | { type: "rename_scene"; id: number; name: string }
-  | { type: "new_show"; name?: string; keep_lights: boolean }
+  | { type: "new_show"; name?: string; keep_lights: boolean; kind?: Kind }
+  | { type: "begin"; kind: Kind; demo: boolean }
   | { type: "open_show"; file: string }
   | { type: "duplicate_show"; file: string }
   | { type: "delete_show"; file: string }
@@ -410,6 +422,7 @@ export type Command =
       enabled?: boolean;
       targets?: number[];
       each?: boolean;
+      only?: Only;
     }
   | { type: "set_param"; layer: number; param: string; value: ParamValue }
   | { type: "reset_params"; layer: number }
@@ -700,6 +713,13 @@ export function select(ids: number[], add = false): void {
   const allIn = ids.every((id) => current.includes(id));
   selection.set(allIn ? current.filter((id) => !ids.includes(id)) : [...new Set([...current, ...ids])]);
 }
+
+/**
+ * The kind picked on the first-run screen. It is applied when the first
+ * lights arrive, so changing one's mind before then costs nothing.
+ */
+export const firstKind = new Store<Kind>("room");
+export const useFirstKind = () => useSyncExternalStore(firstKind.subscribe, firstKind.get);
 
 /** Whether the window that lists the shows is open. */
 export const libraryOpen = new Store(false);

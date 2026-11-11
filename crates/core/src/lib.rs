@@ -9,6 +9,7 @@ pub mod effect;
 pub mod effects;
 pub mod layout;
 pub mod looks;
+mod more_effects;
 pub mod params;
 pub mod render;
 pub mod safety;
@@ -21,6 +22,6 @@ pub use layout::{Device, DeviceKind, Fixture, Shape};
 pub use params::{ParamKind, ParamSpec, ParamValue, Params};
 pub use render::{Cues, LayerHit, Renderer};
 pub use show::{
-    Action, Autopilot, Binding, Blend, FlashSettings, KeyMode, Launch, Layer, LayerGroup, LightGroup, Scene, Show,
-    Sound,
+    Action, Autopilot, Binding, Blend, FlashSettings, KeyMode, Kind, Launch, Layer, LayerGroup, LightGroup, Only,
+    Scene, Show, Sound,
 };
