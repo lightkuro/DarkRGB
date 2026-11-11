@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useEffect } from "react";
 import { DevicePanel } from "./components/DevicePanel";
 import { LayerPanel } from "./components/LayerPanel";
+import { Library } from "./components/Library";
 import { LivePads } from "./components/LivePads";
 import { ScenesBar } from "./components/ScenesBar";
 import { Settings } from "./components/Settings";
@@ -60,6 +61,7 @@ export function App() {
       {/* In the live view the scenes are pads, so the bar would repeat them. */}
       {view === "edit" && <ScenesBar />}
       <Settings />
+      <Library />
       <Toasts />
       {!connected && (
         <div className="offline" role="alert">

@@ -3,9 +3,7 @@
 
 import {
   AudioLines,
-  FileDown,
-  FileUp,
-  FilePlus2,
+  FolderOpen,
   Info,
   Keyboard,
   Lightbulb,
@@ -13,15 +11,17 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import changelog from "../../../CHANGELOG.md?raw";
 import {
   advancedPref,
   engine,
+  libraryOpen,
   perFrame,
   settingsPage,
   useAdvanced,
   useHello,
+  useLibrary,
   useSettingsPage,
   useShow,
   useStatus,
@@ -33,14 +33,14 @@ import {
 import { AudioControls, Tempo } from "./AudioMeter";
 import { DemoSwitch } from "./DevicePanel";
 import { KeyAssign, Keycap, modeNote } from "./Keys";
-import { ConfirmButton, NameField, Slider, Switch } from "./ui";
+import { NameField, Slider, Switch } from "./ui";
 
 const PAGES: { id: SettingsPage; name: string; icon: ReactNode }[] = [
   { id: "general", name: "General", icon: <SlidersHorizontal size={15} /> },
   { id: "sound", name: "Sound", icon: <AudioLines size={15} /> },
   { id: "lights", name: "Lights", icon: <Lightbulb size={15} /> },
   { id: "live", name: "Live and keys", icon: <Keyboard size={15} /> },
-  { id: "show", name: "Show file", icon: <Save size={15} /> },
+  { id: "show", name: "Show", icon: <Save size={15} /> },
   { id: "about", name: "About", icon: <Info size={15} /> },
 ];
 
@@ -415,24 +415,7 @@ function LivePage({ show }: { show: Show }) {
 
 function ShowFile({ show }: { show: Show }) {
   const status = useStatus();
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [keepLights, setKeepLights] = useState(true);
-  const [picked, setPicked] = useState<{ name: string; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const open = async () => {
-    if (!picked) return;
-    setBusy(true);
-    const result = await engine.importShow(picked.text);
-    setBusy(false);
-    if (result.ok) {
-      engine.toast("info", `Opened ${picked.name}. ${result.note ?? ""}`.trim());
-      setPicked(null);
-    } else {
-      engine.toast("error", result.error ?? "Could not open that file.");
-    }
-  };
-
+  const library = useLibrary();
   return (
     <>
       <NameField
@@ -446,70 +429,35 @@ function ShowFile({ show }: { show: Show }) {
           : "This show is not being saved to a file."}
       </p>
 
-      <h3>Copies</h3>
-      <div className="setting-actions">
-        <button type="button" className="button" onClick={() => engine.send({ type: "export_show" })}>
-          <FileDown size={15} /> Save a copy
-        </button>
-        <button type="button" className="button" onClick={() => fileRef.current?.click()}>
-          <FileUp size={15} /> Open a show file…
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".json,application/json"
-          hidden
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (file) setPicked({ name: file.name, text: await file.text() });
-          }}
-        />
-      </div>
-      <p className="hint">
-        A copy goes into a darkRGB folder in your Documents, on the computer the engine runs on. Use copies to keep
-        versions, or to move a show to another computer.
-      </p>
-      {picked && (
-        <div className="callout confirm">
-          <span>
-            Open <strong>{picked.name}</strong> in place of the show you have now? The current one is kept in a
-            file beside it.
-          </span>
-          <span className="confirm-actions">
-            <button type="button" className="text-button" onClick={() => setPicked(null)}>
-              Cancel
-            </button>
-            <button type="button" className="button small" disabled={busy} onClick={() => void open()}>
-              {busy ? "Opening…" : "Open it"}
-            </button>
-          </span>
-        </div>
-      )}
-
-      <h3>Start again</h3>
+      <h3>Other shows</h3>
       <div className="setting">
         <div className="setting-text">
-          <span className="setting-title">New show</span>
+          <span className="setting-title">Your shows</span>
           <span className="hint">
-            Clears the effects, scenes and keys. The show as it is now is kept in a file beside the show file, in
-            case you change your mind.
+            {library.available
+              ? `${library.shows.length === 1 ? "This is the only show" : `${library.shows.length} shows`} on this computer. `
+              : ""}
+            Open another show, start a new one, make copies, or bring one in from a file. The show's name in the
+            top bar opens the same window.
           </span>
-          <label className="check">
-            <input type="checkbox" checked={keepLights} onChange={(e) => setKeepLights(e.target.checked)} />
-            Keep my lights, their places and their groups
-          </label>
         </div>
         <div className="setting-control">
-          <ConfirmButton
-            label="Start a new show"
-            confirmLabel="Start again?"
-            onConfirm={() => engine.send({ type: "new_show", keep_lights: keepLights })}
+          <button
+            type="button"
+            className="button"
+            onClick={() => {
+              settingsPage.set(null);
+              libraryOpen.set(true);
+            }}
           >
-            <FilePlus2 size={16} />
-          </ConfirmButton>
+            <FolderOpen size={15} /> Shows…
+          </button>
         </div>
       </div>
+      <p className="hint">
+        The flash limit, frames per second, sound source, speaker delay and brightness ceiling belong to this
+        computer, not to a show: they stay as they are when you open another show.
+      </p>
     </>
   );
 }

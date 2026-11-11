@@ -161,16 +161,26 @@ code {
   text-align: left;
 }
 
+.show-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.show-name span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.show-name svg {
+  flex: none;
+  opacity: 0.7;
+}
+
 .show-name:hover {
   border-color: var(--line-strong);
   color: var(--text);
-}
-
-.show-name.editing {
-  border-color: var(--accent);
-  background: var(--bg);
-  color: var(--text);
-  width: 220px;
 }
 
 .audio {
@@ -1796,6 +1806,134 @@ input.number {
   overflow: hidden;
 }
 
+.dialog.library {
+  width: min(640px, 100%);
+  max-height: min(640px, 100%);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.dialog.library:focus {
+  outline: none;
+}
+
+.library-body {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 22px 22px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.new-show {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.new-show-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
+.show-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.show-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.show-row.open {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.show-row.broken .show-row-name {
+  color: var(--muted);
+}
+
+.show-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.show-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.show-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.show-row-edit {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-small);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+}
+
+.show-row-flag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.show-row-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.show-row-gap {
+  width: 26px;
+}
+
 .dialog.settings:focus {
   outline: none;
 }
@@ -2375,6 +2513,8 @@ input.number {
   transform: translateX(-50%);
   z-index: 50;
   display: grid;
+  /* A long word, such as a file's path, must wrap and not widen the toast. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   width: min(460px, calc(100vw - 32px));
 }
@@ -2391,6 +2531,8 @@ input.number {
 
 .toast span {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .toast.error {
@@ -2532,6 +2674,24 @@ input.number {
     border-radius: 0;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .dialog.library {
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+  }
+
+  .show-row {
+    flex-wrap: wrap;
+  }
+
+  .show-row-text {
+    flex-basis: 100%;
+  }
+
+  .show-row-actions {
+    margin-left: auto;
   }
 
   .settings-nav {

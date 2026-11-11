@@ -277,6 +277,29 @@ export interface Status {
   show_file: string | null;
 }
 
+/** One show in the library on the engine's computer. */
+export interface ShowEntry {
+  /** The file's name in the shows folder; how the show is asked for. */
+  file: string;
+  name: string;
+  /** When it was last saved, in seconds since 1970. */
+  modified: number;
+  lights: number;
+  effects: number;
+  scenes: number;
+  /** False for a file that could not be understood. */
+  readable: boolean;
+}
+
+export interface Library {
+  /** False when the engine was started with one show file of its own. */
+  available: boolean;
+  /** The file of the show that is open. */
+  current: string | null;
+  folder: string | null;
+  shows: ShowEntry[];
+}
+
 export interface AudioFeatures {
   level: number;
   bass: number;
@@ -359,7 +382,12 @@ export type Command =
     }
   | { type: "set_output"; frame_rate?: number; flash_limit?: number; flash_strict?: boolean }
   | { type: "rename_scene"; id: number; name: string }
-  | { type: "new_show"; keep_lights: boolean }
+  | { type: "new_show"; name?: string; keep_lights: boolean }
+  | { type: "open_show"; file: string }
+  | { type: "duplicate_show"; file: string }
+  | { type: "delete_show"; file: string }
+  | { type: "rename_show_file"; file: string; name: string }
+  | { type: "refresh_library" }
   | { type: "export_show" }
   | {
       type: "update_layer";
@@ -434,6 +462,7 @@ class Engine {
   readonly show = new Store<Show | null>(null);
   readonly status = new Store<Status | null>(null);
   readonly live = new Store<Live>({ held: [], pending_scene: null, tapped_bpm: 0, frozen: false });
+  readonly library = new Store<Library>({ available: false, current: null, folder: null, shows: [] });
   /** The scene that is playing exactly as it was saved, if any. */
   readonly currentScene = new Store<number | null>(null);
   readonly toasts = new Store<Toast[]>([]);
@@ -492,6 +521,13 @@ class Engine {
       case "status":
         this.status.set(message as unknown as Status);
         break;
+      case "library": {
+        const next = message as unknown as Library;
+        // Another show has other lights: nothing picked carries over.
+        if (next.current !== this.library.get().current) selection.set([]);
+        this.library.set(next);
+        break;
+      }
       case "hello":
         this.hello.set(message as unknown as Hello);
         break;
@@ -558,8 +594,9 @@ class Engine {
   }
 
   /**
-   * Replaces the show with one from a file. A whole show does not fit in
-   * a WebSocket message, so this goes over HTTP.
+   * Opens a show from a file: added to the library, or in place of the
+   * show when there is no library. A whole show does not fit in a
+   * WebSocket message, so this goes over HTTP.
    */
   async importShow(json: string): Promise<CommandResult> {
     try {
@@ -668,6 +705,11 @@ export function select(ids: number[], add = false): void {
   const allIn = ids.every((id) => current.includes(id));
   selection.set(allIn ? current.filter((id) => !ids.includes(id)) : [...new Set([...current, ...ids])]);
 }
+
+/** Whether the window that lists the shows is open. */
+export const libraryOpen = new Store(false);
+export const useLibraryOpen = () => useSyncExternalStore(libraryOpen.subscribe, libraryOpen.get);
+export const useLibrary = () => useSyncExternalStore(engine.library.subscribe, engine.library.get);
 
 /** Which page of the settings window is open, if it is open at all. */
 export type SettingsPage = "general" | "sound" | "lights" | "live" | "show" | "about";

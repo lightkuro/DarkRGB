@@ -192,9 +192,31 @@ pub enum Command {
     /// Starts again with an empty show, keeping the lights if asked. The
     /// show as it was is kept in a file beside it. Handled by the app.
     NewShow {
+        #[serde(default)]
+        name: Option<String>,
         #[serde(default = "yes")]
         keep_lights: bool,
     },
+    /// Opens another show from the library. Handled by the app, as are
+    /// the next three.
+    OpenShow {
+        file: String,
+    },
+    /// Makes a copy of a show in the library.
+    DuplicateShow {
+        file: String,
+    },
+    /// Moves a show to the library's trash folder.
+    DeleteShow {
+        file: String,
+    },
+    /// Renames a show in the library, open or not, and its file with it.
+    RenameShowFile {
+        file: String,
+        name: String,
+    },
+    /// Asks for the list of shows to be sent again.
+    RefreshLibrary,
     /// Writes a copy of the show to the Documents folder. Handled by the app.
     ExportShow,
     /// Does what a plain press of a pad for `action` would do, for things
@@ -343,7 +365,7 @@ fn finite(value: f32, what: &str) -> Result<f32, String> {
     }
 }
 
-fn name(value: &str, what: &str) -> Result<String, String> {
+pub(crate) fn name(value: &str, what: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(format!("{what} cannot be empty"));
@@ -441,6 +463,11 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
         | Command::Hit
         | Command::AutoTempo
         | Command::NewShow { .. }
+        | Command::OpenShow { .. }
+        | Command::DuplicateShow { .. }
+        | Command::DeleteShow { .. }
+        | Command::RenameShowFile { .. }
+        | Command::RefreshLibrary
         | Command::ExportShow => Err("that command needs the running app".into()),
 
         Command::SetDemo { enabled } => {

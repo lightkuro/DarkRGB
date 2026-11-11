@@ -10,6 +10,7 @@ pub mod commands;
 pub mod diagnostics;
 #[cfg(test)]
 mod e2e_tests;
+pub mod library;
 pub mod live;
 pub mod render_loop;
 pub mod server;
@@ -75,31 +76,36 @@ pub struct Engine {
     _discovery: Option<Discovery>,
 }
 
-/// Where the show is kept when no path is given. A show saved under the
+/// The folder the library of shows lives in. A show saved under the
 /// project's first name is carried over once.
-fn default_show_path() -> Option<PathBuf> {
+fn library_dir() -> Option<PathBuf> {
     let config = dirs::config_dir()?;
-    let path = config.join(APP_NAME).join("show.json");
+    let dir = config.join(APP_NAME);
     let old = config.join("OpenLightShow").join("show.json");
-    if !path.exists() && old.exists() {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        match std::fs::copy(&old, &path) {
+    // Only when nothing of ours exists yet; the library then moves it in.
+    if !dir.exists() && old.exists() {
+        let _ = std::fs::create_dir_all(&dir);
+        match std::fs::copy(&old, dir.join("show.json")) {
             Ok(_) => log::info!("carried the show over from {}", old.display()),
             Err(e) => log::warn!("could not carry the show over from {}: {e}", old.display()),
         }
     }
-    Some(path)
+    Some(dir)
 }
 
 impl Engine {
     /// Starts everything and returns once the UI can be opened at `url`.
     pub fn start(options: Options) -> anyhow::Result<Self> {
+        // A show file named on the command line is used by itself. Otherwise
+        // shows live in the library, and the one open last is opened again.
+        let library = match (&options.show, options.no_save) {
+            (None, false) => library_dir().map(library::Library::new),
+            _ => None,
+        };
         let save_path = if options.no_save {
             None
         } else {
-            options.show.clone().or_else(default_show_path)
+            options.show.clone().or_else(|| library.as_ref().map(|l| l.start()))
         };
         let (show, notice) = match &save_path {
             Some(path) => app::load_show(path),
@@ -108,7 +114,10 @@ impl Engine {
         if let Some(notice) = &notice {
             log::warn!("{notice}");
         }
-        let shared = Shared::new(show, save_path, notice);
+        if let (Some(library), Some(path)) = (&library, &save_path) {
+            library.set_current(path);
+        }
+        let shared = Shared::with_library(show, save_path, notice, library);
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -225,17 +234,7 @@ async fn save_when_changed(shared: Arc<Shared>) {
 }
 
 fn save_now(shared: &Shared) {
-    let Some(path) = &shared.save_path else {
-        return;
-    };
-    let show = shared.show.lock().unwrap().clone();
-    if let Err(e) = app::save_show(path, &show) {
-        log::error!("could not save the show to {}: {e}", path.display());
-        *shared.notice.lock().unwrap() = Some(format!(
-            "Your changes are not being saved: could not write {} ({e}).",
-            path.display()
-        ));
-    }
+    shared.save();
 }
 
 /// Keeps the list of audio inputs fresh for the UI's menu.

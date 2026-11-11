@@ -14,6 +14,7 @@ use serde::Serialize;
 use tokio::sync::watch;
 
 use crate::commands::{self, Command};
+use crate::library::{Library, free_path};
 use crate::live::{Live, Pending};
 
 /// The name shown to users. Kept in one place so a rename is one edit.
@@ -102,8 +103,13 @@ pub struct Shared {
     /// Local networks this computer is on, for suggesting addresses.
     pub networks: Mutex<Vec<LocalNetwork>>,
     pub scan: Mutex<ScanStatus>,
-    /// Where the show is saved; `None` keeps it in memory only.
-    pub save_path: Option<PathBuf>,
+    /// Where the show is saved; `None` keeps it in memory only. It changes
+    /// when another show from the library is opened.
+    pub save_path: Mutex<Option<PathBuf>>,
+    /// The folder of shows, unless the program was pointed at one file.
+    pub library: Option<Library>,
+    /// Bumped when the list of shows may have changed.
+    pub library_rev: watch::Sender<u64>,
     /// Something the user should be told once, such as an unreadable file.
     pub notice: Mutex<Option<String>>,
     /// What is happening live: held keys, a tapped tempo, a waiting scene.
@@ -115,6 +121,15 @@ pub struct Shared {
 
 impl Shared {
     pub fn new(show: Show, save_path: Option<PathBuf>, notice: Option<String>) -> Arc<Self> {
+        Self::with_library(show, save_path, notice, None)
+    }
+
+    pub fn with_library(
+        show: Show,
+        save_path: Option<PathBuf>,
+        notice: Option<String>,
+        library: Option<Library>,
+    ) -> Arc<Self> {
         let audio = AudioCapture::start(&show.audio.source, show.audio.sensitivity);
         Arc::new(Self {
             show: Mutex::new(show),
@@ -127,7 +142,9 @@ impl Shared {
             inputs: Mutex::new(Vec::new()),
             networks: Mutex::new(Vec::new()),
             scan: Mutex::new(ScanStatus::default()),
-            save_path,
+            save_path: Mutex::new(save_path),
+            library,
+            library_rev: watch::Sender::new(1),
             notice: Mutex::new(notice),
             live: Mutex::new(Live::default()),
             live_rev: watch::Sender::new(1),
@@ -180,8 +197,16 @@ impl Shared {
                 self.bump_live();
                 return Ok(None);
             }
-            Command::NewShow { keep_lights } => return self.new_show(*keep_lights),
+            Command::NewShow { name, keep_lights } => return self.new_show(name.as_deref(), *keep_lights),
             Command::ExportShow => return self.export_show(),
+            Command::OpenShow { file } => return self.open_show(file),
+            Command::DuplicateShow { file } => return self.duplicate_show(file),
+            Command::DeleteShow { file } => return self.delete_show(file),
+            Command::RenameShowFile { file, name } => return self.rename_show_file(file, name),
+            Command::RefreshLibrary => {
+                self.library_rev.send_modify(|r| *r += 1);
+                return Ok(None);
+            }
             _ => {}
         }
         {
@@ -205,7 +230,185 @@ impl Shared {
             }
         }
         self.bump();
+        if let Command::RenameShow { .. } = command {
+            self.rename_file();
+        }
         Ok(None)
+    }
+
+    /// Writes the show to its file now. A failure is reported in the UI.
+    pub fn save(&self) {
+        let Some(path) = self.save_path.lock().unwrap().clone() else {
+            return;
+        };
+        let show = self.show.lock().unwrap().clone();
+        if let Err(e) = save_show(&path, &show) {
+            log::error!("could not save the show to {}: {e}", path.display());
+            *self.notice.lock().unwrap() = Some(format!(
+                "Your changes are not being saved: could not write {} ({e}).",
+                path.display()
+            ));
+        }
+    }
+
+    /// The shows in the library and which one is open, for the UI.
+    pub fn library_status(&self) -> serde_json::Value {
+        let current = self
+            .save_path
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|p| p.file_name().and_then(|f| f.to_str()).map(str::to_string));
+        match &self.library {
+            Some(library) => {
+                let mut shows = library.list();
+                // The open show is listed as it is now, not as last saved.
+                if let Some(entry) = shows.iter_mut().find(|e| Some(&e.file) == current.as_ref()) {
+                    let show = self.show.lock().unwrap();
+                    entry.name = show.name.clone();
+                    entry.lights = show.devices.len();
+                    entry.effects = show.layers.len();
+                    entry.scenes = show.scenes.len();
+                    entry.readable = true;
+                }
+                serde_json::json!({
+                    "available": true,
+                    "current": current,
+                    "folder": library.shows_dir().display().to_string(),
+                    "shows": shows,
+                })
+            }
+            None => serde_json::json!({ "available": false, "current": current, "folder": null, "shows": [] }),
+        }
+    }
+
+    fn library(&self) -> Result<&Library, String> {
+        self.library
+            .as_ref()
+            .ok_or_else(|| "shows are not kept in a library when the program is started with one show file".to_string())
+    }
+
+    /// Makes `next`, kept in `path`, the open show. The show that was
+    /// open is saved first. Settings that belong to this computer and
+    /// room, not to a show, stay as they are.
+    fn switch_to(&self, path: PathBuf, mut next: Show) {
+        self.save();
+        next.repair();
+        {
+            let mut show = self.show.lock().unwrap();
+            next.output = show.output.clone();
+            next.audio = show.audio.clone();
+            next.master.limit = show.master.limit;
+            *show = next;
+        }
+        if let Some(library) = &self.library {
+            library.set_current(&path);
+        }
+        *self.save_path.lock().unwrap() = Some(path);
+        // Nothing held or waiting belongs to the new show.
+        self.live.lock().unwrap().let_go();
+        self.save();
+        self.bump_live();
+        self.bump();
+        self.library_rev.send_modify(|r| *r += 1);
+    }
+
+    fn open_show(&self, file: &str) -> Result<Option<String>, String> {
+        let path = self.library()?.path_of(file)?;
+        if self.save_path.lock().unwrap().as_ref() == Some(&path) {
+            return Ok(None);
+        }
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("could not read that show: {e}"))?;
+        let show = checked_show(&text)?;
+        self.switch_to(path, show);
+        Ok(None)
+    }
+
+    fn duplicate_show(&self, file: &str) -> Result<Option<String>, String> {
+        let library = self.library()?;
+        let path = library.path_of(file)?;
+        // The open show is copied as it is now, not as it was last saved.
+        let mut copy = if self.save_path.lock().unwrap().as_ref() == Some(&path) {
+            self.show.lock().unwrap().clone()
+        } else {
+            let text = std::fs::read_to_string(&path).map_err(|e| format!("could not read that show: {e}"))?;
+            checked_show(&text)?
+        };
+        copy.name = format!("{} copy", copy.name).chars().take(80).collect();
+        let to = library.new_path(&copy.name);
+        save_show(&to, &copy).map_err(|e| format!("could not write {}: {e}", to.display()))?;
+        self.library_rev.send_modify(|r| *r += 1);
+        Ok(None)
+    }
+
+    fn delete_show(&self, file: &str) -> Result<Option<String>, String> {
+        let library = self.library()?;
+        let path = library.path_of(file)?;
+        if self.save_path.lock().unwrap().as_ref() == Some(&path) {
+            return Err("that show is open; open another one first".into());
+        }
+        let to = library
+            .to_trash(&path)
+            .map_err(|e| format!("could not move that show to the trash: {e}"))?;
+        log::info!("moved {} to {}", path.display(), to.display());
+        self.library_rev.send_modify(|r| *r += 1);
+        // The window that lists the shows says where the trash folder is.
+        let name = to.file_stem().and_then(|s| s.to_str()).unwrap_or("The show");
+        Ok(Some(format!("{name} was moved to the trash folder.")))
+    }
+
+    /// After a show is renamed, its file takes the new name too.
+    /// Renames any show in the library. The open one goes the usual way,
+    /// so the change is seen at once.
+    fn rename_show_file(self: &Arc<Self>, file: &str, name: &str) -> Result<Option<String>, String> {
+        let library = self.library()?;
+        let path = library.path_of(file)?;
+        if self.save_path.lock().unwrap().as_ref() == Some(&path) {
+            return self.execute(&Command::RenameShow { name: name.into() });
+        }
+        let name = commands::name(name, "The show name")?;
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("could not read that show: {e}"))?;
+        let mut show = checked_show(&text)?;
+        if show.name == name {
+            return Ok(None);
+        }
+        show.name = name;
+        // Written under the new name first, so a failure loses nothing.
+        let to = library.new_path(&show.name);
+        save_show(&to, &show).map_err(|e| format!("could not write {}: {e}", to.display()))?;
+        if let Err(e) = std::fs::remove_file(&path) {
+            log::warn!("could not remove {} after renaming it: {e}", path.display());
+        }
+        self.library_rev.send_modify(|r| *r += 1);
+        Ok(None)
+    }
+
+    fn rename_file(&self) {
+        let Some(library) = &self.library else {
+            return;
+        };
+        let name = self.show.lock().unwrap().name.clone();
+        let mut path = self.save_path.lock().unwrap();
+        let Some(from) = path.clone() else {
+            return;
+        };
+        // Already named after the show: nothing to do.
+        let stem = from.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        let wanted = free_path(&library.shows_dir(), &name);
+        let wanted_stem = wanted.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        if stem == wanted_stem || wanted_stem.strip_suffix(" (2)") == Some(stem) {
+            return;
+        }
+        if !from.exists() {
+            // Never saved yet: just save under the new name from now on.
+            *path = Some(wanted.clone());
+            library.set_current(&wanted);
+        } else if std::fs::rename(&from, &wanted).is_ok() {
+            *path = Some(wanted.clone());
+            library.set_current(&wanted);
+        }
+        drop(path);
+        self.library_rev.send_modify(|r| *r += 1);
     }
 
     /// A pad or its key went down or came up.
@@ -329,10 +532,15 @@ impl Shared {
         }
     }
 
-    /// Starts again: no effects but the default one, no scenes, no keys.
-    /// The lights and their groups stay if asked.
-    fn new_show(&self, keep_lights: bool) -> Result<Option<String>, String> {
+    /// A new show: no effects but the default one, no scenes, no keys.
+    /// The lights and their groups come along if asked. With a library it
+    /// is a new file and the show that was open stays as it is; without
+    /// one it replaces the open show, which is kept in a file beside it.
+    fn new_show(&self, name: Option<&str>, keep_lights: bool) -> Result<Option<String>, String> {
         let mut next = Show::default();
+        if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
+            next.name = commands::name(name, "The show name")?;
+        }
         if keep_lights {
             let show = self.show.lock().unwrap();
             next.devices = show.devices.clone();
@@ -345,7 +553,14 @@ impl Shared {
             next.next_id = show.next_id.max(next.next_id);
             next.layers[0].id = next.alloc_id();
         }
-        Ok(self.replace_show(next))
+        match &self.library {
+            Some(library) => {
+                let path = library.new_path(&next.name);
+                self.switch_to(path, next);
+                Ok(None)
+            }
+            None => Ok(self.replace_show(next)),
+        }
     }
 
     /// Replaces the whole show, keeping the one it replaces in a file
@@ -353,7 +568,7 @@ impl Shared {
     pub fn replace_show(&self, mut next: Show) -> Option<String> {
         next.repair();
         let previous = std::mem::replace(&mut *self.show.lock().unwrap(), next.clone());
-        let kept = self.save_path.as_ref().and_then(|path| {
+        let kept = self.save_path.lock().unwrap().as_ref().and_then(|path| {
             let backup = path.with_file_name("show.previous.json");
             match save_show(&backup, &previous) {
                 Ok(()) => Some(format!("The show as it was is kept in {}.", backup.display())),
@@ -372,15 +587,19 @@ impl Shared {
         kept
     }
 
-    /// Takes a show from outside the program (a file the user picked) in
-    /// place of the current one, after the same checks a show file gets.
+    /// Takes a show from outside the program (a file the user picked),
+    /// after the same checks a show file gets. With a library it becomes
+    /// a new show there and is opened; the show that was open is untouched.
     pub fn import_show(&self, json: &str) -> Result<Option<String>, String> {
-        let show: Show = serde_json::from_str(json).map_err(|e| format!("that file is not a darkRGB show ({e})"))?;
-        show.validate().map_err(|e| format!("that show cannot be used: {e}"))?;
-        if show.version > darkrgb_core::show::SHOW_VERSION {
-            return Err("that show was saved by a newer version of darkRGB".into());
+        let show = checked_show(json)?;
+        match &self.library {
+            Some(library) => {
+                let path = library.new_path(&show.name);
+                self.switch_to(path, show);
+                Ok(None)
+            }
+            None => Ok(self.replace_show(show)),
         }
-        Ok(self.replace_show(show))
     }
 
     /// Writes a copy of the show to the Documents folder and says where.
@@ -535,6 +754,17 @@ impl Shared {
     }
 }
 
+/// Reads a show from text that came from outside the program, with the
+/// checks that make it safe to use.
+fn checked_show(json: &str) -> Result<Show, String> {
+    let show: Show = serde_json::from_str(json).map_err(|e| format!("that file is not a darkRGB show ({e})"))?;
+    show.validate().map_err(|e| format!("that show cannot be used: {e}"))?;
+    if show.version > darkrgb_core::show::SHOW_VERSION {
+        return Err("that show was saved by a newer version of darkRGB".into());
+    }
+    Ok(show)
+}
+
 /// Loads a show file. A missing file is a fresh start; an unreadable one is
 /// set aside as `.bak` and reported, never silently overwritten.
 pub fn load_show(path: &Path) -> (Show, Option<String>) {
@@ -585,32 +815,6 @@ pub fn load_show(path: &Path) -> (Show, Option<String>) {
     }
 }
 
-/// A file name for a show that is safe on any system and not yet taken:
-/// `Name.json`, then `Name (2).json`, and so on.
-fn free_path(folder: &Path, show_name: &str) -> PathBuf {
-    let mut stem: String = show_name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || " -_".contains(c) {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    stem = stem.trim().chars().take(60).collect();
-    if stem.is_empty() {
-        stem = "show".into();
-    }
-    let mut path = folder.join(format!("{stem}.json"));
-    let mut n = 2;
-    while path.exists() {
-        path = folder.join(format!("{stem} ({n}).json"));
-        n += 1;
-    }
-    path
-}
-
 fn set_aside(path: &Path) -> String {
     let backup = path.with_extension("json.bak");
     match std::fs::rename(path, &backup) {
@@ -634,6 +838,7 @@ pub fn save_show(path: &Path, show: &Show) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use darkrgb_core::Device;
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("darkrgb-test-{}-{name}", std::process::id()));
@@ -699,18 +904,6 @@ mod tests {
     }
 
     #[test]
-    fn exported_files_get_safe_names_that_are_not_taken() {
-        let dir = temp_dir("export");
-        let first = free_path(&dir, "My/Show: one?");
-        assert_eq!(first.file_name().unwrap(), "My_Show_ one_.json");
-        std::fs::write(&first, "x").unwrap();
-        let second = free_path(&dir, "My/Show: one?");
-        assert_eq!(second.file_name().unwrap(), "My_Show_ one_ (2).json");
-        assert_eq!(free_path(&dir, "  ").file_name().unwrap(), "show.json");
-        assert_eq!(free_path(&dir, "../../etc").file_name().unwrap(), "______etc.json");
-    }
-
-    #[test]
     fn a_new_show_can_keep_the_lights_and_the_old_show_is_kept_beside_it() {
         let dir = temp_dir("newshow");
         let path = dir.join("show.json");
@@ -722,7 +915,12 @@ mod tests {
         show.save_scene("One");
         let shared = Shared::new(show.clone(), Some(path.clone()), None);
 
-        let note = shared.execute(&Command::NewShow { keep_lights: true }).unwrap();
+        let note = shared
+            .execute(&Command::NewShow {
+                name: None,
+                keep_lights: true,
+            })
+            .unwrap();
         assert!(note.unwrap().contains("show.previous.json"));
         let (kept, _) = load_show(&path.with_file_name("show.previous.json"));
         assert_eq!(kept, show);
@@ -739,8 +937,196 @@ mod tests {
             assert_eq!(ids.len(), 4);
         }
 
-        shared.execute(&Command::NewShow { keep_lights: false }).unwrap();
+        shared
+            .execute(&Command::NewShow {
+                name: None,
+                keep_lights: false,
+            })
+            .unwrap();
         assert_eq!(*shared.show.lock().unwrap(), Show::default());
+    }
+
+    /// An app with a library of its own in a temporary folder.
+    fn with_library(name: &str) -> (Arc<Shared>, Library) {
+        let library = Library::new(temp_dir(name));
+        let path = library.start();
+        let (show, notice) = load_show(&path);
+        (
+            Shared::with_library(show, Some(path), notice, Some(library.clone())),
+            library,
+        )
+    }
+
+    fn files(library: &Library) -> Vec<String> {
+        let mut files: Vec<String> = library.list().into_iter().map(|e| e.file).collect();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn shows_in_the_library_can_be_made_opened_copied_renamed_and_deleted() {
+        let (shared, library) = with_library("shows");
+        let run = |command: Command| shared.execute(&command);
+        let current = |shared: &Shared| {
+            let path = shared.save_path.lock().unwrap().clone().unwrap();
+            path.file_name().unwrap().to_str().unwrap().to_string()
+        };
+
+        // Naming the first show names its file.
+        run(Command::RenameShow { name: "First".into() }).unwrap();
+        assert_eq!(current(&shared), "First.json");
+        shared
+            .show
+            .lock()
+            .unwrap()
+            .add_device(Device::wled("d", "127.0.0.1", 4048, 10), None);
+        // A setting that belongs to the computer, not to a show.
+        run(Command::SetOutput {
+            frame_rate: None,
+            flash_limit: Some(0.0),
+            flash_strict: None,
+        })
+        .unwrap();
+
+        // A new show is a new file. The first is saved as it was, not replaced.
+        run(Command::NewShow {
+            name: Some("Second".into()),
+            keep_lights: false,
+        })
+        .unwrap();
+        assert_eq!(current(&shared), "Second.json");
+        assert_eq!(files(&library), ["First.json", "Second.json"]);
+        {
+            let show = shared.show.lock().unwrap();
+            assert_eq!((show.name.as_str(), show.devices.len()), ("Second", 0));
+            assert_eq!(show.output.flash_limit, 0.0, "this computer's settings came along");
+        }
+        let (first, _) = load_show(&library.path_of("First.json").unwrap());
+        assert_eq!(first.devices.len(), 1);
+
+        let status = shared.library_status();
+        assert_eq!(status["current"], "Second.json");
+        assert_eq!(status["shows"].as_array().unwrap().len(), 2);
+        // The open show is listed as it is this moment, saved or not.
+        shared.show.lock().unwrap().name = "Second, renamed".into();
+        let status = shared.library_status();
+        let open = status["shows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["file"] == "Second.json")
+            .unwrap();
+        assert_eq!(open["name"], "Second, renamed");
+        shared.show.lock().unwrap().name = "Second".into();
+
+        // Opening the first brings its lights back and keeps the computer's settings.
+        run(Command::SetOutput {
+            frame_rate: Some(30),
+            flash_limit: None,
+            flash_strict: None,
+        })
+        .unwrap();
+        run(Command::OpenShow {
+            file: "First.json".into(),
+        })
+        .unwrap();
+        {
+            let show = shared.show.lock().unwrap();
+            assert_eq!((show.name.as_str(), show.devices.len()), ("First", 1));
+            assert_eq!(show.output.frame_rate, 30);
+        }
+        assert_eq!(
+            library.start().file_name().unwrap(),
+            "First.json",
+            "remembered for next time"
+        );
+
+        // A copy, under a name of its own.
+        run(Command::DuplicateShow {
+            file: "First.json".into(),
+        })
+        .unwrap();
+        assert_eq!(files(&library), ["First copy.json", "First.json", "Second.json"]);
+        let (copy, _) = load_show(&library.path_of("First copy.json").unwrap());
+        assert_eq!((copy.name.as_str(), copy.devices.len()), ("First copy", 1));
+
+        // The open show cannot be deleted; another goes to the trash, not away.
+        let delete = |file: &str| run(Command::DeleteShow { file: file.into() });
+        assert!(delete("First.json").unwrap_err().contains("open"));
+        let note = delete("Second.json").unwrap().unwrap();
+        assert_eq!(note, "Second was moved to the trash folder.");
+        assert_eq!(files(&library), ["First copy.json", "First.json"]);
+        let trashed = library.shows_dir().parent().unwrap().join("trash").join("Second.json");
+        assert!(trashed.is_file(), "the file is kept, in the trash");
+
+        // Names that are not plain show files are refused.
+        for bad in ["../First.json", "First", "/etc/passwd", "Second.json"] {
+            assert!(run(Command::OpenShow { file: bad.into() }).is_err(), "{bad}");
+            assert!(delete(bad).is_err(), "{bad}");
+        }
+
+        // Renaming the open show renames its file.
+        run(Command::RenameShow { name: "Main".into() }).unwrap();
+        assert_eq!(current(&shared), "Main.json");
+        assert_eq!(files(&library), ["First copy.json", "Main.json"]);
+
+        // A show that is not open can be renamed too, file and all.
+        run(Command::RenameShowFile {
+            file: "First copy.json".into(),
+            name: "Spare".into(),
+        })
+        .unwrap();
+        assert_eq!(files(&library), ["Main.json", "Spare.json"]);
+        let (spare, _) = load_show(&library.path_of("Spare.json").unwrap());
+        assert_eq!((spare.name.as_str(), spare.devices.len()), ("Spare", 1));
+        assert_eq!(current(&shared), "Main.json", "the open show is untouched");
+        // Asked of the open show, it is the same as renaming it.
+        run(Command::RenameShowFile {
+            file: "Main.json".into(),
+            name: "Main set".into(),
+        })
+        .unwrap();
+        assert_eq!(current(&shared), "Main set.json");
+        assert_eq!(shared.show.lock().unwrap().name, "Main set");
+        assert!(
+            run(Command::RenameShowFile {
+                file: "Spare.json".into(),
+                name: "  ".into(),
+            })
+            .is_err()
+        );
+        run(Command::RenameShowFile {
+            file: "Main set.json".into(),
+            name: "Main".into(),
+        })
+        .unwrap();
+        run(Command::RenameShowFile {
+            file: "Spare.json".into(),
+            name: "First copy".into(),
+        })
+        .unwrap();
+
+        // A show brought in from a file joins the library; nothing is replaced.
+        shared.import_show(r#"{"version":1,"name":"From a friend"}"#).unwrap();
+        assert_eq!(current(&shared), "From a friend.json");
+        assert_eq!(files(&library), ["First copy.json", "From a friend.json", "Main.json"]);
+        assert_eq!(
+            shared.show.lock().unwrap().output.frame_rate,
+            30,
+            "the file's own settings are not taken"
+        );
+        let (main, _) = load_show(&library.path_of("Main.json").unwrap());
+        assert_eq!(main.devices.len(), 1);
+    }
+
+    #[test]
+    fn without_a_library_the_library_commands_say_so() {
+        let shared = Shared::new(Show::default(), None, None);
+        let error = shared
+            .execute(&Command::OpenShow { file: "A.json".into() })
+            .unwrap_err();
+        assert!(error.contains("library"), "{error}");
+        assert_eq!(shared.library_status()["available"], false);
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //! - text `audio`: the current audio features, 30 times a second.
 //! - text `status`: frame rate, audio status, discovered devices, once a second.
 //! - text `live`: held keys, a waiting scene and the tapped tempo, on change.
+//! - text `library`: the shows on this computer and which is open, on change.
 //! - text `result`: the outcome of a command that carried an `id`.
 //! - binary: byte 0 says what it is (1 preview colours, 2 pixel positions),
 //!   bytes 4..8 are the layout serial, the payload starts at byte 8.
@@ -222,6 +223,14 @@ fn live_message(shared: &Shared) -> String {
     value.to_string()
 }
 
+fn library_message(shared: &Shared) -> String {
+    let mut value = shared.library_status();
+    if let Value::Object(map) = &mut value {
+        map.insert("type".into(), "library".into());
+    }
+    value.to_string()
+}
+
 fn audio_message(shared: &Shared) -> String {
     let mut value = serde_json::to_value(shared.features()).unwrap_or(Value::Null);
     if let Value::Object(map) = &mut value {
@@ -265,7 +274,7 @@ fn status_message(shared: &Shared) -> String {
         "scan": &*shared.scan.lock().unwrap(),
         "discovered": discovered,
         "notice": &*shared.notice.lock().unwrap(),
-        "show_file": shared.save_path.as_ref().map(|p| p.display().to_string()),
+        "show_file": shared.save_path.lock().unwrap().as_ref().map(|p| p.display().to_string()),
     })
     .to_string()
 }
@@ -289,6 +298,8 @@ async fn client(socket: WebSocket, shared: Arc<Shared>) {
     revision.mark_changed();
     let mut live = shared.live_rev.subscribe();
     live.mark_changed();
+    let mut library = shared.library_rev.subscribe();
+    library.mark_changed();
     // Keys this client is holding down, to let go of if it disappears.
     let mut holding: HashSet<u32> = HashSet::new();
     let mut layout = shared.layout.subscribe();
@@ -313,6 +324,16 @@ async fn client(socket: WebSocket, shared: Arc<Shared>) {
                 if changed.is_err() { break; }
                 live.mark_unchanged();
                 Some(Message::Text(live_message(&shared).into()))
+            }
+            changed = library.changed() => {
+                if changed.is_err() { break; }
+                library.mark_unchanged();
+                // Reading the folder touches the disk; keep it off this task.
+                let shared = shared.clone();
+                match tokio::task::spawn_blocking(move || library_message(&shared)).await {
+                    Ok(text) => Some(Message::Text(text.into())),
+                    Err(_) => None,
+                }
             }
             changed = layout.changed() => {
                 if changed.is_err() { break; }
