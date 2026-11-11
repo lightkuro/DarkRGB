@@ -1250,6 +1250,11 @@ input.number {
   display: grid;
   gap: 2px;
   padding: 6px;
+  /* A long list on a short window scrolls inside itself. */
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
 }
 
 .palette-option {
@@ -1272,6 +1277,128 @@ input.number {
   width: 96px;
   height: 16px;
   border-radius: 4px;
+}
+
+.palette-kept {
+  display: flex;
+  align-items: center;
+}
+
+.palette-kept .palette-option {
+  flex: 1;
+  min-width: 0;
+}
+
+.palette-own {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 8px 6px 4px;
+  border-top: 1px solid var(--line);
+}
+
+.palette-own-title {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.palette-option .swatch.own {
+  background: repeating-linear-gradient(90deg, var(--line-strong) 0 12px, var(--raised-2) 12px 24px);
+}
+
+.palette-stops {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.palette-stop {
+  position: relative;
+  display: inline-flex;
+}
+
+.palette-stop input[type="color"] {
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: none;
+}
+
+.palette-stop button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--raised-2);
+  color: var(--text);
+}
+
+.palette-add {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+}
+
+.palette-name,
+.keep-look {
+  display: flex;
+  gap: 8px;
+}
+
+.palette-name input,
+.keep-look input {
+  flex: 1;
+  min-width: 0;
+}
+
+.effect-card.kept .effect-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--teal);
+}
+
+.kept-swatch {
+  flex: none;
+  width: 96px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+.library-body[hidden] {
+  display: none;
+}
+
+.library-body h3 {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.library-tabs {
+  flex: none;
 }
 
 /* ------------------------------------------------- folders and groups */

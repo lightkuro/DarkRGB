@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use crate::color::{Palette, Rgb, palette};
+use crate::color::{Pal, Rgb, palette};
 use crate::effect::{
     AMBIENT, Effect, EffectDef, EffectInfo, FOLLOWS_SOUND, FlashUse, FrameCtx, HITS_AND_BEATS, HitWatch, hash2, noise2,
     smoothstep,
@@ -47,7 +47,7 @@ pub fn find(id: &str) -> Option<&'static EffectDef> {
 // ---------------------------------------------------------------- Plasma
 
 struct Plasma {
-    palette: &'static Palette,
+    palette: Pal,
     speed: f32,
     scale: f32,
     react: f32,
@@ -74,7 +74,7 @@ impl Plasma {
             },
             make: || {
                 Box::new(Plasma {
-                    palette: palette("neon"),
+                    palette: Pal::Borrowed(palette("neon")),
                     speed: 0.5,
                     scale: 1.2,
                     react: 0.6,
@@ -119,7 +119,7 @@ impl Effect for Plasma {
 // -------------------------------------------------------------- Spectrum
 
 struct Spectrum {
-    palette: &'static Palette,
+    palette: Pal,
     mirror: bool,
 }
 
@@ -140,7 +140,7 @@ impl Spectrum {
             },
             make: || {
                 Box::new(Spectrum {
-                    palette: palette("rainbow"),
+                    palette: Pal::Borrowed(palette("rainbow")),
                     mirror: false,
                 })
             },
@@ -233,7 +233,7 @@ impl Effect for Energy {
 // ------------------------------------------------------------ Beat pulse
 
 struct BeatPulse {
-    palette: &'static Palette,
+    palette: Pal,
     decay: f32,
     floor: f32,
     trigger: usize,
@@ -262,7 +262,7 @@ impl BeatPulse {
             },
             make: || {
                 Box::new(BeatPulse {
-                    palette: palette("candy"),
+                    palette: Pal::Borrowed(palette("candy")),
                     decay: 0.35,
                     floor: 0.04,
                     trigger: 0,
@@ -327,7 +327,7 @@ struct Bar {
 }
 
 struct Sweep {
-    palette: &'static Palette,
+    palette: Pal,
     time: f32,
     width: f32,
     direction: usize,
@@ -362,7 +362,7 @@ impl Sweep {
             },
             make: || {
                 Box::new(Sweep {
-                    palette: palette("neon"),
+                    palette: Pal::Borrowed(palette("neon")),
                     time: 0.45,
                     width: 0.14,
                     direction: 0,
@@ -441,7 +441,7 @@ impl Effect for Sweep {
 // ----------------------------------------------------------------- Chase
 
 struct Chase {
-    palette: &'static Palette,
+    palette: Pal,
     blocks: f32,
     fill: f32,
     sync: usize,
@@ -480,7 +480,7 @@ impl Chase {
             },
             make: || {
                 Box::new(Chase {
-                    palette: palette("candy"),
+                    palette: Pal::Borrowed(palette("candy")),
                     blocks: 4.0,
                     fill: 0.5,
                     sync: 0,
@@ -547,7 +547,7 @@ impl Effect for Chase {
 // ------------------------------------------------------------------ Fire
 
 struct Fire {
-    palette: &'static Palette,
+    palette: Pal,
     height: f32,
     speed: f32,
     react: f32,
@@ -576,7 +576,7 @@ impl Fire {
             },
             make: || {
                 Box::new(Fire {
-                    palette: palette("fire"),
+                    palette: Pal::Borrowed(palette("fire")),
                     height: 0.6,
                     speed: 1.0,
                     react: 0.7,
@@ -640,7 +640,7 @@ struct Meteor {
 }
 
 struct Meteors {
-    palette: &'static Palette,
+    palette: Pal,
     speed: f32,
     tail: f32,
     any_hit: bool,
@@ -670,7 +670,7 @@ impl Meteors {
             },
             make: || {
                 Box::new(Meteors {
-                    palette: palette("ice"),
+                    palette: Pal::Borrowed(palette("ice")),
                     speed: 1.1,
                     tail: 0.35,
                     any_hit: true,
@@ -932,7 +932,7 @@ struct Ring {
 }
 
 struct Ripple {
-    palette: &'static Palette,
+    palette: Pal,
     speed: f32,
     width: f32,
     trigger: usize,
@@ -961,7 +961,7 @@ impl Ripple {
             },
             make: || {
                 Box::new(Ripple {
-                    palette: palette("ocean"),
+                    palette: Pal::Borrowed(palette("ocean")),
                     speed: 1.0,
                     width: 0.12,
                     trigger: 0,
@@ -1103,7 +1103,7 @@ impl Effect for Sparkle {
 // ----------------------------------------------------------------- Meter
 
 struct Meter {
-    palette: &'static Palette,
+    palette: Pal,
     hold: bool,
     peak: f32,
 }
@@ -1125,7 +1125,7 @@ impl Meter {
             },
             make: || {
                 Box::new(Meter {
-                    palette: palette("fire"),
+                    palette: Pal::Borrowed(palette("fire")),
                     hold: true,
                     peak: 0.0,
                 })
@@ -1164,7 +1164,7 @@ impl Effect for Meter {
 // ------------------------------------------------------------------ Flow
 
 struct Flow {
-    palette: &'static Palette,
+    palette: Pal,
     speed: f32,
     scale: f32,
     dir: (f32, f32),
@@ -1189,7 +1189,7 @@ impl Flow {
             },
             make: || {
                 Box::new(Flow {
-                    palette: palette("rainbow"),
+                    palette: Pal::Borrowed(palette("rainbow")),
                     speed: 0.2,
                     scale: 1.0,
                     dir: (1.0, 0.0),
@@ -1357,6 +1357,27 @@ mod tests {
             fx.update(&noisy);
             assert!(brightest(fx.as_ref(), &noisy) > 0.5, "{id} dark when loud");
         }
+    }
+
+    #[test]
+    fn an_effect_can_use_colours_of_the_users_own() {
+        use crate::params::ParamValue;
+        let def = find("plasma").unwrap();
+        let mut params = Params::new();
+        params.insert("palette".into(), ParamValue::Text("#ff0000,#ff0000".into()));
+        let mut fx = (def.make)();
+        fx.configure(&ParamReader::new(&def.info.params, &params));
+        let c = ctx(0.0, AudioFeatures::default(), false);
+        fx.update(&c);
+        for i in 0..20 {
+            let p = fx.shade(i as f32 / 19.0, 0.5, &c);
+            assert!(p.r > 0.0 && p.g == 0.0 && p.b == 0.0, "only red, got {p:?}");
+        }
+        // Something that is neither a palette's name nor a list of colours falls back.
+        params.insert("palette".into(), ParamValue::Text("#nonsense".into()));
+        fx.configure(&ParamReader::new(&def.info.params, &params));
+        let p = fx.shade(0.3, 0.5, &c);
+        assert!(p.r.is_finite() && p.g.is_finite());
     }
 
     #[test]

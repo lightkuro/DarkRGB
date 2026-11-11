@@ -1,11 +1,12 @@
 // Scenes along the bottom: saved looks, one click (or one key) each.
 
-import { ChevronUp, Plus, RefreshCw, Shuffle, Sparkles, Trash2 } from "lucide-react";
+import { Bookmark, ChevronUp, Plus, RefreshCw, Shuffle, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   engine,
   settingsPage,
   useCurrentScene,
+  useLibrary,
   useHello,
   useLive,
   useShow,
@@ -58,8 +59,20 @@ function SaveScene() {
 }
 
 /** Rename, key, update and delete for one scene. */
-function SceneMenu({ scene, left, close }: { scene: Scene; left: number; close: () => void }) {
+function SceneMenu({
+  scene,
+  left,
+  close,
+  playing,
+}: {
+  scene: Scene;
+  left: number;
+  close: () => void;
+  /** This scene is what is playing, unchanged. */
+  playing: boolean;
+}) {
   const ref = useDismiss(true, close);
+  const library = useLibrary();
   return (
     <div className="popover scene-menu" role="dialog" aria-label={`Options for ${scene.name}`} ref={ref} style={{ left }}>
       <NameField
@@ -87,6 +100,19 @@ function SceneMenu({ scene, left, close }: { scene: Scene; left: number; close: 
         >
           <RefreshCw size={13} /> Update with what is playing
         </button>
+        {library.available && playing && (
+          <button
+            type="button"
+            className="text-button"
+            title="Keep this look to use in any show. It is listed when you add an effect, and under the show's name."
+            onClick={() => {
+              engine.send({ type: "save_look", name: scene.name });
+              close();
+            }}
+          >
+            <Bookmark size={13} /> Keep for any show
+          </button>
+        )}
         <span className="spacer" />
         <ConfirmButton
           label={`Delete ${scene.name}`}
@@ -185,7 +211,15 @@ export function ScenesBar() {
           </button>
         )}
       </div>
-      {menu && menuScene && <SceneMenu key={menu.id} scene={menuScene} left={menu.left} close={closeMenu} />}
+      {menu && menuScene && (
+        <SceneMenu
+          key={menu.id}
+          scene={menuScene}
+          left={menu.left}
+          close={closeMenu}
+          playing={current === menuScene.id}
+        />
+      )}
       {hello && (
         <button
           type="button"

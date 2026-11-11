@@ -16,7 +16,7 @@ pub mod safety;
 pub mod show;
 
 pub use audio::{AudioFeatures, BANDS, Band};
-pub use color::{Palette, Rgb};
+pub use color::{Pal, Palette, Rgb};
 pub use effect::{Effect, EffectInfo, FlashUse, FrameCtx};
 pub use layout::{Device, DeviceKind, Fixture, Shape};
 pub use params::{ParamKind, ParamSpec, ParamValue, Params};

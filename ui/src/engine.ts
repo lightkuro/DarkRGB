@@ -333,6 +333,40 @@ export interface ShowEntry {
   readable: boolean;
 }
 
+/** An effect with its settings, or a whole look, kept to use in any show. */
+export interface SavedPattern {
+  id: number;
+  name: string;
+  /** A look becomes a scene when used; an effect is added to what plays. */
+  look: boolean;
+  layers: { effect: string; name: string | null; params: Record<string, ParamValue> }[];
+}
+
+/** A palette of the user's own, kept under a name. */
+export interface SavedPalette {
+  id: number;
+  name: string;
+  /** The colours, as a palette setting holds them. */
+  value: string;
+}
+
+/**
+ * A palette setting's value as a palette: one of the built-in ones by id,
+ * or the user's own colours written out, such as "#ff0000,#ffffff|loop".
+ */
+export function readPalette(value: string, builtIn: Palette[]): Palette | undefined {
+  if (!value.startsWith("#")) return builtIn.find((p) => p.id === value);
+  const cyclic = value.endsWith("|loop");
+  const stops = (cyclic ? value.slice(0, -5) : value).split(",");
+  if (stops.length < 2 || stops.some((s) => !/^#[0-9a-fA-F]{6}$/.test(s))) return undefined;
+  return { id: value, name: "Your own", stops, cyclic };
+}
+
+/** The written form of a palette of the user's own. */
+export function writePalette(stops: string[], cyclic: boolean): string {
+  return stops.join(",") + (cyclic ? "|loop" : "");
+}
+
 export interface Library {
   /** False when the engine was started with one show file of its own. */
   available: boolean;
@@ -340,6 +374,8 @@ export interface Library {
   current: string | null;
   folder: string | null;
   shows: ShowEntry[];
+  patterns: SavedPattern[];
+  palettes: SavedPalette[];
 }
 
 export interface AudioFeatures {
@@ -431,6 +467,13 @@ export type Command =
   | { type: "delete_show"; file: string }
   | { type: "rename_show_file"; file: string; name: string }
   | { type: "refresh_library" }
+  | { type: "save_pattern"; layer: number; name?: string }
+  | { type: "save_look"; name: string }
+  | { type: "use_pattern"; id: number; group?: number | null }
+  | { type: "rename_pattern"; id: number; name: string }
+  | { type: "delete_pattern"; id: number }
+  | { type: "save_palette"; name: string; value: string }
+  | { type: "delete_palette"; id: number }
   | { type: "export_show" }
   | {
       type: "update_layer";
@@ -509,7 +552,14 @@ class Engine {
   readonly show = new Store<Show | null>(null);
   readonly status = new Store<Status | null>(null);
   readonly live = new Store<Live>({ held: [], pending_scene: null, tapped_bpm: 0, frozen: false });
-  readonly library = new Store<Library>({ available: false, current: null, folder: null, shows: [] });
+  readonly library = new Store<Library>({
+    available: false,
+    current: null,
+    folder: null,
+    shows: [],
+    patterns: [],
+    palettes: [],
+  });
   /** The scene that is playing exactly as it was saved, if any. */
   readonly currentScene = new Store<number | null>(null);
   readonly toasts = new Store<Toast[]>([]);
@@ -765,6 +815,8 @@ export function takeFirstKind(): Kind | null {
 /** Whether the window that lists the shows is open. */
 export const libraryOpen = new Store(false);
 export const useLibraryOpen = () => useSyncExternalStore(libraryOpen.subscribe, libraryOpen.get);
+/** Which list the window shows when it next opens. */
+export const libraryTab = new Store<"shows" | "kept">("shows");
 export const useLibrary = () => useSyncExternalStore(engine.library.subscribe, engine.library.get);
 
 /** Which page of the settings window is open, if it is open at all. */

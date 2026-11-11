@@ -7,14 +7,14 @@ use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use darkrgb_audio::{AudioCapture, InputDevice};
-use darkrgb_core::{Action, AudioFeatures, Device, KeyMode, Kind, Launch, Show};
+use darkrgb_core::{Action, AudioFeatures, Device, KeyMode, Kind, Launch, Only, Show};
 use darkrgb_output::scan::{self, LocalNetwork};
 use darkrgb_output::{DeviceStats, wled};
 use serde::Serialize;
 use tokio::sync::watch;
 
 use crate::commands::{self, Command};
-use crate::library::{Library, free_path};
+use crate::library::{Library, MAX_PALETTES, MAX_PATTERNS, Pattern, Saved, SavedPalette, free_path};
 use crate::live::{Live, Pending};
 
 /// The name shown to users. Kept in one place so a rename is one edit.
@@ -110,6 +110,8 @@ pub struct Shared {
     pub library: Option<Library>,
     /// Bumped when the list of shows may have changed.
     pub library_rev: watch::Sender<u64>,
+    /// Effects, looks and palettes kept to use in any show.
+    pub saved: Mutex<Saved>,
     /// Something the user should be told once, such as an unreadable file.
     pub notice: Mutex<Option<String>>,
     /// What is happening live: held keys, a tapped tempo, a waiting scene.
@@ -131,6 +133,7 @@ impl Shared {
         library: Option<Library>,
     ) -> Arc<Self> {
         let audio = AudioCapture::start(&show.audio.source, show.audio.sensitivity);
+        let saved = library.as_ref().map(Library::load_saved).unwrap_or_default();
         Arc::new(Self {
             show: Mutex::new(show),
             revision: watch::Sender::new(1),
@@ -145,6 +148,7 @@ impl Shared {
             save_path: Mutex::new(save_path),
             library,
             library_rev: watch::Sender::new(1),
+            saved: Mutex::new(saved),
             notice: Mutex::new(notice),
             live: Mutex::new(Live::default()),
             live_rev: watch::Sender::new(1),
@@ -211,6 +215,57 @@ impl Shared {
                 self.library_rev.send_modify(|r| *r += 1);
                 return Ok(None);
             }
+            Command::SavePattern { layer, name } => return self.save_pattern(Some(*layer), name.as_deref()),
+            Command::SaveLook { name } => return self.save_pattern(None, Some(name)),
+            Command::UsePattern { id, group } => return self.use_pattern(*id, *group),
+            Command::RenamePattern { id, name } => {
+                let name = commands::name(name, "The name")?;
+                return self.change_saved(|saved| {
+                    saved
+                        .patterns
+                        .iter_mut()
+                        .find(|p| p.id == *id)
+                        .map(|p| p.name = name)
+                        .ok_or_else(|| "that pattern is no longer there".to_string())
+                });
+            }
+            Command::DeletePattern { id } => {
+                return self.change_saved(|saved| {
+                    let before = saved.patterns.len();
+                    saved.patterns.retain(|p| p.id != *id);
+                    (saved.patterns.len() < before)
+                        .then_some(())
+                        .ok_or_else(|| "that pattern is no longer there".to_string())
+                });
+            }
+            Command::SavePalette { name, value } => {
+                let name = commands::name(name, "The name")?;
+                let own = darkrgb_core::color::parse_custom(value)
+                    .ok_or("that is not a palette of your own: it needs 2 to 8 colours")?;
+                let value = darkrgb_core::color::write_custom(&own);
+                return self.change_saved(|saved| {
+                    // The same name again replaces the colours kept under it.
+                    if let Some(existing) = saved.palettes.iter_mut().find(|p| p.name == name) {
+                        existing.value = value;
+                        return Ok(());
+                    }
+                    if saved.palettes.len() >= MAX_PALETTES {
+                        return Err(format!("at most {MAX_PALETTES} palettes can be kept"));
+                    }
+                    let id = saved.alloc_id();
+                    saved.palettes.push(SavedPalette { id, name, value });
+                    Ok(())
+                });
+            }
+            Command::DeletePalette { id } => {
+                return self.change_saved(|saved| {
+                    let before = saved.palettes.len();
+                    saved.palettes.retain(|p| p.id != *id);
+                    (saved.palettes.len() < before)
+                        .then_some(())
+                        .ok_or_else(|| "that palette is no longer there".to_string())
+                });
+            }
             _ => {}
         }
         {
@@ -275,14 +330,41 @@ impl Shared {
                     entry.scenes = show.scenes.len();
                     entry.readable = true;
                 }
+                let saved = self.saved.lock().unwrap();
+                let patterns: Vec<serde_json::Value> = saved
+                    .patterns
+                    .iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "id": p.id,
+                            "name": p.name,
+                            "look": p.look,
+                            // Enough for the UI to describe it and draw a swatch.
+                            "layers": p.layers.iter().map(|l| serde_json::json!({
+                                "effect": l.effect,
+                                "name": l.name,
+                                "params": l.params,
+                            })).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
                 serde_json::json!({
                     "available": true,
                     "current": current,
                     "folder": library.shows_dir().display().to_string(),
                     "shows": shows,
+                    "patterns": patterns,
+                    "palettes": saved.palettes,
                 })
             }
-            None => serde_json::json!({ "available": false, "current": current, "folder": null, "shows": [] }),
+            None => serde_json::json!({
+                "available": false,
+                "current": current,
+                "folder": null,
+                "shows": [],
+                "patterns": [],
+                "palettes": [],
+            }),
         }
     }
 
@@ -362,6 +444,108 @@ impl Shared {
     }
 
     /// After a show is renamed, its file takes the new name too.
+    /// Changes what is kept, writes it to disk and tells the clients.
+    /// Nothing is changed if `change` refuses or the file cannot be written.
+    fn change_saved(&self, change: impl FnOnce(&mut Saved) -> Result<(), String>) -> Result<Option<String>, String> {
+        let library = self.library()?;
+        let mut saved = self.saved.lock().unwrap();
+        let mut next = saved.clone();
+        change(&mut next)?;
+        library
+            .store_saved(&next)
+            .map_err(|e| format!("could not write the patterns file: {e}"))?;
+        *saved = next;
+        drop(saved);
+        self.library_rev.send_modify(|r| *r += 1);
+        Ok(None)
+    }
+
+    /// Keeps one effect (`layer`), or the whole look that is playing, to
+    /// use in any show. Lights are not kept, only kinds of light, because
+    /// another show has other lights.
+    fn save_pattern(&self, layer: Option<u32>, name: Option<&str>) -> Result<Option<String>, String> {
+        let (layers, fallback) = {
+            let show = self.show.lock().unwrap();
+            let portable = |layer: &darkrgb_core::Layer| {
+                let mut kept = layer.clone();
+                // Playing on strips only, or matrices only, is kept as that rule.
+                if kept.only == Only::Any && !kept.targets.is_empty() {
+                    let hit: Vec<_> = show.fixtures.iter().filter(|f| Show::layer_hits(layer, f)).collect();
+                    if !hit.is_empty() && hit.iter().all(|f| Only::Strips.allows(&f.shape)) {
+                        kept.only = Only::Strips;
+                    } else if !hit.is_empty() && hit.iter().all(|f| Only::Matrices.allows(&f.shape)) {
+                        kept.only = Only::Matrices;
+                    }
+                }
+                kept.targets.clear();
+                kept.group = None;
+                kept.id = 0;
+                kept
+            };
+            match layer {
+                Some(id) => {
+                    let layer = show
+                        .layers
+                        .iter()
+                        .find(|l| l.id == id)
+                        .ok_or("that effect no longer exists")?;
+                    let effect =
+                        darkrgb_core::effects::find(&layer.effect).map_or(layer.effect.as_str(), |d| d.info.name);
+                    let mut kept = portable(layer);
+                    kept.enabled = true;
+                    (vec![kept], layer.name.clone().unwrap_or_else(|| effect.to_string()))
+                }
+                None => {
+                    let (layers, _) = show.scene_part();
+                    if layers.is_empty() {
+                        return Err("there are no effects to keep".into());
+                    }
+                    (layers.iter().map(portable).collect(), "Look".to_string())
+                }
+            }
+        };
+        let look = layer.is_none();
+        let name = commands::name(name.filter(|n| !n.trim().is_empty()).unwrap_or(&fallback), "The name")?;
+        let kept = name.clone();
+        self.change_saved(|saved| {
+            // The same name again, for the same kind of thing, replaces it.
+            if let Some(existing) = saved.patterns.iter_mut().find(|p| p.name == name && p.look == look) {
+                existing.layers = layers;
+                return Ok(());
+            }
+            if saved.patterns.len() >= MAX_PATTERNS {
+                return Err(format!("at most {MAX_PATTERNS} patterns can be kept"));
+            }
+            let id = saved.alloc_id();
+            saved.patterns.push(Pattern { id, name, look, layers });
+            Ok(())
+        })?;
+        Ok(Some(if look {
+            format!("Kept the look \"{kept}\". In any show, it is offered when you add an effect.")
+        } else {
+            format!("Kept as \"{kept}\". In any show, it is offered when you add an effect.")
+        }))
+    }
+
+    /// Uses something kept: see `Command::UsePattern`.
+    fn use_pattern(self: &Arc<Self>, id: u32, group: Option<u32>) -> Result<Option<String>, String> {
+        self.library()?;
+        let pattern = self
+            .saved
+            .lock()
+            .unwrap()
+            .patterns
+            .iter()
+            .find(|p| p.id == id)
+            .cloned()
+            .ok_or("that pattern is no longer there")?;
+        self.execute(&Command::Insert {
+            layers: pattern.layers,
+            group: if pattern.look { None } else { group },
+            scene: pattern.look.then_some(pattern.name),
+        })
+    }
+
     /// Renames any show in the library. The open one goes the usual way,
     /// so the change is seen at once.
     fn rename_show_file(self: &Arc<Self>, file: &str, name: &str) -> Result<Option<String>, String> {
@@ -1155,6 +1339,207 @@ mod tests {
     }
 
     #[test]
+    fn effects_looks_and_palettes_can_be_kept_and_used_in_another_show() {
+        use darkrgb_core::params::ParamValue;
+        use darkrgb_core::{Link, Source};
+        let (shared, library) = with_library("patterns");
+        let run = |command: Command| shared.execute(&command);
+        // A strip and a matrix, and an effect made the user's own: its
+        // name, its colours, a slider that follows the bass, and only on the strip.
+        let (layer, strip) = {
+            let mut show = shared.show.lock().unwrap();
+            show.add_device(Device::wled("strip", "127.0.0.1", 4048, 10), None);
+            show.add_device(Device::wled("matrix", "127.0.0.2", 4048, 16), Some((4, 4)));
+            (show.layers[0].id, show.fixtures[0].id)
+        };
+        run(Command::SetParam {
+            layer,
+            param: "palette".into(),
+            value: ParamValue::Text("#ff0000,#00ff00|loop".into()),
+        })
+        .unwrap();
+        run(Command::UpdateLayer {
+            id: layer,
+            effect: None,
+            opacity: Some(0.5),
+            blend: None,
+            enabled: None,
+            targets: Some(vec![strip]),
+            each: None,
+            only: None,
+        })
+        .unwrap();
+        run(Command::SetLink {
+            layer,
+            param: "speed".into(),
+            source: Source::Bass,
+            amount: 0.3,
+        })
+        .unwrap();
+        run(Command::RenameLayer {
+            id: layer,
+            name: "Mine".into(),
+        })
+        .unwrap();
+
+        let note = run(Command::SavePattern { layer, name: None }).unwrap().unwrap();
+        assert!(note.contains("Mine"), "{note}");
+        // The whole look, of two effects.
+        run(Command::AddLayer {
+            effect: "sparkle".into(),
+            group: None,
+        })
+        .unwrap();
+        run(Command::SaveLook { name: "Evening".into() }).unwrap();
+        // A palette, tidied as it is kept.
+        run(Command::SavePalette {
+            name: "Flag".into(),
+            value: "#FF0000,#ffffff".into(),
+        })
+        .unwrap();
+        assert!(
+            run(Command::SavePalette {
+                name: "Bad".into(),
+                value: "rainbow".into()
+            })
+            .is_err()
+        );
+
+        let status = shared.library_status();
+        let patterns = status["patterns"].as_array().unwrap();
+        assert_eq!(patterns.len(), 2);
+        assert_eq!(
+            (&patterns[0]["name"], &patterns[0]["look"]),
+            (&"Mine".into(), &false.into())
+        );
+        assert_eq!(patterns[1]["layers"].as_array().unwrap().len(), 2);
+        assert_eq!(status["palettes"][0]["value"], "#ff0000,#ffffff");
+        // It is on disk: reading the file gives what is in memory.
+        assert_eq!(library.load_saved(), *shared.saved.lock().unwrap());
+        let (effect_id, look_id) = {
+            let saved = shared.saved.lock().unwrap();
+            (saved.patterns[0].id, saved.patterns[1].id)
+        };
+        // Keeping under the same name again replaces, and does not add.
+        run(Command::SavePattern { layer, name: None }).unwrap();
+        assert_eq!(shared.saved.lock().unwrap().patterns.len(), 2);
+
+        // Another show, with other lights.
+        run(Command::NewShow {
+            name: Some("Other".into()),
+            keep_lights: false,
+            kind: None,
+        })
+        .unwrap();
+        shared
+            .show
+            .lock()
+            .unwrap()
+            .add_device(Device::wled("other strip", "127.0.0.3", 4048, 20), None);
+        run(Command::UsePattern {
+            id: effect_id,
+            group: None,
+        })
+        .unwrap();
+        {
+            let show = shared.show.lock().unwrap();
+            assert_eq!(show.layers.len(), 2);
+            let used = show.layers.last().unwrap();
+            assert_eq!(used.name.as_deref(), Some("Mine"));
+            assert_eq!(used.opacity, 0.5);
+            assert_eq!(
+                used.params["palette"],
+                ParamValue::Text("#ff0000,#00ff00|loop".into()),
+                "the colours came along inside the setting"
+            );
+            assert_eq!(
+                used.links,
+                vec![Link {
+                    param: "speed".into(),
+                    source: Source::Bass,
+                    amount: 0.3
+                }]
+            );
+            assert!(used.targets.is_empty(), "no lights are named");
+            assert_eq!(used.only, Only::Strips, "but it still keeps to strips");
+            assert!(show.validate().is_ok());
+        }
+        // A look becomes a scene, and is switched to. Twice gives two scenes.
+        run(Command::UsePattern {
+            id: look_id,
+            group: None,
+        })
+        .unwrap();
+        run(Command::UsePattern {
+            id: look_id,
+            group: None,
+        })
+        .unwrap();
+        {
+            let show = shared.show.lock().unwrap();
+            let names: Vec<&str> = show.scenes.iter().map(|s| s.name.as_str()).collect();
+            assert_eq!(names, ["Evening", "Evening 2"]);
+            assert_eq!(show.current_scene(), Some(show.scenes[1].id));
+            assert_eq!(show.layers.len(), 2);
+            let mut mended = show.clone();
+            mended.repair();
+            assert_eq!(mended, *show);
+        }
+
+        // Renamed and deleted.
+        run(Command::RenamePattern {
+            id: effect_id,
+            name: "Renamed".into(),
+        })
+        .unwrap();
+        assert_eq!(shared.saved.lock().unwrap().patterns[0].name, "Renamed");
+        run(Command::DeletePattern { id: look_id }).unwrap();
+        assert!(run(Command::DeletePattern { id: look_id }).is_err());
+        assert!(
+            run(Command::UsePattern {
+                id: look_id,
+                group: None
+            })
+            .is_err()
+        );
+        let palette = shared.saved.lock().unwrap().palettes[0].id;
+        run(Command::DeletePalette { id: palette }).unwrap();
+        assert_eq!(library.load_saved(), *shared.saved.lock().unwrap());
+
+        // A patterns file edited by hand cannot put nonsense into a show.
+        {
+            let mut saved = shared.saved.lock().unwrap();
+            let pattern = &mut saved.patterns[0];
+            pattern.layers[0].params.insert("speed".into(), ParamValue::Number(1e9));
+            pattern.layers[0]
+                .params
+                .insert("made_up".into(), ParamValue::Bool(true));
+            pattern.layers[0].opacity = f32::NAN;
+            pattern.layers[0].targets = vec![4242];
+        }
+        run(Command::UsePattern {
+            id: effect_id,
+            group: None,
+        })
+        .unwrap();
+        {
+            let show = shared.show.lock().unwrap();
+            let used = show.layers.last().unwrap();
+            assert_eq!(used.opacity, 1.0);
+            assert!(!used.params.contains_key("made_up"));
+            assert!(matches!(used.params["speed"], ParamValue::Number(v) if v <= 2.0));
+            assert!(used.targets.is_empty());
+        }
+        shared.saved.lock().unwrap().patterns[0].layers[0].effect = "from_the_future".into();
+        let error = run(Command::UsePattern {
+            id: effect_id,
+            group: None,
+        })
+        .unwrap_err();
+        assert!(error.contains("from_the_future"), "{error}");
+    }
+
+    #[test]
     fn without_a_library_the_library_commands_say_so() {
         let shared = Shared::new(Show::default(), None, None);
         let error = shared
@@ -1162,6 +1547,9 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("library"), "{error}");
         assert_eq!(shared.library_status()["available"], false);
+        let layer = shared.show.lock().unwrap().layers[0].id;
+        assert!(shared.execute(&Command::SavePattern { layer, name: None }).is_err());
+        assert!(shared.execute(&Command::UsePattern { id: 1, group: None }).is_err());
     }
 
     #[test]

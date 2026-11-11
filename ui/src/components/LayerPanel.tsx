@@ -7,6 +7,7 @@
 
 import {
   AudioLines,
+  Bookmark,
   BoxSelect,
   ChevronDown,
   ChevronRight,
@@ -23,20 +24,24 @@ import {
   Settings2,
   SlidersHorizontal,
   Trash2,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fullPref,
   engine,
   perFrame,
+  readPalette,
   settingsPage,
   toggleFolded,
   useFull,
   useFolded,
   useHello,
+  useLibrary,
   useLive,
   useSelection,
   useShow,
+  writePalette,
   type Band,
   type Blend,
   type EffectInfo,
@@ -48,6 +53,7 @@ import {
   type Palette,
   type ParamSpec,
   type ParamValue,
+  type SavedPattern,
   type Show,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
@@ -89,7 +95,7 @@ export function swatch(layer: Layer, effect: EffectInfo | undefined, hello: Hell
   const value = (spec: ParamSpec) => String(layer.params[spec.id] ?? spec.default);
   const palette = effect?.params.find((p) => p.kind === "palette");
   if (palette) {
-    const found = hello.palettes.find((p) => p.id === value(palette));
+    const found = readPalette(value(palette), hello.palettes);
     if (found) return gradient(found);
   }
   const colours = effect?.params.filter((p) => p.kind === "color").map(value) ?? [];
@@ -131,22 +137,33 @@ function bandName(band: Band, hello: Hello): string {
   return `${hz(lowHz)} to ${hz(highHz)}`;
 }
 
+/** Colours a new palette of one's own starts from. */
+const STARTER = ["#ff3b30", "#ffffff"];
+
 function PalettePicker({ value, onChange, label }: { value: string; onChange: (id: string) => void; label: string }) {
   const palettes = useHello()?.palettes ?? [];
+  const library = useLibrary();
   const [open, setOpen] = useState(false);
+  const [naming, setNaming] = useState<string | null>(null);
   const close = useCallback(() => setOpen(false), []);
   const ref = useDismiss(open, close);
-  const current = palettes.find((p) => p.id === value) ?? palettes[0];
+  const current = readPalette(value, palettes) ?? palettes[0];
+  const own = value.startsWith("#") ? current : undefined;
+  const keptAs = library.palettes.find((p) => p.value === value);
+  // Colour pickers fire continuously while dragging.
+  const quiet = useRef(perFrame((next: string) => onChange(next))).current;
+  const setOwn = (stops: string[], cyclic: boolean, dragging = false) =>
+    (dragging ? quiet : onChange)(writePalette(stops, cyclic));
   return (
     <div className="field palette-field" ref={ref}>
       <span className="field-head">
         <span>{label}</span>
-        <output>{current?.name}</output>
+        <output>{keptAs?.name ?? current?.name}</output>
       </span>
       <button
         type="button"
         className="palette-current"
-        aria-label={`${label}: ${current?.name ?? ""}. Change`}
+        aria-label={`${label}: ${keptAs?.name ?? current?.name ?? ""}. Change`}
         aria-expanded={open}
         style={{ background: current ? gradient(current) : undefined }}
         onClick={() => setOpen(!open)}
@@ -167,6 +184,131 @@ function PalettePicker({ value, onChange, label }: { value: string; onChange: (i
               {p.name}
             </button>
           ))}
+          {library.palettes.map((p) => {
+            const read = readPalette(p.value, palettes);
+            return (
+              <span key={`kept-${p.id}`} className="palette-kept">
+                <button
+                  type="button"
+                  className={`palette-option ${p.value === value ? "selected" : ""}`}
+                  onClick={() => {
+                    onChange(p.value);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="swatch" style={{ background: read ? gradient(read) : undefined }} />
+                  {p.name}
+                </button>
+                <ConfirmButton
+                  label={`Delete the palette ${p.name}`}
+                  confirmLabel="Delete?"
+                  onConfirm={() => engine.send({ type: "delete_palette", id: p.id })}
+                >
+                  <Trash2 size={13} />
+                </ConfirmButton>
+              </span>
+            );
+          })}
+          <div className="palette-own">
+            {own ? (
+              <>
+                <span className="palette-own-title">Your own colours</span>
+                <div className="palette-stops">
+                  {own.stops.map((stop, i) => (
+                    <span key={i} className="palette-stop">
+                      <input
+                        type="color"
+                        aria-label={`Colour ${i + 1}`}
+                        value={stop}
+                        onChange={(e) =>
+                          setOwn(
+                            own.stops.map((s, k) => (k === i ? e.target.value : s)),
+                            own.cyclic,
+                            true,
+                          )
+                        }
+                      />
+                      {own.stops.length > 2 && (
+                        <button
+                          type="button"
+                          aria-label={`Remove colour ${i + 1}`}
+                          title="Remove this colour"
+                          onClick={() =>
+                            setOwn(
+                              own.stops.filter((_, k) => k !== i),
+                              own.cyclic,
+                            )
+                          }
+                        >
+                          <X size={10} />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                  {own.stops.length < 8 && (
+                    <button
+                      type="button"
+                      className="palette-add"
+                      aria-label="Add a colour"
+                      title="Add a colour"
+                      onClick={() => setOwn([...own.stops, own.stops[own.stops.length - 1] ?? "#ffffff"], own.cyclic)}
+                    >
+                      <Plus size={13} />
+                    </button>
+                  )}
+                </div>
+                <div className="field inline">
+                  <span title="On: the last colour blends back into the first, for effects that go round. Off: it runs from the first colour to the last, for effects that go from quiet to loud.">
+                    Goes round
+                  </span>
+                  <Switch
+                    checked={own.cyclic}
+                    label="The last colour blends back into the first"
+                    onChange={(cyclic) => setOwn(own.stops, cyclic)}
+                  />
+                </div>
+                {library.available &&
+                  !keptAs &&
+                  (naming === null ? (
+                    <button type="button" className="text-button" onClick={() => setNaming("")}>
+                      <Bookmark size={13} /> Keep these colours for any show
+                    </button>
+                  ) : (
+                    <form
+                      className="palette-name"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (!naming.trim()) return;
+                        engine.send({ type: "save_palette", name: naming.trim(), value });
+                        setNaming(null);
+                      }}
+                    >
+                      <input
+                        type="text"
+                        autoFocus
+                        maxLength={80}
+                        placeholder="Name for these colours"
+                        aria-label="Name for these colours"
+                        value={naming}
+                        onChange={(e) => setNaming(e.target.value)}
+                      />
+                      <button type="submit" className="button small">
+                        Keep
+                      </button>
+                    </form>
+                  ))}
+              </>
+            ) : (
+              <button
+                type="button"
+                className="palette-option"
+                onClick={() => setOwn(current && current.stops.length <= 8 ? current.stops : STARTER, current?.cyclic ?? true)}
+              >
+                <span className="swatch own" />
+                Your own colours…
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -247,11 +389,42 @@ function ParamControl({ layer, spec, full }: { layer: Layer; spec: ParamSpec; fu
 }
 
 /** Effects grouped the way the engine groups them. */
-export function EffectPicker({ onPick, current }: { onPick: (id: string) => void; current?: string }) {
-  const effects = useHello()?.effects ?? [];
+export function EffectPicker({
+  onPick,
+  onUse,
+  current,
+}: {
+  onPick: (id: string) => void;
+  /** Given when something kept can be added here: called with its id. */
+  onUse?: (pattern: number) => void;
+  current?: string;
+}) {
+  const hello = useHello();
+  const library = useLibrary();
+  const effects = hello?.effects ?? [];
   const categories = [...new Set(effects.map((e) => e.category))];
+  const kept = onUse ? library.patterns : [];
+  const describe = (pattern: SavedPattern) =>
+    pattern.look
+      ? `A look of ${pattern.layers.length} effects. Added as a scene.`
+      : (effects.find((e) => e.id === pattern.layers[0]?.effect)?.name ?? "An effect") + ", with your settings.";
   return (
     <div className="effect-picker">
+      {kept.length > 0 && onUse && (
+        <div className="effect-group">
+          <h3>Kept by you</h3>
+          <div className="effect-grid">
+            {kept.map((pattern) => (
+              <button key={pattern.id} type="button" className="effect-card kept" onClick={() => onUse(pattern.id)}>
+                <span className="effect-name">
+                  <Bookmark size={12} aria-hidden /> {pattern.name}
+                </span>
+                <span className="effect-description">{describe(pattern)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {categories.map((category) => (
         <div key={category} className="effect-group">
           <h3>{category}</h3>
@@ -597,6 +770,7 @@ function LayerBody({
 }) {
   const fixtures = show.fixtures;
   const count = show.layers.length;
+  const library = useLibrary();
   const [picking, setPicking] = useState(false);
   const params = effect?.params ?? [];
   const basic = params.filter((p) => !p.advanced);
@@ -751,6 +925,16 @@ function LayerBody({
             onClick={() => engine.send({ type: "reset_params", layer: layer.id })}
           >
             <RotateCcw size={13} /> Reset
+          </button>
+        )}
+        {library.available && (changed || advanced) && (
+          <button
+            type="button"
+            className="text-button"
+            title="Keep this effect, with its settings, to use in any show. It is listed when you add an effect."
+            onClick={() => engine.send({ type: "save_pattern", layer: layer.id })}
+          >
+            <Bookmark size={13} /> Keep
           </button>
         )}
         <span className="spacer" />
@@ -1155,6 +1339,10 @@ export function LayerPanel() {
             onPick={(effect) => {
               setAdding(null);
               engine.send({ type: "add_layer", effect, group: addingTo?.id ?? null });
+            }}
+            onUse={(id) => {
+              setAdding(null);
+              engine.send({ type: "use_pattern", id, group: addingTo?.id ?? null });
             }}
           />
           <button type="button" className="text-button" onClick={() => setAdding(null)}>

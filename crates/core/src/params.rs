@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::color::{self, Palette, Rgb};
+use crate::color::{self, Pal, Rgb};
 
 /// A stored parameter value. Colours, choices and palettes are text.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -174,8 +174,9 @@ impl<'a> ParamReader<'a> {
         }
     }
 
-    pub fn palette(&self, id: &str) -> &'static Palette {
-        color::palette(self.text(id))
+    /// The chosen palette: a built-in one, or the user's own colours.
+    pub fn palette(&self, id: &str) -> Pal {
+        color::resolve(self.text(id))
     }
 }
 

@@ -2,7 +2,7 @@
 //! lights for a house or a garden, colour steps and lightning for a dance
 //! floor. They follow the same rules as the ones in `effects.rs`.
 
-use crate::color::{Palette, Rgb, palette};
+use crate::color::{Pal, Palette, Rgb, palette};
 use crate::effect::{
     AMBIENT, Effect, EffectDef, EffectInfo, FlashUse, FrameCtx, HITS_AND_BEATS, HitWatch, hash2, smoothstep,
 };
@@ -31,7 +31,7 @@ fn stop(palette: &Palette, index: i64) -> Rgb {
 // --------------------------------------------------------------- Stripes
 
 struct Stripes {
-    palette: &'static Palette,
+    palette: Pal,
     count: f32,
     speed: f32,
     soft: f32,
@@ -59,7 +59,7 @@ impl Stripes {
             },
             make: || {
                 Box::new(Stripes {
-                    palette: palette("candy_cane"),
+                    palette: Pal::Borrowed(palette("candy_cane")),
                     count: 8.0,
                     speed: 0.5,
                     soft: 0.15,
@@ -94,16 +94,16 @@ impl Effect for Stripes {
         let u = along * self.count - self.travelled;
         let index = u.floor() as i64;
         let within = u - u.floor();
-        let colour = stop(self.palette, index);
+        let colour = stop(&self.palette, index);
         // Near an edge, blend halfway into the neighbour, so the stripe
         // does not jump a whole pixel at a time as it travels.
         let half = self.soft * 0.5;
         if half <= 1e-4 {
             colour
         } else if within < half {
-            stop(self.palette, index - 1).lerp(colour, 0.5 + within / self.soft)
+            stop(&self.palette, index - 1).lerp(colour, 0.5 + within / self.soft)
         } else if within > 1.0 - half {
-            stop(self.palette, index + 1).lerp(colour, 0.5 + (1.0 - within) / self.soft)
+            stop(&self.palette, index + 1).lerp(colour, 0.5 + (1.0 - within) / self.soft)
         } else {
             colour
         }
@@ -113,7 +113,7 @@ impl Effect for Stripes {
 // --------------------------------------------------------------- Twinkle
 
 struct Twinkle {
-    palette: &'static Palette,
+    palette: Pal,
     amount: f32,
     speed: f32,
     glow: f32,
@@ -138,7 +138,7 @@ impl Twinkle {
             },
             make: || {
                 Box::new(Twinkle {
-                    palette: palette("fairy"),
+                    palette: Pal::Borrowed(palette("fairy")),
                     amount: 0.7,
                     speed: 0.8,
                     glow: 0.12,
@@ -162,7 +162,7 @@ impl Effect for Twinkle {
         if hash2(bulb, 3) > self.amount {
             return Rgb::BLACK;
         }
-        let colour = stop(self.palette, (hash2(bulb, 11) * 4096.0) as i64);
+        let colour = stop(&self.palette, (hash2(bulb, 11) * 4096.0) as i64);
         let pace = 0.5 + hash2(bulb, 23);
         let wave = (ctx.time as f32 * self.speed * pace + hash2(bulb, 37) * std::f32::consts::TAU).sin();
         // Mostly bright with a slow dip, as a bulb on a string looks.
@@ -269,7 +269,7 @@ impl Effect for Snow {
 // ----------------------------------------------------------------- Steps
 
 struct Steps {
-    palette: &'static Palette,
+    palette: Pal,
     blocks: f32,
     every: usize,
     fade: f32,
@@ -301,7 +301,7 @@ impl Steps {
             },
             make: || {
                 Box::new(Steps {
-                    palette: palette("neon"),
+                    palette: Pal::Borrowed(palette("neon")),
                     blocks: 4.0,
                     every: 0,
                     fade: 0.15,
@@ -335,11 +335,11 @@ impl Effect for Steps {
         let block = ((x * self.blocks) as i64).min(self.blocks as i64 - 1);
         let step = self.steps.floor() as i64;
         let within = (self.steps - self.steps.floor()) as f32;
-        let now = stop(self.palette, block + step);
+        let now = stop(&self.palette, block + step);
         if self.fade <= 1e-4 || within >= self.fade {
             return now;
         }
-        stop(self.palette, block + step - 1).lerp(now, smoothstep(0.0, self.fade, within))
+        stop(&self.palette, block + step - 1).lerp(now, smoothstep(0.0, self.fade, within))
     }
 }
 

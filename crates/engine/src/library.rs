@@ -3,12 +3,15 @@
 //! Each show is one file in `shows/`. A small text file remembers which
 //! one was open. Deleting a show moves it to `trash/`; nothing here ever
 //! erases a show.
+//!
+//! Beside the shows is `patterns.json`: effects with their settings,
+//! whole looks and palettes that the user has kept to use in any show.
 
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use darkrgb_core::Show;
-use serde::Serialize;
+use darkrgb_core::{Layer, Show};
+use serde::{Deserialize, Serialize};
 
 /// Most shows listed. Far more than anyone keeps; a bound on the work.
 const MAX_LISTED: usize = 500;
@@ -16,6 +19,58 @@ const MAX_LISTED: usize = 500;
 #[derive(Clone, Debug)]
 pub struct Library {
     dir: PathBuf,
+}
+
+/// Most patterns and most palettes kept.
+pub const MAX_PATTERNS: usize = 200;
+pub const MAX_PALETTES: usize = 100;
+
+/// What the user has kept to use in any show.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Saved {
+    /// Next id to hand out, for patterns and palettes alike.
+    #[serde(default)]
+    pub next_id: u32,
+    #[serde(default)]
+    pub patterns: Vec<Pattern>,
+    #[serde(default)]
+    pub palettes: Vec<SavedPalette>,
+}
+
+/// One effect with its settings, or a whole look of several.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Pattern {
+    pub id: u32,
+    pub name: String,
+    /// True for a look: used, it becomes a scene. False for effects that
+    /// are added to whatever is playing.
+    #[serde(default)]
+    pub look: bool,
+    /// Bottom first. They name no lights, only kinds of light.
+    pub layers: Vec<Layer>,
+}
+
+/// A palette of the user's own, by name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedPalette {
+    pub id: u32,
+    pub name: String,
+    /// The colours, written as a palette setting holds them.
+    pub value: String,
+}
+
+impl Saved {
+    pub fn alloc_id(&mut self) -> u32 {
+        let used = self
+            .patterns
+            .iter()
+            .map(|p| p.id)
+            .chain(self.palettes.iter().map(|p| p.id))
+            .max()
+            .unwrap_or(0);
+        self.next_id = self.next_id.max(used) + 1;
+        self.next_id
+    }
 }
 
 /// What the list of shows says about one of them.
@@ -66,6 +121,41 @@ impl Library {
 
     pub fn shows_dir(&self) -> PathBuf {
         self.dir.join("shows")
+    }
+
+    fn saved_path(&self) -> PathBuf {
+        self.dir.join("patterns.json")
+    }
+
+    /// Reads what the user has kept. A file that cannot be understood is
+    /// set aside, not overwritten, and the list starts empty.
+    pub fn load_saved(&self) -> Saved {
+        let path = self.saved_path();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Saved::default();
+        };
+        match serde_json::from_str::<Saved>(&text) {
+            Ok(mut saved) => {
+                saved.patterns.truncate(MAX_PATTERNS);
+                saved.palettes.truncate(MAX_PALETTES);
+                saved
+            }
+            Err(e) => {
+                log::warn!("could not read {}: {e}", path.display());
+                let _ = std::fs::rename(&path, path.with_extension("json.bak"));
+                Saved::default()
+            }
+        }
+    }
+
+    /// Writes what the user has kept, whole or not at all.
+    pub fn store_saved(&self, saved: &Saved) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        let path = self.saved_path();
+        let json = serde_json::to_string_pretty(saved).map_err(std::io::Error::other)?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)
     }
 
     fn trash_dir(&self) -> PathBuf {

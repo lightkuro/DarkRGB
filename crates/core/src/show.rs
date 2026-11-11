@@ -630,7 +630,7 @@ pub fn linkable(effect: &str, param: &str) -> bool {
 
 /// Drops links to settings the layer's effect does not have, keeps one per
 /// setting, and brings their numbers into range.
-fn mend_links(layer: &mut Layer) {
+pub fn mend_links(layer: &mut Layer) {
     if layer.links.is_empty() {
         return;
     }

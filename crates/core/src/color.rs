@@ -273,6 +273,49 @@ pub fn palette(id: &str) -> &'static Palette {
     all.iter().find(|p| p.id == id).unwrap_or(&all[0])
 }
 
+/// A palette as an effect holds it: a built-in one, or the user's own.
+pub type Pal = std::borrow::Cow<'static, Palette>;
+
+/// Most colours a palette the user makes can have.
+pub const MAX_STOPS: usize = 8;
+
+/// A palette of the user's own from its written form: two to eight
+/// colours separated by commas, followed by `|loop` when the last colour
+/// should blend back into the first. `#e8112d,#ffffff|loop` is a candy
+/// cane. Written out like this, a palette travels inside the setting that
+/// uses it: into scenes, copies and saved patterns, with nothing to look up.
+pub fn parse_custom(text: &str) -> Option<Palette> {
+    if !text.starts_with('#') {
+        return None;
+    }
+    let (colours, cyclic) = match text.strip_suffix("|loop") {
+        Some(colours) => (colours, true),
+        None => (text, false),
+    };
+    let stops: Vec<Rgb> = colours.split(',').map(Rgb::from_hex).collect::<Option<_>>()?;
+    (2..=MAX_STOPS).contains(&stops.len()).then_some(Palette {
+        id: "custom",
+        name: "Your own",
+        stops,
+        cyclic,
+    })
+}
+
+/// The written form of a palette of the user's own.
+pub fn write_custom(palette: &Palette) -> String {
+    let colours: Vec<String> = palette.stops.iter().map(|c| c.to_hex()).collect();
+    format!("{}{}", colours.join(","), if palette.cyclic { "|loop" } else { "" })
+}
+
+/// Reads a palette setting: the id of a built-in palette, or the user's
+/// own colours written out. Anything else gives the default palette.
+pub fn resolve(text: &str) -> Pal {
+    match parse_custom(text) {
+        Some(own) => Pal::Owned(own),
+        None => Pal::Borrowed(palette(text)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,6 +352,26 @@ mod tests {
         let mono = palette("mono");
         assert_eq!(mono.sample(-1.0).to_bytes(), [0, 0, 0]);
         assert_eq!(mono.sample(2.0).to_bytes(), [255, 255, 255]);
+        // A palette of the user's own, written out.
+        let cane = parse_custom("#e8112d,#FFFFFF|loop").unwrap();
+        assert_eq!((cane.stops.len(), cane.cyclic), (2, true));
+        assert_eq!(write_custom(&cane), "#e8112d,#ffffff|loop");
+        assert!(!parse_custom("#000000,#ffffff").unwrap().cyclic);
+        for bad in [
+            "",
+            "rainbow",
+            "#ffffff",
+            "#ffffff,nope",
+            "#fff,#000",
+            "#ffffff,#000000|spin",
+        ] {
+            assert!(parse_custom(bad).is_none(), "{bad:?}");
+        }
+        let nine = ["#111111"; 9].join(",");
+        assert!(parse_custom(&nine).is_none(), "at most eight colours");
+        assert_eq!(resolve("#e8112d,#ffffff").stops.len(), 2);
+        assert_eq!(resolve("ocean").id, "ocean");
+        assert_eq!(resolve("#broken").id, "rainbow");
         let rainbow = palette("rainbow");
         assert_eq!(rainbow.sample(0.0), rainbow.sample(1.0));
         assert_eq!(palette("no-such-palette").id, "rainbow");

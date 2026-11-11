@@ -5,8 +5,10 @@ use darkrgb_core::color;
 use darkrgb_core::effects;
 use darkrgb_core::layout::MAX_PIXELS;
 use darkrgb_core::params::{ParamKind, ParamValue};
-use darkrgb_core::show::{Blend, FADERS, FRAME_RATES, LINK_STRENGTH, MAX_LINKS, linkable};
-use darkrgb_core::{Action, Band, FlashSettings, KeyMode, Kind, Launch, Link, Only, Rgb, Shape, Show, Source};
+use darkrgb_core::show::{Blend, FADERS, FRAME_RATES, LINK_STRENGTH, MAX_LINKS, linkable, mend_links};
+use darkrgb_core::{
+    Action, Band, FlashSettings, KeyMode, Kind, Launch, Layer, Link, Only, Rgb, Shape, Show, Sound, Source,
+};
 use serde::Deserialize;
 
 const MAX_NAME: usize = 80;
@@ -226,6 +228,48 @@ pub enum Command {
     },
     /// Asks for the list of shows to be sent again.
     RefreshLibrary,
+    /// Keeps an effect, with its settings, to use in any show. Handled by
+    /// the app, as are the other commands about kept things.
+    SavePattern {
+        layer: u32,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Keeps everything that is playing, bar what is pinned, as one look.
+    SaveLook {
+        name: String,
+    },
+    /// Uses something kept: an effect is added to what is playing (in a
+    /// folder, if one is named), a look becomes a scene and is switched to.
+    UsePattern {
+        id: u32,
+        #[serde(default)]
+        group: Option<u32>,
+    },
+    RenamePattern {
+        id: u32,
+        name: String,
+    },
+    DeletePattern {
+        id: u32,
+    },
+    /// Keeps a palette of the user's own under a name.
+    SavePalette {
+        name: String,
+        value: String,
+    },
+    DeletePalette {
+        id: u32,
+    },
+    /// Adds layers made elsewhere, as `UsePattern` does. Built by the app
+    /// from what is kept; a client cannot send it.
+    #[serde(skip)]
+    Insert {
+        layers: Vec<Layer>,
+        group: Option<u32>,
+        /// Add them as a scene of this name and switch to it.
+        scene: Option<String>,
+    },
     /// Writes a copy of the show to the Documents folder. Handled by the app.
     ExportShow,
     /// Does what a plain press of a pad for `action` would do, for things
@@ -590,6 +634,15 @@ fn checked_param(effect: &str, param: &str, value: &ParamValue) -> Result<ParamV
         (ParamKind::Palette, ParamValue::Text(v)) if color::palettes().iter().any(|p| p.id == v) => {
             Ok(ParamValue::Text(v.clone()))
         }
+        // The user's own colours, written out. Stored tidied.
+        (ParamKind::Palette, ParamValue::Text(v)) => color::parse_custom(v)
+            .map(|own| ParamValue::Text(color::write_custom(&own)))
+            .ok_or_else(|| {
+                format!(
+                    "{v:?} is not a palette: pick one, or give 2 to {} colours",
+                    color::MAX_STOPS
+                )
+            }),
         _ => Err(format!("{value:?} is not a valid value for {}", spec.label)),
     }
 }
@@ -645,6 +698,13 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
         | Command::DuplicateShow { .. }
         | Command::DeleteShow { .. }
         | Command::RenameShowFile { .. }
+        | Command::SavePattern { .. }
+        | Command::SaveLook { .. }
+        | Command::UsePattern { .. }
+        | Command::RenamePattern { .. }
+        | Command::DeletePattern { .. }
+        | Command::SavePalette { .. }
+        | Command::DeletePalette { .. }
         | Command::RefreshLibrary
         | Command::ExportShow => Err("that command needs the running app".into()),
 
@@ -802,6 +862,91 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 return Err("that folder no longer exists".into());
             }
             show.add_layer_in(effect, *group);
+            Ok(())
+        }
+
+        Command::Insert { layers, group, scene } => {
+            if layers.is_empty() {
+                return Err("there is nothing in that pattern".into());
+            }
+            if let Some(group) = group
+                && !show.layer_groups.iter().any(|g| g.id == *group)
+            {
+                return Err("that folder no longer exists".into());
+            }
+            // Whatever the file said, only what a command could have made
+            // gets in: known effects, settings in range, no lights named.
+            let mut made = Vec::new();
+            for template in layers {
+                let Some(def) = effects::find(&template.effect) else {
+                    return Err(format!(
+                        "that pattern uses an effect this version does not have ({})",
+                        template.effect
+                    ));
+                };
+                let mut layer = template.clone();
+                layer.id = show.alloc_id();
+                layer.targets.clear();
+                layer.group = None;
+                layer.name = layer.name.and_then(|n| name(&n, "The name").ok());
+                layer.opacity = if layer.opacity.is_finite() {
+                    layer.opacity.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                layer.sound = Sound {
+                    gain: if layer.sound.gain.is_finite() {
+                        layer.sound.gain.clamp(0.25, 4.0)
+                    } else {
+                        1.0
+                    },
+                    pulse: if layer.sound.pulse.is_finite() {
+                        layer.sound.pulse.clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    },
+                    band: match layer.sound.band {
+                        Band::Range { low, high } if low >= high || high as usize > darkrgb_core::BANDS => Band::All,
+                        band => band,
+                    },
+                    ..layer.sound
+                };
+                layer.params = template
+                    .params
+                    .iter()
+                    .filter_map(|(id, value)| Some((id.clone(), checked_param(def.info.id, id, value).ok()?)))
+                    .collect();
+                mend_links(&mut layer);
+                made.push(layer);
+            }
+            match scene {
+                Some(scene_name) => {
+                    if show.scenes.len() >= MAX_SCENES {
+                        return Err(format!("a show can have at most {MAX_SCENES} scenes"));
+                    }
+                    // A scene's name is how it is known, so it must be its own.
+                    let wanted = name(scene_name, "The scene name")?;
+                    let mut unique = wanted.clone();
+                    let mut n = 2;
+                    while show.scenes.iter().any(|s| s.name == unique) {
+                        unique = format!("{wanted} {n}");
+                        n += 1;
+                    }
+                    let id = show.push_scene(&unique, made, Vec::new());
+                    show.recall_scene(id);
+                }
+                None => {
+                    for layer in made {
+                        let id = show.add_layer_in(&layer.effect, *group);
+                        let slot = show.layer_mut(id).expect("just added");
+                        *slot = Layer {
+                            id,
+                            group: slot.group,
+                            ..layer
+                        };
+                    }
+                }
+            }
             Ok(())
         }
 
@@ -2690,6 +2835,39 @@ mod tests {
         assert!(show.layer_groups[0].pinned);
         // Pinned effects are always on top.
         assert!(show.layers[MAX_LAYERS..].iter().all(|l| l.group == Some(folder)));
+    }
+
+    #[test]
+    fn a_palette_can_be_one_of_ours_or_colours_of_the_users_own() {
+        let mut show = show_with_device();
+        let layer = show.layers[0].id;
+        let set = |show: &mut Show, value: &str| {
+            apply(
+                show,
+                &Command::SetParam {
+                    layer,
+                    param: "palette".into(),
+                    value: ParamValue::Text(value.into()),
+                },
+            )
+        };
+        set(&mut show, "ocean").unwrap();
+        // Stored tidied, so the same palette is always written the same way.
+        set(&mut show, "#FF0000,#00ff00,#0000FF|loop").unwrap();
+        assert_eq!(
+            show.layers[0].params["palette"],
+            ParamValue::Text("#ff0000,#00ff00,#0000ff|loop".into())
+        );
+        for bad in ["no-such-palette", "#ff0000", "#ff0000,red", "", "#ff0000,#00ff00|spin"] {
+            assert!(set(&mut show, bad).is_err(), "{bad:?}");
+        }
+        let nine = ["#101010"; 9].join(",");
+        assert!(set(&mut show, &nine).is_err());
+        assert_eq!(
+            show.layers[0].params["palette"],
+            ParamValue::Text("#ff0000,#00ff00,#0000ff|loop".into()),
+            "a refused value changes nothing"
+        );
     }
 
     #[test]

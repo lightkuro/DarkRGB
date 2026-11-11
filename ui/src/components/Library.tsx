@@ -1,16 +1,20 @@
 // The shows on this computer: open one, start a new one, copy, rename,
 // delete. Opened from the show's name in the top bar.
 
-import { Copy, FileDown, FilePlus2, FileUp, Pencil, Trash2, X } from "lucide-react";
+import { Bookmark, Copy, FileDown, FilePlus2, FileUp, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   engine,
   libraryOpen,
+  libraryTab,
+  readPalette,
+  useHello,
   useLibrary,
   useLibraryOpen,
   useShow,
   useStatus,
   type Kind,
+  type SavedPattern,
   type ShowEntry,
 } from "../engine";
 import { KindCards } from "./KindCards";
@@ -204,6 +208,159 @@ function NewShow({ replaces, onDone }: { replaces: boolean; onDone: () => void }
   );
 }
 
+function PatternRow({ pattern }: { pattern: SavedPattern }) {
+  const hello = useHello();
+  const [renaming, setRenaming] = useState(false);
+  const names = pattern.layers.map((l) => l.name ?? hello?.effects.find((e) => e.id === l.effect)?.name ?? l.effect);
+  return (
+    <li className="show-row">
+      <div className="show-row-text">
+        <div className="show-row-title">
+          {renaming ? (
+            <NameEdit
+              value={pattern.name}
+              onDone={(name) => {
+                setRenaming(false);
+                if (name) engine.send({ type: "rename_pattern", id: pattern.id, name });
+              }}
+            />
+          ) : (
+            <span className="show-row-name">{pattern.name}</span>
+          )}
+        </div>
+        <span className="hint">{pattern.look ? names.join(", ") : `${names[0]}, with your settings`}</span>
+      </div>
+      <div className="show-row-actions">
+        <button
+          type="button"
+          className="button small"
+          title={pattern.look ? "Add it to this show as a scene, and switch to it" : "Add it to what is playing"}
+          onClick={async () => {
+            const result = await engine.request({ type: "use_pattern", id: pattern.id });
+            if (!result.ok) return engine.toast("error", result.error ?? "Could not use that.");
+            engine.toast("info", pattern.look ? `${pattern.name} is now a scene in this show.` : `${pattern.name} was added.`);
+          }}
+        >
+          Use
+        </button>
+        <IconButton label={`Rename ${pattern.name}`} onClick={() => setRenaming(true)}>
+          <Pencil size={14} />
+        </IconButton>
+        <ConfirmButton
+          label={`Delete ${pattern.name}`}
+          confirmLabel="Delete?"
+          onConfirm={() => engine.send({ type: "delete_pattern", id: pattern.id })}
+        >
+          <Trash2 size={14} />
+        </ConfirmButton>
+      </div>
+    </li>
+  );
+}
+
+/** What has been kept to use in any show: looks, effects and palettes. */
+function Kept() {
+  const library = useLibrary();
+  const hello = useHello();
+  const [name, setName] = useState("");
+  if (!library.available) {
+    return (
+      <div className="library-body">
+        <p className="hint">
+          darkRGB was started with a show file of its own, so nothing can be kept between shows this time.
+        </p>
+      </div>
+    );
+  }
+  const looks = library.patterns.filter((p) => p.look);
+  const effects = library.patterns.filter((p) => !p.look);
+  return (
+    <div className="library-body">
+      <p className="hint">
+        Effects with your settings, whole looks and palettes, kept to use in any show. They are stored beside your
+        shows, on the computer darkRGB runs on.
+      </p>
+      <form
+        className="keep-look"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!name.trim()) return;
+          engine.send({ type: "save_look", name: name.trim() });
+          setName("");
+        }}
+      >
+        <input
+          type="text"
+          maxLength={80}
+          placeholder="A name for what is playing now"
+          aria-label="A name for what is playing now"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <button type="submit" className="button small" disabled={!name.trim()}>
+          <Bookmark size={13} /> Keep it as a look
+        </button>
+      </form>
+
+      <h3>Looks</h3>
+      {looks.length > 0 ? (
+        <ul className="show-list" aria-label="Kept looks">
+          {looks.map((p) => (
+            <PatternRow key={p.id} pattern={p} />
+          ))}
+        </ul>
+      ) : (
+        <p className="hint">
+          None yet. A look is everything that is playing, kept as one. Used in a show, it becomes a scene.
+        </p>
+      )}
+
+      <h3>Effects</h3>
+      {effects.length > 0 ? (
+        <ul className="show-list" aria-label="Kept effects">
+          {effects.map((p) => (
+            <PatternRow key={p.id} pattern={p} />
+          ))}
+        </ul>
+      ) : (
+        <p className="hint">None yet. Open an effect you have changed and choose Keep.</p>
+      )}
+
+      <h3>Palettes</h3>
+      {library.palettes.length > 0 ? (
+        <ul className="show-list" aria-label="Kept palettes">
+          {library.palettes.map((p) => {
+            const read = readPalette(p.value, hello?.palettes ?? []);
+            const stops = read ? (read.cyclic ? [...read.stops, read.stops[0]] : read.stops) : [];
+            return (
+              <li key={p.id} className="show-row">
+                <span className="kept-swatch" style={{ background: `linear-gradient(90deg, ${stops.join(", ")})` }} />
+                <div className="show-row-text">
+                  <span className="show-row-name">{p.name}</span>
+                </div>
+                <div className="show-row-actions">
+                  <ConfirmButton
+                    label={`Delete ${p.name}`}
+                    confirmLabel="Delete?"
+                    onConfirm={() => engine.send({ type: "delete_palette", id: p.id })}
+                  >
+                    <Trash2 size={14} />
+                  </ConfirmButton>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="hint">
+          None yet. In an effect's colours, choose "Your own colours", then keep them. Kept palettes are offered
+          wherever colours are chosen.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function Library() {
   const isOpen = useLibraryOpen();
   const library = useLibrary();
@@ -215,12 +372,15 @@ export function Library() {
   const [renaming, setRenaming] = useState(false);
   const [picked, setPicked] = useState<{ name: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<"shows" | "kept">("shows");
 
   useEffect(() => {
     if (!isOpen) return;
     setAdding(false);
     setRenaming(false);
     setPicked(null);
+    setTab(libraryTab.get());
+    libraryTab.set("shows");
     // Files may have been added or removed outside the program.
     engine.quiet({ type: "refresh_library" });
     const onKey = (e: KeyboardEvent) => {
@@ -272,13 +432,33 @@ export function Library() {
     >
       <div className="dialog library" role="dialog" aria-modal="true" aria-label="Shows" tabIndex={-1} ref={panelRef}>
         <div className="settings-head">
-          <h2>Shows</h2>
+          <div className="segmented library-tabs" role="tablist" aria-label="What to list">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "shows"}
+              className={tab === "shows" ? "selected" : ""}
+              onClick={() => setTab("shows")}
+            >
+              Shows
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "kept"}
+              className={tab === "kept" ? "selected" : ""}
+              onClick={() => setTab("kept")}
+            >
+              Kept effects and colours
+            </button>
+          </div>
           <button type="button" className="icon-button" aria-label="Close" onClick={() => libraryOpen.set(false)}>
             <X size={16} />
           </button>
         </div>
 
-        <div className="library-body">
+        {tab === "kept" && <Kept />}
+        <div className="library-body" hidden={tab !== "shows"}>
           <div className="setting-actions">
             <button type="button" className="button" onClick={() => setAdding(true)} disabled={adding}>
               <FilePlus2 size={15} /> New show
