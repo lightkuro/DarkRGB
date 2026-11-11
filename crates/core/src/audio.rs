@@ -99,6 +99,16 @@ pub struct AudioFeatures {
     pub beat_count: u32,
     /// False when the input is silent.
     pub active: bool,
+    /// How big this part of the song is against the last minute or so,
+    /// 0..1: low in a breakdown, high in a chorus or after a drop. Unlike
+    /// `level`, it is not evened out, so it tells quiet parts from loud.
+    pub intensity: f32,
+    /// Goes up by one each time the song moves to a clearly louder or
+    /// quieter part.
+    pub section: u32,
+    /// Jumps to 1 when the song moves to a louder part, then fades over
+    /// a couple of seconds.
+    pub drop: f32,
 }
 
 impl Default for AudioFeatures {
@@ -116,6 +126,10 @@ impl Default for AudioFeatures {
             bpm: 0.0,
             beat_count: 0,
             active: false,
+            // With nothing known about the song, nothing is held back.
+            intensity: 1.0,
+            section: 0,
+            drop: 0.0,
         }
     }
 }
@@ -242,6 +256,9 @@ mod tests {
             bpm: 120.0,
             beat_count: 7,
             active: true,
+            intensity: 0.6,
+            section: 2,
+            drop: 0.4,
         }
     }
 

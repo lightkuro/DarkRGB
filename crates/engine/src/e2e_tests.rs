@@ -591,6 +591,10 @@ fn a_scene_waits_for_the_beat_when_asked_to() {
             launch: Some(Launch::Beat),
             fade: None,
             speed: None,
+            auto: None,
+            every_bars: None,
+            shuffle: None,
+            on_drops: None,
         })
         .unwrap();
 
@@ -637,6 +641,10 @@ fn a_scene_change_can_fade_in() {
             launch: None,
             fade: Some(0.6),
             speed: None,
+            auto: None,
+            every_bars: None,
+            shuffle: None,
+            on_drops: None,
         })
         .unwrap();
 
@@ -1011,7 +1019,80 @@ fn next_scene_previous_scene_freeze_and_speed() {
             launch: None,
             fade: None,
             speed: Some(0.01),
+            auto: None,
+            every_bars: None,
+            shuffle: None,
+            on_drops: None,
         })
         .unwrap();
     assert_eq!(shared.show.lock().unwrap().live.speed, 0.25);
+}
+
+#[test]
+fn autopilot_changes_scene_by_itself_and_a_press_restarts_its_count() {
+    let engine = Engine::start();
+    let shared = &engine.shared;
+    for (name, colour) in [("Red", "#ff0000"), ("Green", "#00ff00"), ("Blue", "#0000ff")] {
+        make_solid(shared, colour);
+        shared.execute(&Command::SaveScene { name: name.into() }).unwrap();
+    }
+    let ids: Vec<u32> = shared.show.lock().unwrap().scenes.iter().map(|s| s.id).collect();
+    let current = || shared.show.lock().unwrap().current_scene();
+    assert_eq!(current(), Some(ids[2]));
+
+    // No music in the test, so autopilot keeps time by the clock: one bar is two seconds.
+    let started = Instant::now();
+    shared
+        .execute(&Command::SetLive {
+            launch: None,
+            fade: None,
+            speed: None,
+            auto: Some(true),
+            every_bars: Some(1),
+            shuffle: None,
+            on_drops: None,
+        })
+        .unwrap();
+    wait_for("the first change", || current() == Some(ids[0]));
+    let first = started.elapsed();
+    assert!(
+        first > Duration::from_millis(1700) && first < Duration::from_millis(2600),
+        "the first change came after {first:?}"
+    );
+
+    // Choosing a scene by hand is respected, and its bar is counted from the press.
+    shared.execute(&Command::RecallScene { id: ids[2] }).unwrap();
+    let pressed = Instant::now();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(
+        current(),
+        Some(ids[2]),
+        "autopilot must not take over right after a press"
+    );
+    wait_for("autopilot to carry on", || current() == Some(ids[0]));
+    assert!(pressed.elapsed() > Duration::from_millis(1700));
+
+    // A scene marked to skip is skipped.
+    shared
+        .execute(&Command::SetSceneAuto {
+            id: ids[1],
+            auto: false,
+        })
+        .unwrap();
+    wait_for("the next change", || current() != Some(ids[0]));
+    assert_eq!(current(), Some(ids[2]), "green is skipped");
+
+    shared
+        .execute(&Command::SetLive {
+            launch: None,
+            fade: None,
+            speed: None,
+            auto: Some(false),
+            every_bars: None,
+            shuffle: None,
+            on_drops: None,
+        })
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(current(), Some(ids[2]), "off means it stays");
 }

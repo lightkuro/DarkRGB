@@ -203,6 +203,16 @@ pub enum Command {
         launch: Option<Launch>,
         fade: Option<f32>,
         speed: Option<f32>,
+        /// Autopilot: on or off, bars per scene, shuffled, change on a new section.
+        auto: Option<bool>,
+        every_bars: Option<u32>,
+        shuffle: Option<bool>,
+        on_drops: Option<bool>,
+    },
+    /// Whether autopilot may switch to a scene.
+    SetSceneAuto {
+        id: u32,
+        auto: bool,
     },
     SetOutput {
         frame_rate: Option<u32>,
@@ -230,6 +240,7 @@ pub enum Command {
         source: Option<String>,
         sensitivity: Option<f32>,
         delay_ms: Option<f32>,
+        dynamics: Option<f32>,
     },
     SaveScene {
         name: String,
@@ -951,7 +962,15 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
-        Command::SetLive { launch, fade, speed } => {
+        Command::SetLive {
+            launch,
+            fade,
+            speed,
+            auto,
+            every_bars,
+            shuffle,
+            on_drops,
+        } => {
             let fade = fade.map(|f| finite(f, "The fade time")).transpose()?;
             let speed = speed.map(|s| finite(s, "The speed")).transpose()?;
             if let Some(l) = launch {
@@ -963,6 +982,27 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             if let Some(s) = speed {
                 show.live.speed = s.clamp(0.25, 4.0);
             }
+            if let Some(on) = auto {
+                show.live.auto.enabled = *on;
+            }
+            if let Some(bars) = every_bars {
+                show.live.auto.every_bars = (*bars).clamp(1, 64);
+            }
+            if let Some(on) = shuffle {
+                show.live.auto.shuffle = *on;
+            }
+            if let Some(on) = on_drops {
+                show.live.auto.on_drops = *on;
+            }
+            Ok(())
+        }
+
+        Command::SetSceneAuto { id, auto } => {
+            show.scenes
+                .iter_mut()
+                .find(|s| s.id == *id)
+                .ok_or("that scene no longer exists")?
+                .auto = *auto;
             Ok(())
         }
 
@@ -1045,11 +1085,16 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             source,
             sensitivity,
             delay_ms,
+            dynamics,
         } => {
             let sensitivity = sensitivity.map(|s| finite(s, "Sensitivity")).transpose()?;
             let delay_ms = delay_ms.map(|d| finite(d, "The delay")).transpose()?;
+            let dynamics = dynamics.map(|d| finite(d, "That setting")).transpose()?;
             if let Some(d) = delay_ms {
                 show.audio.delay_ms = d.clamp(0.0, 1000.0);
+            }
+            if let Some(d) = dynamics {
+                show.audio.dynamics = d.clamp(0.0, 1.0);
             }
             if let Some(source) = source {
                 if source.is_empty() || source.len() > 512 || source.chars().any(char::is_control) {
@@ -1848,6 +1893,7 @@ mod tests {
                 source: None,
                 sensitivity: None,
                 delay_ms: Some(5000.0),
+                dynamics: None,
             },
         )
         .unwrap();
@@ -1858,6 +1904,10 @@ mod tests {
                 launch: Some(Launch::Bar),
                 fade: Some(-1.0),
                 speed: Some(100.0),
+                auto: None,
+                every_bars: None,
+                shuffle: None,
+                on_drops: None,
             },
         )
         .unwrap();
@@ -2007,7 +2057,7 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 39 {
+            let command = match r.next() % 40 {
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {
@@ -2101,6 +2151,14 @@ mod tests {
                     launch: r.maybe(|r| [Launch::Now, Launch::Beat, Launch::Bar][r.next() as usize % 3]),
                     fade: r.maybe(Awkward::number),
                     speed: r.maybe(Awkward::number),
+                    auto: r.maybe(Awkward::flag),
+                    every_bars: r.maybe(|r| [0, 1, 8, 64, 65, u32::MAX][r.next() as usize % 6]),
+                    shuffle: r.maybe(Awkward::flag),
+                    on_drops: r.maybe(Awkward::flag),
+                },
+                39 => Command::SetSceneAuto {
+                    id: scene,
+                    auto: r.flag(),
                 },
                 33 => Command::SetOutput {
                     frame_rate: r.maybe(|r| [0, 30, 40, 60, 61, 120, u32::MAX][r.next() as usize % 7]),
@@ -2199,6 +2257,7 @@ mod tests {
                     source: r.maybe(Awkward::text),
                     sensitivity: r.maybe(Awkward::number),
                     delay_ms: r.maybe(Awkward::number),
+                    dynamics: r.maybe(Awkward::number),
                 },
                 11 => Command::SaveScene { name: r.text() },
                 12 => Command::RecallScene { id: scene },
@@ -2242,6 +2301,8 @@ mod tests {
                 "{command:?}"
             );
             assert!((0.25..=4.0).contains(&show.live.speed), "{command:?}");
+            assert!((0.0..=1.0).contains(&show.audio.dynamics), "{command:?}");
+            assert!((1..=64).contains(&show.live.auto.every_bars), "{command:?}");
             assert!(
                 show.bindings.iter().all(|b| b.action.allowed(b.mode) == b.mode),
                 "{command:?} left a pad doing something its thing cannot"

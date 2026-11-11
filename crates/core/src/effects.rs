@@ -826,6 +826,7 @@ mod tests {
             bpm: 120.0,
             beat_count,
             active: true,
+            ..AudioFeatures::default()
         }
     }
 

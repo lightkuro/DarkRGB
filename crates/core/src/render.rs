@@ -150,6 +150,16 @@ impl Renderer {
                 }
                 heard.beat_count = heard.beat_count.wrapping_add(hit.count);
             }
+            // Following the shape of the song: in its quieter parts, effects
+            // that listen are dimmer and slower. Effects played by hand, and
+            // ones that ignore sound, are left alone.
+            let lull = if def.info.audio && !layer.sound.manual {
+                show.audio.dynamics.clamp(0.0, 1.0) * (1.0 - heard.intensity.clamp(0.0, 1.0))
+            } else {
+                0.0
+            };
+            let opacity = opacity * (1.0 - 0.7 * lull);
+            let dt = dt * (1.0 - 0.5 * lull);
             let ctx = FrameCtx {
                 time,
                 dt,
@@ -745,6 +755,49 @@ mod tests {
             .render_with(&show, 1.0, 1.0 / 60.0, &AudioFeatures::default(), &cues)
             .to_vec();
         assert!(frame[0].r + frame[0].g + frame[0].b > 0.5);
+    }
+
+    #[test]
+    fn quiet_parts_of_a_song_are_dimmer_only_for_effects_that_listen() {
+        let quiet = AudioFeatures {
+            active: true,
+            intensity: 0.0,
+            ..AudioFeatures::default()
+        };
+        let big = AudioFeatures {
+            active: true,
+            ..AudioFeatures::default()
+        };
+        let lit = |show: &Show, audio: &AudioFeatures| {
+            let mut r = Renderer::new();
+            r.sync(show);
+            r.render(show, 0.0, 1.0 / 60.0, audio)[0].r
+        };
+        // Spectrum listens; with every band full it is white on a strip.
+        let mut show = Show::default();
+        show.layers.clear();
+        show.add_device(device(1), None);
+        show.add_layer("energy");
+        let loud = |intensity| AudioFeatures {
+            bass: 1.0,
+            intensity,
+            ..big
+        };
+        show.audio.dynamics = 1.0;
+        let (full, low) = (lit(&show, &loud(1.0)), lit(&show, &loud(0.0)));
+        assert!(full > 0.9, "{full}");
+        assert!(
+            (low / full - 0.3).abs() < 0.02,
+            "at full strength a lull is 30%: {low} of {full}"
+        );
+        show.audio.dynamics = 0.0;
+        assert_eq!(lit(&show, &loud(0.0)), full, "zero treats every part alike");
+
+        // A solid colour does not listen, and an effect played by hand is not held back.
+        let mut plain = solid_show("#ffffff");
+        plain.add_device(device(1), None);
+        plain.audio.dynamics = 1.0;
+        assert_eq!(lit(&plain, &quiet), 1.0);
     }
 
     #[test]

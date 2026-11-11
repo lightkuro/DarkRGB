@@ -43,6 +43,19 @@ const SILENCE_RMS: f32 = 1e-4;
 /// hiss is not blown up into a full-scale display.
 const MIN_REFERENCE: f32 = 3e-3;
 
+/// The song's loudness is smoothed over about this long before parts of
+/// it are compared, so single hits do not count as a change of section.
+const SECTION_SMOOTH_S: f32 = 1.5;
+/// How long the loudest and quietest parts are remembered.
+const SECTION_MEMORY_S: f32 = 45.0;
+/// Parts of a song differ by at least this much before the quieter one
+/// reads as "low". A steadily loud song therefore reads as high throughout.
+const SECTION_RANGE_DB: f32 = 8.0;
+/// A change of this much of the range, lasting, is a new section.
+const SECTION_JUMP: f32 = 0.3;
+/// Sections do not change more often than this.
+const SECTION_GAP_S: f32 = 4.0;
+
 const TEMPO_MIN_BPM: f32 = 70.0;
 const TEMPO_MAX_BPM: f32 = 190.0;
 /// Seconds of onset history the tempo estimate looks at.
@@ -110,7 +123,60 @@ pub struct Analyzer {
     phase: f32,
     steps_since_beat: usize,
 
+    /// How big the current part of the song is: overall, and in the bass.
+    sections: [SectionMeter; 2],
+    /// The intensity the song last settled at, to tell a change from it.
+    settled: f32,
+    /// How long the intensity has been away from `settled`, in steps.
+    away_steps: usize,
+    steps_since_section: usize,
+
     out: AudioFeatures,
+}
+
+/// Follows one loudness over seconds and places it within the range it
+/// has moved over lately.
+#[derive(Clone, Copy, Debug, Default)]
+struct SectionMeter {
+    /// Average power over the last second or two. Power, not decibels:
+    /// the gaps between drum hits must count as little, not as silence.
+    power: f32,
+    steps: u32,
+    low: f32,
+    high: f32,
+}
+
+impl SectionMeter {
+    /// Takes the loudness of one step and returns its place, 0..1.
+    fn step(&mut self, value: f32, step_rate: f32) -> f32 {
+        let power = value * value;
+        let span = step_rate * SECTION_SMOOTH_S;
+        self.steps = self.steps.saturating_add(1);
+        if (self.steps as f32) <= span {
+            // Settling in: a plain average, and nothing to compare with yet.
+            self.power += (power - self.power) / self.steps as f32;
+            let db = 10.0 * self.power.max(1e-12).log10();
+            (self.low, self.high) = (db, db);
+            return 1.0;
+        }
+        self.power += (power - self.power) / span;
+        let now = 10.0 * self.power.max(1e-12).log10();
+        // The remembered extremes give way slowly, so a long quiet part
+        // does not come to count as normal within a few bars.
+        let forget = 1.0 / (step_rate * SECTION_MEMORY_S);
+        self.high = if now > self.high {
+            now
+        } else {
+            self.high + (now - self.high) * forget
+        };
+        self.low = if now < self.low {
+            now
+        } else {
+            self.low + (now - self.low) * forget
+        };
+        let range = (self.high - self.low).max(SECTION_RANGE_DB);
+        ((now - (self.high - range)) / range).clamp(0.0, 1.0)
+    }
 }
 
 impl Analyzer {
@@ -178,6 +244,10 @@ impl Analyzer {
             candidate_votes: 0,
             phase: 0.0,
             steps_since_beat: usize::MAX / 2,
+            sections: [SectionMeter::default(); 2],
+            settled: 1.0,
+            away_steps: 0,
+            steps_since_section: usize::MAX / 2,
             out: AudioFeatures::default(),
         }
     }
@@ -354,6 +424,7 @@ impl Analyzer {
         }
         [self.out.bass, self.out.mid, self.out.treble] = groups;
         self.out.active = active;
+        self.track_sections(rms, energy[0].sqrt(), active);
 
         let onset = self.onsets.step(flux, self.step_rate) && active;
         self.step_index += 1;
@@ -387,6 +458,53 @@ impl Analyzer {
         let per_band = |g: usize| group_flux[g] / group_size[g].max(1) as f32;
         let rhythm = 2.0 * per_band(0) + per_band(1) + 0.4 * per_band(2);
         self.track_beat(if active { rhythm } else { 0.0 }, onset, fade);
+    }
+
+    /// Works out how big the current part of the song is, and notices
+    /// when the song moves to a clearly bigger or smaller part.
+    fn track_sections(&mut self, rms: f32, bass: f32, active: bool) {
+        let fade = (-1.0 / (self.step_rate * 1.5)).exp();
+        self.out.drop *= fade;
+        self.steps_since_section = self.steps_since_section.saturating_add(1);
+        if !active {
+            // Silence is not a quiet section of a song; start afresh after it.
+            self.sections = [SectionMeter::default(); 2];
+            self.out.intensity = 1.0;
+            self.settled = 1.0;
+            self.away_steps = 0;
+            return;
+        }
+        // Half overall loudness, half bass: a breakdown often keeps its
+        // volume and loses its kick.
+        let overall = self.sections[0].step(rms, self.step_rate);
+        let low_end = self.sections[1].step(bass, self.step_rate);
+        let intensity = 0.5 * overall + 0.5 * low_end;
+        self.out.intensity = intensity;
+
+        // For a few seconds after a change the song is still arriving at
+        // its new level; the rest of the way there is the same change.
+        if (self.steps_since_section as f32) < self.step_rate * SECTION_GAP_S {
+            self.settled = intensity;
+            self.away_steps = 0;
+            return;
+        }
+        let change = intensity - self.settled;
+        if change.abs() < SECTION_JUMP {
+            self.away_steps = 0;
+            // Drift is followed; only a jump is a new section.
+            self.settled += change / (self.step_rate * 8.0);
+            return;
+        }
+        self.away_steps += 1;
+        if self.away_steps as f32 > self.step_rate * 0.6 {
+            self.out.section = self.out.section.wrapping_add(1);
+            if change > 0.0 {
+                self.out.drop = 1.0;
+            }
+            self.settled = intensity;
+            self.away_steps = 0;
+            self.steps_since_section = 0;
+        }
     }
 
     fn track_beat(&mut self, strength: f32, onset: bool, fade: f32) {
@@ -923,6 +1041,83 @@ mod tests {
             "12 hats should give about 12 treble hits, got {treble}"
         );
         assert!(bass <= 1, "hi-hats must not count as bass hits, got {bass}");
+    }
+
+    /// A drum loop whose volume follows `parts`: seconds and loudness of each.
+    fn song(parts: &[(f32, f32)], scale: f32) -> Vec<f32> {
+        parts
+            .iter()
+            .flat_map(|(seconds, amplitude)| drum_loop(124.0, *seconds, SR, amplitude * scale))
+            .collect()
+    }
+
+    /// Feeds a song and returns intensity, section count and drop once a second.
+    fn follow_song(samples: &[f32]) -> Vec<(f32, u32, f32)> {
+        let mut a = Analyzer::new(SR);
+        let mut out = Vec::new();
+        for second in samples.chunks(SR as usize) {
+            // The strongest "drop" seen during the second, since it fades.
+            let mut drop = 0.0f32;
+            for block in second.chunks(480) {
+                a.push(block);
+                drop = drop.max(a.features().drop);
+            }
+            let f = a.features();
+            out.push((f.intensity, f.section, drop));
+        }
+        out
+    }
+
+    #[test]
+    fn a_steady_song_is_all_one_section_at_full_intensity() {
+        let trace = follow_song(&song(&[(30.0, 0.5)], 1.0));
+        assert!(trace.iter().all(|(_, section, _)| *section == 0), "{trace:?}");
+        assert!(trace[5..].iter().all(|(i, _, _)| *i > 0.85), "{trace:?}");
+        assert!(trace.iter().all(|(_, _, drop)| *drop == 0.0));
+    }
+
+    #[test]
+    fn a_breakdown_and_a_drop_are_two_changes_of_section() {
+        // Loud, then a quiet part 20 dB down, then loud again.
+        let parts = [(14.0, 0.5), (14.0, 0.05), (14.0, 0.5)];
+        let trace = follow_song(&song(&parts, 1.0));
+        let (loud, quiet, back) = (trace[12], trace[26], trace[40]);
+        assert!(loud.0 > 0.85, "first part {loud:?}");
+        assert!(quiet.0 < 0.35, "the breakdown {quiet:?}");
+        assert!(back.0 > 0.85, "after the drop {back:?}");
+        assert_eq!((loud.1, quiet.1, back.1), (0, 1, 2), "{trace:?}");
+        // The fall is not a drop; the return is, within three seconds of it.
+        assert!(trace[14..27].iter().all(|(_, _, drop)| *drop == 0.0), "{trace:?}");
+        assert!(trace[28..31].iter().any(|(_, _, drop)| *drop > 0.8), "{trace:?}");
+        assert!(trace[40].2 < 0.01, "and it fades");
+
+        // The same song fifty times quieter reads the same.
+        let soft = follow_song(&song(&parts, 0.02));
+        for (i, (a, b)) in trace.iter().zip(&soft).enumerate().skip(3) {
+            assert!((a.0 - b.0).abs() < 0.08, "second {i}: {a:?} against {b:?}");
+            assert_eq!(a.1, b.1, "second {i}");
+        }
+    }
+
+    #[test]
+    fn small_changes_in_volume_are_not_new_sections() {
+        // 3 dB up and down every few seconds: phrasing, not structure.
+        let parts: Vec<(f32, f32)> = (0..10).map(|i| (4.0, if i % 2 == 0 { 0.5 } else { 0.35 })).collect();
+        let trace = follow_song(&song(&parts, 1.0));
+        assert!(trace.iter().all(|(_, section, _)| *section == 0), "{trace:?}");
+        assert!(trace[5..].iter().all(|(i, _, _)| *i > 0.6), "{trace:?}");
+    }
+
+    #[test]
+    fn silence_starts_the_song_afresh() {
+        let mut samples = song(&[(10.0, 0.5)], 1.0);
+        samples.extend(vec![0.0; 3 * SR as usize]);
+        samples.extend(song(&[(8.0, 0.05)], 1.0));
+        let trace = follow_song(&samples);
+        assert_eq!(trace[11].0, 1.0, "nothing is held back in silence");
+        // A quiet song after a pause is its own measure, not a breakdown of the last.
+        assert!(trace[19].0 > 0.85, "{trace:?}");
+        assert_eq!(trace.last().unwrap().1, 0);
     }
 
     #[test]

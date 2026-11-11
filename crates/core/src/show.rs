@@ -120,6 +120,9 @@ pub struct Scene {
     /// The folders those layers were filed in.
     #[serde(default)]
     pub groups: Vec<LayerGroup>,
+    /// Whether autopilot may switch to this scene.
+    #[serde(default = "yes")]
+    pub auto: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -263,6 +266,8 @@ pub struct LiveSettings {
     /// How fast everything moves, 0.25..4. One is normal.
     #[serde(default = "one")]
     pub speed: f32,
+    #[serde(default)]
+    pub auto: Autopilot,
 }
 
 impl Default for LiveSettings {
@@ -271,6 +276,38 @@ impl Default for LiveSettings {
             launch: Launch::Now,
             fade: 0.0,
             speed: 1.0,
+            auto: Autopilot::default(),
+        }
+    }
+}
+
+/// Changes scene by itself, in time with the music.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Autopilot {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bars (of four beats) each scene plays for, 1..64.
+    #[serde(default = "default_bars")]
+    pub every_bars: u32,
+    /// Pick the next scene at random instead of in order.
+    #[serde(default)]
+    pub shuffle: bool,
+    /// Also change the moment the song moves to a new section.
+    #[serde(default = "yes")]
+    pub on_drops: bool,
+}
+
+fn default_bars() -> u32 {
+    8
+}
+
+impl Default for Autopilot {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            every_bars: default_bars(),
+            shuffle: false,
+            on_drops: true,
         }
     }
 }
@@ -317,6 +354,18 @@ pub struct AudioSettings {
     /// For speakers that play late, such as Bluetooth ones.
     #[serde(default)]
     pub delay_ms: f32,
+    /// How much the lights follow the shape of the song, 0..1: quiet
+    /// parts dimmer and calmer, big parts at full strength. Zero treats
+    /// every part of a song alike.
+    #[serde(default = "default_dynamics")]
+    pub dynamics: f32,
+}
+
+/// A mild amount: enough to feel a breakdown, not enough to go dark in one.
+pub const DEFAULT_DYNAMICS: f32 = 0.35;
+
+fn default_dynamics() -> f32 {
+    DEFAULT_DYNAMICS
 }
 
 impl Default for AudioSettings {
@@ -325,6 +374,7 @@ impl Default for AudioSettings {
             source: "system".into(),
             sensitivity: 1.0,
             delay_ms: 0.0,
+            dynamics: DEFAULT_DYNAMICS,
         }
     }
 }
@@ -852,6 +902,7 @@ impl Show {
             name: name.to_string(),
             layers,
             groups,
+            auto: true,
         });
         let free = "1234567890"
             .chars()
@@ -916,6 +967,7 @@ impl Show {
         if !FRAME_RATES.contains(&self.output.frame_rate) {
             self.output.frame_rate = OutputSettings::default().frame_rate;
         }
+        self.live.auto.every_bars = self.live.auto.every_bars.clamp(1, 64);
         self.prune_bindings();
     }
 
@@ -972,6 +1024,7 @@ impl Show {
             self.master.limit,
             self.audio.sensitivity,
             self.audio.delay_ms,
+            self.audio.dynamics,
             self.live.fade,
             self.live.speed,
             self.output.flash_limit,

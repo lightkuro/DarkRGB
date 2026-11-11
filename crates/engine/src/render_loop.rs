@@ -161,14 +161,21 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
         let now = shared.now();
         let heard = delay.step(now, shared.audio.features(), show.audio.delay_ms);
         let (audio, launch, cues, frozen) = {
-            let live = shared.live.lock().unwrap();
+            let mut live = shared.live.lock().unwrap();
             let clocked = live.clocked(now, heard);
             let beat = clocked.beat_count != last_beat;
             last_beat = clocked.beat_count;
-            let launch = live
+            // A scene the user asked for comes first; autopilot only has
+            // its say when nothing is waiting.
+            let asked = live
                 .should_launch(now, last_now, show.live.launch, &clocked, beat)
                 .then(|| live.pending.map(|p| p.scene))
                 .flatten();
+            let launch = match (asked, live.pending) {
+                (Some(scene), _) => Some(scene),
+                (None, Some(_)) => None,
+                (None, None) => live.autopilot(now, &base, &clocked, beat),
+            };
             (
                 live.with_hits(now, clocked),
                 launch,

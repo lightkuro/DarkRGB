@@ -441,6 +441,7 @@ impl Shared {
             let mut live = self.live.lock().unwrap();
             live.pending = None;
             live.last_scene = Some(id);
+            live.scene_changed();
             if changed {
                 live.scene_serial += 1;
             }

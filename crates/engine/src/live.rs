@@ -84,6 +84,21 @@ impl Tempo {
     }
 }
 
+/// Autopilot changes scene after this long when there is no tempo to count
+/// bars by: two seconds a bar, as at 120 beats a minute.
+const BAR_WITHOUT_TEMPO_S: f64 = 2.0;
+/// Autopilot leaves a scene up at least this long, however many new
+/// sections the song goes through.
+const AUTO_MIN_S: f64 = 4.0;
+
+/// Where autopilot started counting for the scene that is playing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AutoMark {
+    at: f64,
+    beat: u32,
+    section: u32,
+}
+
 /// A scene that will start on a coming beat.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pending {
@@ -124,6 +139,9 @@ pub struct Live {
     fired: HashMap<u32, (f64, u32)>,
     /// The picture has been frozen by a press (not by a key being held).
     pub frozen: bool,
+    auto: Option<AutoMark>,
+    /// Feeds the shuffle; changes each time it is used.
+    shuffle: u32,
 }
 
 impl Live {
@@ -166,6 +184,62 @@ impl Live {
         self.pending = None;
         self.frozen = false;
         self.last_scene = None;
+        self.auto = None;
+    }
+
+    /// Tells autopilot that the scene has just changed, by whatever hand,
+    /// so that it counts the new scene's bars from now.
+    pub fn scene_changed(&mut self) {
+        self.auto = None;
+    }
+
+    /// The scene autopilot wants to switch to on this frame, if any.
+    /// `beat` is true when a new beat has just begun; `features` carry
+    /// the tapped tempo if there is one.
+    pub fn autopilot(&mut self, now: f64, show: &Show, features: &AudioFeatures, beat: bool) -> Option<u32> {
+        let settings = show.live.auto;
+        let usable: Vec<u32> = show.scenes.iter().filter(|s| s.auto).map(|s| s.id).collect();
+        if !settings.enabled || usable.len() < 2 {
+            self.auto = None;
+            return None;
+        }
+        let Some(mark) = self.auto else {
+            self.auto = Some(AutoMark {
+                at: now,
+                beat: features.beat_count,
+                section: features.section,
+            });
+            return None;
+        };
+        let played = now - mark.at;
+        let bars_up = if features.bpm > 0.0 {
+            // On a beat, so the change lands in time.
+            beat && features.beat_count.wrapping_sub(mark.beat) >= settings.every_bars.clamp(1, 64) * 4
+        } else {
+            played >= settings.every_bars.clamp(1, 64) as f64 * BAR_WITHOUT_TEMPO_S
+        };
+        let new_section = settings.on_drops && features.section != mark.section && played >= AUTO_MIN_S;
+        if !bars_up && !new_section {
+            return None;
+        }
+
+        let current = show.current_scene().or(self.last_scene);
+        let next = if settings.shuffle {
+            let others: Vec<u32> = usable.iter().copied().filter(|id| Some(*id) != current).collect();
+            // A small generator is plenty for picking a scene.
+            self.shuffle = self.shuffle.wrapping_mul(1_664_525).wrapping_add(1_013_904_223) ^ (now * 1000.0) as u32;
+            others[(self.shuffle >> 8) as usize % others.len()]
+        } else {
+            // The next usable scene after the current one, going round.
+            let at = current.and_then(|id| show.scenes.iter().position(|s| s.id == id));
+            let count = show.scenes.len();
+            (1..=count)
+                .map(|step| &show.scenes[(at.map_or(step - 1, |at| at + step)) % count])
+                .find(|s| s.auto && Some(s.id) != current)
+                .map(|s| s.id)?
+        };
+        self.auto = None;
+        Some(next)
     }
 
     /// Fires a hit into each of `layers`, as if a beat had landed on them.
@@ -524,6 +598,134 @@ mod tests {
         assert!(!live.is_frozen(&show));
         live.let_go();
         assert!(!live.is_frozen(&show), "a new show starts moving");
+    }
+
+    /// A show with scenes A, B, C and autopilot on.
+    fn auto_show() -> (Show, [u32; 3]) {
+        let mut show = Show::default();
+        let a = show.save_scene("A");
+        show.add_layer("solid");
+        let b = show.save_scene("B");
+        show.add_layer("flow");
+        let c = show.save_scene("C");
+        show.recall_scene(a);
+        show.live.auto.enabled = true;
+        show.live.auto.every_bars = 2;
+        (show, [a, b, c])
+    }
+
+    fn music(beat_count: u32, section: u32) -> AudioFeatures {
+        AudioFeatures {
+            bpm: 120.0,
+            beat_count,
+            section,
+            active: true,
+            ..AudioFeatures::default()
+        }
+    }
+
+    #[test]
+    fn autopilot_changes_scene_every_so_many_bars_in_order() {
+        let (mut show, [a, b, c]) = auto_show();
+        let mut live = Live::default();
+        let mut launched = Vec::new();
+        // 120 beats a minute: a beat every half second, frames at 50 a second.
+        for frame in 0..(50 * 26) {
+            let now = frame as f64 / 50.0;
+            let beat_count = (now * 2.0) as u32;
+            let beat = frame > 0 && beat_count != (((frame - 1) as f64 / 50.0) * 2.0) as u32;
+            if let Some(scene) = live.autopilot(now, &show, &music(beat_count, 0), beat) {
+                launched.push((now, scene));
+                show.recall_scene(scene);
+                live.last_scene = Some(scene);
+                live.scene_changed();
+            }
+        }
+        // Two bars are eight beats, four seconds.
+        let scenes: Vec<u32> = launched.iter().map(|(_, s)| *s).collect();
+        assert_eq!(scenes, [b, c, a, b, c, a], "{launched:?}");
+        for pair in launched.windows(2) {
+            let gap = pair[1].0 - pair[0].0;
+            assert!((gap - 4.0).abs() < 0.05, "scenes {gap} s apart");
+        }
+        // Each change lands on a beat.
+        assert!(launched.iter().all(|(at, _)| (at * 2.0).fract() < 0.05), "{launched:?}");
+    }
+
+    #[test]
+    fn autopilot_changes_at_once_on_a_new_section_but_not_too_often() {
+        let (show, [_, b, _]) = auto_show();
+        let mut live = Live::default();
+        assert_eq!(
+            live.autopilot(0.0, &show, &music(0, 0), false),
+            None,
+            "it starts counting"
+        );
+        // A new section a second in: too soon after the last change.
+        assert_eq!(live.autopilot(1.0, &show, &music(2, 1), false), None);
+        // Still the new section once the scene has had its minimum time.
+        assert_eq!(live.autopilot(AUTO_MIN_S + 0.1, &show, &music(3, 1), false), Some(b));
+
+        // With that switched off, sections are ignored.
+        let mut calm = show.clone();
+        calm.live.auto.on_drops = false;
+        let mut live = Live::default();
+        live.autopilot(0.0, &calm, &music(0, 0), false);
+        assert_eq!(live.autopilot(5.0, &calm, &music(3, 4), false), None);
+    }
+
+    #[test]
+    fn autopilot_keeps_time_by_the_clock_when_there_is_no_tempo() {
+        let (show, [_, b, _]) = auto_show();
+        let mut live = Live::default();
+        let silence = AudioFeatures::default();
+        live.autopilot(10.0, &show, &silence, false);
+        assert_eq!(live.autopilot(13.9, &show, &silence, false), None);
+        assert_eq!(
+            live.autopilot(14.1, &show, &silence, false),
+            Some(b),
+            "two bars at two seconds each"
+        );
+    }
+
+    #[test]
+    fn autopilot_skips_scenes_marked_to_skip_and_needs_two_to_choose_from() {
+        let (mut show, [a, b, c]) = auto_show();
+        show.scenes[1].auto = false;
+        let mut live = Live::default();
+        let silence = AudioFeatures::default();
+        live.autopilot(0.0, &show, &silence, false);
+        assert_eq!(live.autopilot(5.0, &show, &silence, false), Some(c), "B is skipped");
+        let _ = (a, b);
+        // One usable scene is nothing to change between.
+        show.scenes[2].auto = false;
+        live.autopilot(6.0, &show, &silence, false);
+        assert_eq!(live.autopilot(60.0, &show, &silence, false), None);
+        // Off means off.
+        show.scenes[1].auto = true;
+        show.scenes[2].auto = true;
+        show.live.auto.enabled = false;
+        assert_eq!(live.autopilot(120.0, &show, &silence, false), None);
+    }
+
+    #[test]
+    fn shuffled_autopilot_never_repeats_the_scene_that_is_playing() {
+        let (mut show, _) = auto_show();
+        show.live.auto.shuffle = true;
+        let mut live = Live::default();
+        let silence = AudioFeatures::default();
+        let mut seen = std::collections::HashSet::new();
+        let mut now = 0.0;
+        for _ in 0..40 {
+            live.autopilot(now, &show, &silence, false);
+            now += 5.0;
+            let next = live.autopilot(now, &show, &silence, false).expect("time is up");
+            assert_ne!(Some(next), show.current_scene());
+            show.recall_scene(next);
+            live.scene_changed();
+            seen.insert(next);
+        }
+        assert_eq!(seen.len(), 3, "every scene gets its turn");
     }
 
     #[test]
