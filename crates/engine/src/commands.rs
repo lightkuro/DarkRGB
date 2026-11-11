@@ -121,8 +121,11 @@ pub enum Command {
         #[serde(default = "yes")]
         keep_layers: bool,
     },
+    /// Adds a group of lights, optionally with fixtures already in it.
     AddLightGroup {
         name: String,
+        #[serde(default)]
+        fixtures: Vec<u32>,
     },
     UpdateLightGroup {
         id: u32,
@@ -750,12 +753,18 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
-        Command::AddLightGroup { name: group } => {
+        Command::AddLightGroup { name: group, fixtures } => {
             let group = name(group, "The name")?;
             if show.light_groups.len() >= MAX_GROUPS {
                 return Err(format!("a show can have at most {MAX_GROUPS} groups of lights"));
             }
-            show.add_light_group(&group);
+            if fixtures.iter().any(|id| !show.fixtures.iter().any(|f| f.id == *id)) {
+                return Err("one of those lights no longer exists".into());
+            }
+            let id = show.add_light_group(&group);
+            for fixture in show.fixtures.iter_mut().filter(|f| fixtures.contains(&f.id)) {
+                fixture.group = Some(id);
+            }
             Ok(())
         }
 
@@ -1583,7 +1592,7 @@ mod tests {
         let mut show = show_with_device();
         show.add_device(Device::wled("Second", "127.0.0.2", 4048, 30), None);
         let (first, second) = (show.fixtures[0].id, show.fixtures[1].id);
-        apply(&mut show, &Command::AddLightGroup { name: "Ceiling".into() }).unwrap();
+        apply(&mut show, &parse(r#"{"type":"add_light_group","name":"Ceiling"}"#)).unwrap();
         let group = show.light_groups[0].id;
         let file = |show: &mut Show, fixtures: Vec<u32>, group| apply(show, &Command::GroupLights { fixtures, group });
         file(&mut show, vec![first, second], Some(group)).unwrap();
@@ -1628,6 +1637,22 @@ mod tests {
         apply(&mut show, &Command::RemoveLightGroup { id: group }).unwrap();
         assert_eq!(show.layers[0].targets, [first, second]);
         assert!(apply(&mut show, &Command::RemoveLightGroup { id: group }).is_err());
+
+        // A group can be made from a selection in one go; a light moves out of its old group.
+        let make = |show: &mut Show, fixtures: Vec<u32>| {
+            apply(
+                show,
+                &Command::AddLightGroup {
+                    name: "Picked".into(),
+                    fixtures,
+                },
+            )
+        };
+        make(&mut show, vec![first, second]).unwrap();
+        let picked = show.light_groups.last().unwrap().id;
+        assert!(show.fixtures.iter().all(|f| f.group == Some(picked)));
+        assert!(make(&mut show, vec![first, 9999]).is_err());
+        assert_eq!(show.light_groups.len(), 1, "a refused group is not left behind");
     }
 
     #[test]
@@ -2019,7 +2044,10 @@ mod tests {
                     id: folder,
                     keep_layers: r.flag(),
                 },
-                24 => Command::AddLightGroup { name: r.text() },
+                24 => Command::AddLightGroup {
+                    name: r.text(),
+                    fixtures: if r.flag() { vec![fixture] } else { Vec::new() },
+                },
                 25 => Command::UpdateLightGroup {
                     id: group,
                     name: r.maybe(Awkward::text),

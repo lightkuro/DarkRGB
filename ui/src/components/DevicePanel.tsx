@@ -2,6 +2,7 @@
 // by address, by scanning, as a virtual light for planning, or the demo set.
 
 import {
+  BoxSelect,
   ChevronRight,
   Folder,
   FolderOpen,
@@ -20,9 +21,11 @@ import { useEffect, useRef, useState } from "react";
 import {
   engine,
   perFrame,
+  select,
   toggleFolded,
   useFolded,
   useLive,
+  useSelection,
   useShow,
   useStatus,
   type Device,
@@ -67,6 +70,38 @@ function deviceSetter(id: number, field: "brightness" | "gamma") {
   return send;
 }
 
+/** The angle of one light, to read off or type. */
+export function AngleField({ fixture }: { fixture: Fixture }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    const value = Number(draft);
+    if (draft !== null && draft.trim() !== "" && Number.isFinite(value)) {
+      engine.send({ type: "update_fixture", id: fixture.id, rotation: ((value % 360) + 360) % 360 });
+    }
+    setDraft(null);
+  };
+  return (
+    <label className="angle" title="The angle of this light, in degrees">
+      <input
+        className="number"
+        type="text"
+        inputMode="numeric"
+        aria-label="Angle in degrees"
+        value={draft ?? String(Math.round(fixture.rotation))}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          // Arrow keys belong to the field here, not to nudging the light.
+          e.stopPropagation();
+          if (e.key === "Enter") e.currentTarget.blur();
+          if (e.key === "Escape") setDraft(null);
+        }}
+      />
+      °
+    </label>
+  );
+}
+
 /** The group a device's lights are filed under. */
 function groupOf(show: Show, device: Device): number | null {
   return show.fixtures.find((f) => f.device === device.id)?.group ?? null;
@@ -93,12 +128,19 @@ function DeviceRow({
   lifted?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const picked = useSelection();
   const fixtures = show.fixtures;
+  const own = fixtures.filter((f) => f.device === device.id);
+  const isPicked = own.some((f) => picked.includes(f.id));
   const status = statusOf(device, stats);
   const virtual = device.kind === "virtual";
-  const matrix = fixtures.some((f) => f.device === device.id && f.shape.type === "matrix");
+  const matrix = own.some((f) => f.shape.type === "matrix");
   return (
-    <li className={`device ${open ? "open" : ""} ${virtual ? "virtual" : ""} ${lifted ? "lifted" : ""}`}>
+    <li
+      className={`device ${open ? "open" : ""} ${virtual ? "virtual" : ""} ${lifted ? "lifted" : ""} ${
+        isPicked ? "selected" : ""
+      }`}
+    >
       <div className="device-row">
         {onGrip && (
           <span className="grip" title="Drag into a group" onPointerDown={onGrip}>
@@ -108,9 +150,17 @@ function DeviceRow({
         <button
           type="button"
           className="device-main"
-          onClick={() => setOpen(!open)}
+          // Picks the light on the stage as well. With Shift it only adds
+          // to (or takes from) what is picked.
+          onClick={(e) => {
+            select(
+              own.map((f) => f.id),
+              e.shiftKey,
+            );
+            if (!e.shiftKey) setOpen(!open);
+          }}
           aria-expanded={open}
-          title="Settings for this light"
+          title="Settings for this light. Shift+click to pick several."
         >
           {!onGrip && <ChevronRight size={14} className="chevron" />}
           {matrix ? <Grid3x3 size={15} aria-hidden /> : <Minus size={15} aria-hidden />}
@@ -135,6 +185,12 @@ function DeviceRow({
         <div className="device-settings">
           <p className={`device-status ${status.tone}`}>{status.text}</p>
           <NameField value={device.name} onCommit={(name) => engine.send({ type: "update_device", id: device.id, name })} />
+          {own.length === 1 && (
+            <div className="field inline">
+              <span>Angle</span>
+              <AngleField fixture={own[0]!} />
+            </div>
+          )}
           {show.light_groups.length > 0 && (
             <label className="field inline">
               <span>Group</span>
@@ -624,6 +680,16 @@ export function DevicePanel() {
                     )}
                   </button>
                   {binding && <Keycap binding={binding} held={live.held.includes(binding.id)} />}
+                  {members.length > 0 && (
+                    <IconButton
+                      label={`Pick the lights in ${group.name} on the stage`}
+                      onClick={() =>
+                        select(show.fixtures.filter((f) => f.group === group.id).map((f) => f.id))
+                      }
+                    >
+                      <BoxSelect size={15} />
+                    </IconButton>
+                  )}
                   <IconButton
                     label="Group settings"
                     active={settings}

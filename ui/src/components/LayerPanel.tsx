@@ -7,6 +7,7 @@
 
 import {
   AudioLines,
+  BoxSelect,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -34,6 +35,7 @@ import {
   useFolded,
   useHello,
   useLive,
+  useSelection,
   useShow,
   type Band,
   type Blend,
@@ -271,8 +273,14 @@ export function EffectPicker({ onPick, current }: { onPick: (id: string) => void
 }
 
 function Targets({ layer, fixtures, groups }: { layer: Layer; fixtures: Fixture[]; groups: LightGroup[] }) {
+  const picked = useSelection();
   if (fixtures.length < 2 && groups.length === 0) return null;
   const all = layer.targets.length === 0;
+  // What is picked on the stage, when it is not already what this plays on.
+  const pickedIsNew =
+    picked.length > 0 &&
+    picked.length < fixtures.length &&
+    !(picked.length === layer.targets.length && picked.every((id) => layer.targets.includes(id)));
   const toggle = (id: number) => {
     const next = layer.targets.includes(id) ? layer.targets.filter((t) => t !== id) : [...layer.targets, id];
     // Ticking every light one by one is the same as "all lights".
@@ -293,6 +301,16 @@ function Targets({ layer, fixtures, groups }: { layer: Layer; fixtures: Fixture[
         >
           All lights
         </button>
+        {pickedIsNew && (
+          <button
+            type="button"
+            className="chip add"
+            title="Play on the lights picked on the stage"
+            onClick={() => engine.send({ type: "update_layer", id: layer.id, targets: picked })}
+          >
+            <BoxSelect size={12} aria-hidden /> The {picked.length} picked
+          </button>
+        )}
         {groups.map((g) => (
           <button
             key={g.id}

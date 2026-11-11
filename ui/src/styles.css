@@ -2025,6 +2025,50 @@ input.number {
   cursor: ew-resize;
 }
 
+/* Around several picked lights, with the handle that turns them all. */
+.selection-box {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 2 5;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* The box being drawn to pick lights. */
+.marquee {
+  fill: rgba(56, 214, 196, 0.08);
+  stroke: var(--teal);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.stage.boxing {
+  cursor: crosshair;
+}
+
+.angle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+}
+
+.angle input.number {
+  width: 48px;
+  padding: 4px 6px;
+  text-align: right;
+}
+
+.tool-group .angle {
+  padding: 0 6px;
+}
+
+.device.selected {
+  border-color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .handle-stem {
   stroke: var(--accent);
   stroke-width: 1.5;

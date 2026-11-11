@@ -303,7 +303,7 @@ export type Command =
   | { type: "add_layer_group"; name: string; layer?: number }
   | { type: "update_layer_group"; id: number; name?: string; enabled?: boolean; opacity?: number; pinned?: boolean }
   | { type: "remove_layer_group"; id: number; keep_layers: boolean }
-  | { type: "add_light_group"; name: string }
+  | { type: "add_light_group"; name: string; fixtures?: number[] }
   | { type: "update_light_group"; id: number; name?: string; enabled?: boolean; brightness?: number }
   | { type: "remove_light_group"; id: number }
   | { type: "group_lights"; fixtures: number[]; group: number | null }
@@ -610,6 +610,21 @@ export function flashNotice(): void {
     "Flashing lights can trigger seizures in people with photosensitive epilepsy. Anything faster than " +
       "3 flashes a second is softened. The switch for this is in Settings, under Lights.",
   );
+}
+
+/**
+ * The lights picked on the stage, as fixture ids. Shared, so the Lights
+ * list and the effects can see and change what is picked.
+ */
+export const selection = new Store<number[]>([]);
+export const useSelection = () => useSyncExternalStore(selection.subscribe, selection.get);
+
+/** Picks exactly these lights, or adds them to (or takes them from) what is picked. */
+export function select(ids: number[], add = false): void {
+  if (!add) return selection.set(ids);
+  const current = selection.get();
+  const allIn = ids.every((id) => current.includes(id));
+  selection.set(allIn ? current.filter((id) => !ids.includes(id)) : [...new Set([...current, ...ids])]);
 }
 
 /** Which page of the settings window is open, if it is open at all. */
