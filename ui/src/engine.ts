@@ -682,9 +682,12 @@ class Pref<T> {
   }
 }
 
-/** Whether advanced settings are shown. Off for a new user. */
-export const advancedPref = new Pref<boolean>("darkrgb.advanced", false);
-export const useAdvanced = () => useSyncExternalStore(advancedPref.subscribe, advancedPref.get);
+/**
+ * Which layout is shown. The simple one, for a new user, has what most
+ * shows need and assumes the rest; the full one has every control.
+ */
+export const fullPref = new Pref<boolean>("darkrgb.advanced", false);
+export const useFull = () => useSyncExternalStore(fullPref.subscribe, fullPref.get);
 
 /** Building the show, or performing it with the panels out of the way. */
 export type View = "edit" | "live";

@@ -25,6 +25,7 @@ import {
   toggleFolded,
   useFolded,
   useLive,
+  useFull,
   useSelection,
   useShow,
   useStatus,
@@ -133,6 +134,7 @@ function DeviceRow({
   const own = fixtures.filter((f) => f.device === device.id);
   const isPicked = own.some((f) => picked.includes(f.id));
   const status = statusOf(device, stats);
+  const full = useFull();
   const virtual = device.kind === "virtual";
   const matrix = own.some((f) => f.shape.type === "matrix");
   return (
@@ -217,18 +219,22 @@ function DeviceRow({
                 format={(v) => `${Math.round(v * 100)}%`}
                 onChange={deviceSetter(device.id, "brightness")}
               />
-              <Slider
-                label="Gamma"
-                min={1}
-                max={3.5}
-                step={0.05}
-                value={device.gamma}
-                onChange={deviceSetter(device.id, "gamma")}
-              />
-              <p className="hint">
-                Gamma makes dim colours look right on LEDs. If colours look washed out, raise it; if dark shades
-                vanish, lower it.
-              </p>
+              {full && (
+                <>
+                  <Slider
+                    label="Gamma"
+                    min={1}
+                    max={3.5}
+                    step={0.05}
+                    value={device.gamma}
+                    onChange={deviceSetter(device.id, "gamma")}
+                  />
+                  <p className="hint">
+                    Gamma makes dim colours look right on LEDs. If colours look washed out, raise it; if dark
+                    shades vanish, lower it.
+                  </p>
+                </>
+              )}
             </>
           )}
           <div className="device-footer">
@@ -566,6 +572,7 @@ export function DemoSwitch() {
 }
 
 export function DevicePanel() {
+  const full = useFull();
   const show = useShow();
   const status = useStatus();
   const found = useFound();
@@ -639,7 +646,7 @@ export function DevicePanel() {
     <aside className="panel devices">
       <div className="panel-head">
         <h2>Lights</h2>
-        {show.devices.length > 0 && (
+        {full && show.devices.length > 0 && (
           <IconButton label="New group of lights" onClick={newGroup}>
             <FolderPlus size={15} />
           </IconButton>
@@ -743,7 +750,7 @@ export function DevicePanel() {
           <AddByAddress />
           <h2>Without hardware</h2>
           <DemoSwitch />
-          <AddVirtual />
+          {full && <AddVirtual />}
         </>
       )}
     </aside>

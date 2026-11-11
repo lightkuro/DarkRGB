@@ -26,12 +26,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  advancedPref,
+  fullPref,
   engine,
   perFrame,
   settingsPage,
   toggleFolded,
-  useAdvanced,
+  useFull,
   useFolded,
   useHello,
   useLive,
@@ -272,7 +272,17 @@ export function EffectPicker({ onPick, current }: { onPick: (id: string) => void
   );
 }
 
-function Targets({ layer, fixtures, groups }: { layer: Layer; fixtures: Fixture[]; groups: LightGroup[] }) {
+function Targets({
+  layer,
+  fixtures,
+  groups,
+  full,
+}: {
+  layer: Layer;
+  fixtures: Fixture[];
+  groups: LightGroup[];
+  full: boolean;
+}) {
   const picked = useSelection();
   const strips = fixtures.filter((f) => f.shape.type === "strip").length;
   // Offered when the show has both kinds of light, or the effect is kept to one already.
@@ -355,7 +365,7 @@ function Targets({ layer, fixtures, groups }: { layer: Layer; fixtures: Fixture[
       </div>
       {
         // Only a choice when it plays on more than one light.
-        (all || layer.targets.length > 1 || layer.targets.some((id) => groups.some((g) => g.id === id))) && (
+        full && (all || layer.targets.length > 1 || layer.targets.some((id) => groups.some((g) => g.id === id))) && (
           <div className="field inline each">
             <span title="Off: the effect is drawn once across all of these lights, wherever they are. On: every light gets the whole effect to itself.">
               Each light on its own
@@ -635,7 +645,7 @@ function LayerBody({
       ))}
       {usesSound && !layer.sound.manual && <SoundControls layer={layer} hello={hello} advanced={advanced} />}
       {layer.sound.manual && !advanced && <ManualSwitch layer={layer} />}
-      <Targets layer={layer} fixtures={fixtures} groups={show.light_groups} />
+      <Targets layer={layer} fixtures={fixtures} groups={show.light_groups} full={advanced} />
       <Slider
         label="Strength"
         min={0}
@@ -644,8 +654,11 @@ function LayerBody({
         format={(v) => `${Math.round(v * 100)}%`}
         onChange={numberSender(`${layer.id}:opacity`, (opacity) => ({ type: "update_layer", id: layer.id, opacity }))}
       />
-      <KeyAssign action={{ type: "layer", id: layer.id }} />
-      {show.layer_groups.length > 0 && (
+      {/* In the simple layout, keys are given in the Live view. One that is there already still shows. */}
+      {(advanced || show.bindings.some((b) => b.action.type === "layer" && b.action.id === layer.id && b.key)) && (
+        <KeyAssign action={{ type: "layer", id: layer.id }} />
+      )}
+      {advanced && show.layer_groups.length > 0 && (
         <label className="field inline">
           <span>Folder</span>
           <select
@@ -854,7 +867,7 @@ function FolderSettings({ folder, onAdd }: { folder: LayerGroup; onAdd: () => vo
 export function LayerPanel() {
   const show = useShow();
   const hello = useHello();
-  const advanced = useAdvanced();
+  const advanced = useFull();
   const folded = useFolded();
   const live = useLive();
   // The effect picker, and the folder a new effect should go into.
@@ -1117,9 +1130,12 @@ export function LayerPanel() {
     <aside className="panel layers">
       <div className="panel-head">
         <h2>Effects</h2>
-        <label className="advanced-toggle" title="Show every setting">
-          Advanced
-          <Switch checked={advanced} label="Show advanced settings" onChange={(on) => advancedPref.set(on)} />
+        <label
+          className="advanced-toggle"
+          title="The simple layout shows what most shows need. The full layout shows every control."
+        >
+          Full layout
+          <Switch checked={advanced} label="Full layout" onChange={(on) => fullPref.set(on)} />
         </label>
       </div>
 
@@ -1141,15 +1157,17 @@ export function LayerPanel() {
           <button type="button" className="button wide" onClick={() => setAdding({ group: null })}>
             <Plus size={15} /> Add an effect
           </button>
-          <button
-            type="button"
-            className="button square"
-            aria-label="New folder"
-            title="New folder, to keep effects that belong together in one place"
-            onClick={newFolder}
-          >
-            <FolderPlus size={16} />
-          </button>
+          {advanced && (
+            <button
+              type="button"
+              className="button square"
+              aria-label="New folder"
+              title="New folder, to keep effects that belong together in one place"
+              onClick={newFolder}
+            >
+              <FolderPlus size={16} />
+            </button>
+          )}
         </div>
       )}
       {show.layers.length === 0 && !adding && (

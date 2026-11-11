@@ -26,6 +26,7 @@ import {
   selection,
   settingsPage,
   useFirstKind,
+  useFull,
   useSelection,
   useShow,
   useStatus,
@@ -145,6 +146,7 @@ export function Stage() {
   const fixtures = show?.fixtures ?? [];
   // A show nobody has touched yet is asked who it is for. The answer is
   // applied when its first lights arrive, by whichever way they are added.
+  const full = useFull();
   const kind = useFirstKind();
   const fresh = Boolean(show && show.kind === "custom" && show.scenes.length === 0 && show.layers.length <= 1);
   const hadLights = useRef(true);
@@ -569,8 +571,8 @@ export function Stage() {
               <button type="button" className="tool" title="Turn a quarter turn" onClick={turnQuarter}>
                 <RotateCw size={15} /> Turn
               </button>
-              {single && <AngleField fixture={single} />}
-              {single?.shape.type === "strip" && (
+              {full && single && <AngleField fixture={single} />}
+              {full && single?.shape.type === "strip" && (
                 <button
                   type="button"
                   className={`tool ${single.shape.reverse ? "active" : ""}`}
@@ -587,17 +589,19 @@ export function Stage() {
                   <ArrowLeftRight size={15} /> Reverse
                 </button>
               )}
-              <button
-                type="button"
-                className="tool"
-                title="Make a group of what is picked. Effects can play on a group, and it dims as one."
-                onClick={groupPicked}
-              >
-                <FolderPlus size={15} /> Group
-              </button>
+              {full && (
+                <button
+                  type="button"
+                  className="tool"
+                  title="Make a group of what is picked. Effects can play on a group, and it dims as one."
+                  onClick={groupPicked}
+                >
+                  <FolderPlus size={15} /> Group
+                </button>
+              )}
             </div>
           )}
-          {fixtures.length > 1 && (
+          {full && fixtures.length > 1 && (
             <button
               type="button"
               className={`tool ${boxTool ? "active" : ""}`}

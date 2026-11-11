@@ -14,12 +14,12 @@ import {
 import { useEffect, useRef, type ReactNode } from "react";
 import changelog from "../../../CHANGELOG.md?raw";
 import {
-  advancedPref,
+  fullPref,
   engine,
   libraryOpen,
   perFrame,
   settingsPage,
-  useAdvanced,
+  useFull,
   useHello,
   useLibrary,
   useSettingsPage,
@@ -63,21 +63,47 @@ function Row({ title, hint, children }: { title: string; hint?: string; children
 }
 
 function General() {
-  const advanced = useAdvanced();
+  const full = useFull();
   return (
     <>
-      <Row
-        title="Advanced settings"
-        hint="Shows every setting on effects: extra sliders, custom frequency ranges, mixing, names and copies."
-      >
-        <Switch checked={advanced} label="Show advanced settings" onChange={(on) => advancedPref.set(on)} />
-      </Row>
+      <div className="field">
+        <span className="field-head">
+          <span>Layout</span>
+        </span>
+        <div className="segmented" role="radiogroup" aria-label="Layout">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!full}
+            className={full ? "" : "selected"}
+            onClick={() => fullPref.set(false)}
+          >
+            Simple
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={full}
+            className={full ? "selected" : ""}
+            onClick={() => fullPref.set(true)}
+          >
+            Full
+          </button>
+        </div>
+      </div>
+      <p className="hint">
+        {full
+          ? "Full shows every control: folders and groups, which part of the sound an effect hears, how effects mix, keys on everything, and every setting."
+          : "Simple shows what most shows need and looks after the rest. Full adds folders and groups, which part of the sound an effect hears, how effects mix, keys on everything, and every setting."}{" "}
+        Nothing in a show is lost by switching. This choice is kept on this device.
+      </p>
       <DemoSwitch />
     </>
   );
 }
 
 function Sound({ show }: { show: Show }) {
+  const full = useFull();
   return (
     <>
       <AudioControls />
@@ -93,19 +119,23 @@ function Sound({ show }: { show: Show }) {
         Makes the quiet parts of a song dimmer and calmer, so the big parts land harder. Off treats every part
         of a song alike. Effects you play by hand are never held back.
       </p>
-      <Slider
-        label="Light delay"
-        min={0}
-        max={500}
-        step={5}
-        value={show.audio.delay_ms}
-        format={(v) => (v === 0 ? "None" : `${Math.round(v)} ms`)}
-        onChange={setDelay}
-      />
-      <p className="hint">
-        Makes the lights wait this long before following the sound. Use it when the lights are ahead of what you
-        hear, which happens with Bluetooth speakers and some TVs. Most Bluetooth speakers need 100 to 250 ms.
-      </p>
+      {(full || show.audio.delay_ms > 0) && (
+        <>
+          <Slider
+            label="Light delay"
+            min={0}
+            max={500}
+            step={5}
+            value={show.audio.delay_ms}
+            format={(v) => (v === 0 ? "None" : `${Math.round(v)} ms`)}
+            onChange={setDelay}
+          />
+          <p className="hint">
+            Makes the lights wait this long before following the sound. Use it when the lights are ahead of what you
+            hear, which happens with Bluetooth speakers and some TVs. Most Bluetooth speakers need 100 to 250 ms.
+          </p>
+        </>
+      )}
     </>
   );
 }
@@ -120,6 +150,7 @@ function ceiling(leds: number): number {
 }
 
 function Lights({ show }: { show: Show }) {
+  const full = useFull();
   const hello = useHello();
   const status = useStatus();
   const pixels = show.fixtures.reduce(
@@ -143,35 +174,39 @@ function Lights({ show }: { show: Show }) {
         What the brightness slider's 100% means. Lower it to protect a power supply that cannot run every LED at
         full white, or simply to make the lights easier on the eyes. Each light also has its own limit.
       </p>
-      <div className="field">
-        <span className="field-head">
-          <span>Frames per second</span>
-        </span>
-        <div className="segmented" role="radiogroup" aria-label="Frames per second">
-          {(hello?.frame_rates ?? [60]).map((rate) => (
-            <button
-              key={rate}
-              type="button"
-              role="radio"
-              aria-checked={show.output.frame_rate === rate}
-              className={show.output.frame_rate === rate ? "selected" : ""}
-              onClick={() => engine.send({ type: "set_output", frame_rate: rate })}
-            >
-              {rate}
-            </button>
-          ))}
-        </div>
-      </div>
-      <p className="hint">
-        60 suits most setups. If lights on WiFi stutter or lag behind, try 40 or 30: fewer frames are easier for a
-        busy network and for the devices. 120 only helps short strips on a fast connection, because the LEDs
-        themselves take time to refresh.
-      </p>
-      {slow.length > 0 && (
-        <p className="callout note">
-          At {show.output.frame_rate} a second these cannot keep up and will skip frames:{" "}
-          {slow.map((d) => `${d.name} (${d.pixel_count} LEDs, about ${ceiling(d.pixel_count)} a second)`).join(", ")}.
-        </p>
+      {(full || show.output.frame_rate !== 60) && (
+        <>
+          <div className="field">
+            <span className="field-head">
+              <span>Frames per second</span>
+            </span>
+            <div className="segmented" role="radiogroup" aria-label="Frames per second">
+              {(hello?.frame_rates ?? [60]).map((rate) => (
+                <button
+                  key={rate}
+                  type="button"
+                  role="radio"
+                  aria-checked={show.output.frame_rate === rate}
+                  className={show.output.frame_rate === rate ? "selected" : ""}
+                  onClick={() => engine.send({ type: "set_output", frame_rate: rate })}
+                >
+                  {rate}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="hint">
+            60 suits most setups. If lights on WiFi stutter or lag behind, try 40 or 30: fewer frames are easier for a
+            busy network and for the devices. 120 only helps short strips on a fast connection, because the LEDs
+            themselves take time to refresh.
+          </p>
+          {slow.length > 0 && (
+            <p className="callout note">
+              At {show.output.frame_rate} a second these cannot keep up and will skip frames:{" "}
+              {slow.map((d) => `${d.name} (${d.pixel_count} LEDs, about ${ceiling(d.pixel_count)} a second)`).join(", ")}.
+            </p>
+          )}
+        </>
       )}
 
       <h3>Flashing</h3>
@@ -191,7 +226,7 @@ function Lights({ show }: { show: Show }) {
           onChange={(on) => engine.send({ type: "set_flash", limit: on ? 3 : 0 })}
         />
       </Row>
-      {limited && (
+      {limited && (full || show.flash.strict) && (
         <div className="segmented" role="radiogroup" aria-label="What counts as a flash">
           <button
             type="button"
@@ -215,12 +250,17 @@ function Lights({ show }: { show: Show }) {
       )}
       <p className="hint">
         Flashing faster than about three times a second can trigger seizures in people with photosensitive
-        epilepsy. "Hard flashes" stops strobes and anything that changes the whole picture by a quarter of full
-        brightness or more. "Strict" is the limit used for screens, a tenth; it also flattens most effects that
-        follow fast music. This choice is kept with the show, so a club night and a display on the lawn can each
-        have their own. Leave a limit on when anyone you do not know will see the lights.
+        epilepsy. With the limit on, strobes slow down to three a second and anything else that flashes the whole
+        picture faster is softened. This choice is kept with the show, so a club night and a display on the lawn
+        can each have their own. Leave it on when anyone you do not know will see the lights.
       </p>
-      {status && (
+      {limited && (full || show.flash.strict) && (
+        <p className="hint">
+          "Hard flashes" counts a change of a quarter of full brightness or more. "Strict" is the limit used for
+          screens, a tenth; it also flattens most effects that follow fast music.
+        </p>
+      )}
+      {full && status && (
         <p className="hint">
           Right now: {pixels} LEDs, {status.render.fps.toFixed(0)} frames a second,{" "}
           {status.render.frame_ms.toFixed(1)} ms of work for each.
@@ -271,6 +311,7 @@ export function actionName(action: Action, show: Show, effectName: (id: string) 
 }
 
 function LivePage({ show }: { show: Show }) {
+  const full = useFull();
   const hello = useHello();
   const effectName = (id: string) => hello?.effects.find((e) => e.id === id)?.name ?? id;
   // Pads with keys, by key. Pads without one are set up in the Live view.
@@ -302,15 +343,19 @@ function LivePage({ show }: { show: Show }) {
         Waiting for the beat makes a change land in time with the music even when you press a little early. With
         no steady beat to wait for, changes happen at once.
       </p>
-      <Slider
-        label="Scene changes fade over"
-        min={0}
-        max={5}
-        step={0.1}
-        value={show.live.fade}
-        format={(v) => (v === 0 ? "No fade" : `${v.toFixed(1)} s`)}
-        onChange={setFade}
-      />
+      {(full || show.live.fade > 0) && (
+        <>
+          <Slider
+            label="Scene changes fade over"
+            min={0}
+            max={5}
+            step={0.1}
+            value={show.live.fade}
+            format={(v) => (v === 0 ? "No fade" : `${v.toFixed(1)} s`)}
+            onChange={setFade}
+          />
+        </>
+      )}
       <Tempo />
       <p className="hint">
         Tap in time with the music to set the tempo by hand when it is not being found, or is found wrong. The
@@ -328,87 +373,100 @@ function LivePage({ show }: { show: Show }) {
           onChange={(auto) => engine.send({ type: "set_live", auto })}
         />
       </Row>
-      <div className="field">
-        <span className="field-head">
-          <span>A new scene every</span>
-        </span>
-        <div className="segmented" role="radiogroup" aria-label="Bars per scene">
-          {[2, 4, 8, 16].map((bars) => (
-            <button
-              key={bars}
-              type="button"
-              role="radio"
-              aria-checked={show.live.auto.every_bars === bars}
-              className={show.live.auto.every_bars === bars ? "selected" : ""}
-              onClick={() => engine.send({ type: "set_live", every_bars: bars })}
-            >
-              {bars} bars
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="field inline">
-        <span>
-          Also when the song changes
-          <span className="hint block">A drop or a breakdown brings the next scene at once.</span>
-        </span>
-        <Switch
-          checked={show.live.auto.on_drops}
-          label="Change scene when the song changes"
-          onChange={(on_drops) => engine.send({ type: "set_live", on_drops })}
-        />
-      </div>
-      <div className="field inline">
-        <span>Shuffle the order</span>
-        <Switch
-          checked={show.live.auto.shuffle}
-          label="Shuffle the order of scenes"
-          onChange={(shuffle) => engine.send({ type: "set_live", shuffle })}
-        />
-      </div>
-      <p className="hint">
-        A bar is four beats. With no steady beat to count, a bar is taken as two seconds. A scene can be kept out
-        of autopilot from its own menu in the scenes bar.
-      </p>
-
-      <h3>Keys</h3>
-      <p className="hint">
-        Scenes, effects, folders and groups of lights get their keys where they are listed, or in the Live view
-        under Customize. These belong to the whole show.
-      </p>
-      <KeyAssign action={{ type: "blackout" }} label="Blackout" />
-      <KeyAssign action={{ type: "tap_tempo" }} label="Tap the tempo" />
-      <KeyAssign action={{ type: "hit" }} label="Fire a beat" />
-      <KeyAssign action={{ type: "next_scene" }} label="Next scene" />
-      <KeyAssign action={{ type: "prev_scene" }} label="Previous scene" />
-      <KeyAssign action={{ type: "freeze" }} label="Freeze the picture" />
-      <p className="hint">
-        Firing a beat sets off every effect that waits for one, such as Beat pulse and Ripple, with or without
-        music.
-      </p>
-
-      {sorted.length > 0 && (
+      {full && (
         <>
-          <h3>All keys</h3>
-          <ul className="key-list">
-            {sorted.map((binding) => (
-              <li key={binding.id}>
-                <Keycap binding={binding} />
-                <span className="key-what">{actionName(binding.action, show, effectName)}</span>
-                <span className="hint">{modeNote(binding)}</span>
+          <div className="field">
+            <span className="field-head">
+              <span>A new scene every</span>
+            </span>
+            <div className="segmented" role="radiogroup" aria-label="Bars per scene">
+              {[2, 4, 8, 16].map((bars) => (
                 <button
+                  key={bars}
                   type="button"
-                  className="icon-button"
-                  aria-label={`Remove the key ${binding.label || binding.key}`}
-                  title="Remove this key"
-                  onClick={() => engine.send({ type: "unbind", id: binding.id })}
+                  role="radio"
+                  aria-checked={show.live.auto.every_bars === bars}
+                  className={show.live.auto.every_bars === bars ? "selected" : ""}
+                  onClick={() => engine.send({ type: "set_live", every_bars: bars })}
                 >
-                  <X size={14} />
+                  {bars} bars
                 </button>
-              </li>
-            ))}
-          </ul>
+              ))}
+            </div>
+          </div>
+          <div className="field inline">
+            <span>
+              Also when the song changes
+              <span className="hint block">A drop or a breakdown brings the next scene at once.</span>
+            </span>
+            <Switch
+              checked={show.live.auto.on_drops}
+              label="Change scene when the song changes"
+              onChange={(on_drops) => engine.send({ type: "set_live", on_drops })}
+            />
+          </div>
+          <div className="field inline">
+            <span>Shuffle the order</span>
+            <Switch
+              checked={show.live.auto.shuffle}
+              label="Shuffle the order of scenes"
+              onChange={(shuffle) => engine.send({ type: "set_live", shuffle })}
+            />
+          </div>
+          <p className="hint">
+            A bar is four beats. With no steady beat to count, a bar is taken as two seconds. A scene can be kept out
+            of autopilot from its own menu in the scenes bar.
+          </p>
         </>
+      )}
+
+      {full ? (
+        <>
+          <h3>Keys</h3>
+          <p className="hint">
+            Scenes, effects, folders and groups of lights get their keys where they are listed, or in the Live view
+            under Customize. These belong to the whole show.
+          </p>
+          <KeyAssign action={{ type: "blackout" }} label="Blackout" />
+          <KeyAssign action={{ type: "tap_tempo" }} label="Tap the tempo" />
+          <KeyAssign action={{ type: "hit" }} label="Fire a beat" />
+          <KeyAssign action={{ type: "next_scene" }} label="Next scene" />
+          <KeyAssign action={{ type: "prev_scene" }} label="Previous scene" />
+          <KeyAssign action={{ type: "freeze" }} label="Freeze the picture" />
+          <p className="hint">
+            Firing a beat sets off every effect that waits for one, such as Beat pulse and Ripple, with or without
+            music.
+          </p>
+
+          {sorted.length > 0 && (
+            <>
+              <h3>All keys</h3>
+              <ul className="key-list">
+                {sorted.map((binding) => (
+                  <li key={binding.id}>
+                    <Keycap binding={binding} />
+                    <span className="key-what">{actionName(binding.action, show, effectName)}</span>
+                    <span className="hint">{modeNote(binding)}</span>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={`Remove the key ${binding.label || binding.key}`}
+                      title="Remove this key"
+                      onClick={() => engine.send({ type: "unbind", id: binding.id })}
+                    >
+                      <X size={14} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </>
+      ) : (
+        <p className="hint">
+          Keys for scenes and effects are set in the Live view, under Customize. The full layout has more here:
+          how often autopilot changes scene, fades, and keys for blackout, tempo and the rest.
+        </p>
       )}
     </>
   );
