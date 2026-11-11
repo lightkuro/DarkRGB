@@ -33,12 +33,18 @@ struct Target {
     y: f32,
 }
 
-struct LayerState {
-    effect_id: String,
-    effect: Box<dyn Effect>,
+/// Pixels that share one frame of reference: all of a layer's pixels, or
+/// one fixture's when the layer draws on each light by itself.
+struct Segment {
     targets: Vec<Target>,
     aspect: f32,
     flat: bool,
+}
+
+struct LayerState {
+    effect_id: String,
+    effect: Box<dyn Effect>,
+    segments: Vec<Segment>,
 }
 
 /// Keeps effect state between frames and caches pixel positions.
@@ -51,7 +57,7 @@ pub struct Renderer {
     positions: Vec<[f32; 2]>,
     /// Fixtures and layer targets as they were when the caches were built.
     layout_key: Vec<Fixture>,
-    target_key: Vec<(u32, Vec<u32>)>,
+    target_key: Vec<(u32, Vec<u32>, bool)>,
     layers: HashMap<u32, LayerState>,
     frame: Vec<Rgb>,
     scratch: Vec<Rgb>,
@@ -81,7 +87,8 @@ impl Renderer {
             self.scratch.resize(self.positions.len(), Rgb::BLACK);
         }
 
-        let target_key: Vec<(u32, Vec<u32>)> = show.layers.iter().map(|l| (l.id, l.targets.clone())).collect();
+        let target_key: Vec<(u32, Vec<u32>, bool)> =
+            show.layers.iter().map(|l| (l.id, l.targets.clone(), l.each)).collect();
         let targets_changed = layout_changed || target_key != self.target_key;
         self.target_key = target_key;
 
@@ -98,18 +105,13 @@ impl Renderer {
                     LayerState {
                         effect_id: layer.effect.clone(),
                         effect: (def.make)(),
-                        targets: Vec::new(),
-                        aspect: 1.0,
-                        flat: true,
+                        segments: Vec::new(),
                     },
                 );
             }
             if stale || targets_changed {
                 let state = self.layers.get_mut(&layer.id).expect("just inserted");
-                let (targets, aspect, flat) = build_targets(show, layer, &self.positions);
-                state.targets = targets;
-                state.aspect = aspect;
-                state.flat = flat;
+                state.segments = build_segments(show, layer, &self.positions);
             }
         }
     }
@@ -160,31 +162,40 @@ impl Renderer {
             };
             let opacity = opacity * (1.0 - 0.7 * lull);
             let dt = dt * (1.0 - 0.5 * lull);
-            let ctx = FrameCtx {
+            let Some(first) = state.segments.first() else {
+                continue;
+            };
+            let mut ctx = FrameCtx {
                 time,
                 dt,
                 audio: heard,
                 beats: heard.beat_count as f64 + heard.beat_phase.clamp(0.0, 1.0) as f64,
-                aspect: state.aspect,
-                flat: state.flat,
+                aspect: first.aspect,
+                flat: first.flat,
             };
             state
                 .effect
                 .configure(&ParamReader::new(&def.info.params, &layer.params));
+            // The effect moves on once a frame, whatever it is drawn on.
             state.effect.update(&ctx);
             // "Brightness follows sound": dim the layer by how quiet its
             // part of the sound is. Zero leaves the effect as it is.
             let pulse = layer.sound.pulse.clamp(0.0, 1.0);
             let follow = 1.0 - pulse + pulse * heard.level;
-            for t in &state.targets {
-                let src = state.effect.shade(t.x, t.y, &ctx).clamp().scale(follow);
-                let dst = &mut self.frame[t.index as usize];
-                *dst = match layer.blend {
-                    Blend::Normal => dst.lerp(src, opacity),
-                    Blend::Add => dst.add(src.scale(opacity)).clamp(),
-                    Blend::Lighten => dst.max(src.scale(opacity)),
-                    Blend::Multiply => dst.lerp(dst.mul(src), opacity),
-                };
+            for segment in &state.segments {
+                // Each light, drawn by itself, has its own shape.
+                ctx.aspect = segment.aspect;
+                ctx.flat = segment.flat;
+                for t in &segment.targets {
+                    let src = state.effect.shade(t.x, t.y, &ctx).clamp().scale(follow);
+                    let dst = &mut self.frame[t.index as usize];
+                    *dst = match layer.blend {
+                        Blend::Normal => dst.lerp(src, opacity),
+                        Blend::Add => dst.add(src.scale(opacity)).clamp(),
+                        Blend::Lighten => dst.max(src.scale(opacity)),
+                        Blend::Multiply => dst.lerp(dst.mul(src), opacity),
+                    };
+                }
             }
         }
         let master = if show.master.blackout {
@@ -275,6 +286,70 @@ impl Renderer {
                 }
             }
             offset += count;
+        }
+    }
+}
+
+/// The frames of reference a layer draws in: one around everything it
+/// plays on, or one per light when it draws on each by itself.
+fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Segment> {
+    if !layer.each {
+        let (targets, aspect, flat) = build_targets(show, layer, positions);
+        return if targets.is_empty() {
+            Vec::new()
+        } else {
+            vec![Segment { targets, aspect, flat }]
+        };
+    }
+    let mut segments = Vec::new();
+    let mut offset = 0u32;
+    for fixture in &show.fixtures {
+        let count = fixture.pixel_count();
+        if Show::layer_hits(layer, fixture) && count > 0 {
+            segments.push(own_segment(fixture, offset, count, positions));
+        }
+        offset += count;
+    }
+    segments
+}
+
+/// A fixture in its own frame: along its length for a strip, across its
+/// own columns and rows for a matrix, however it is turned on the canvas.
+fn own_segment(fixture: &Fixture, offset: u32, count: u32, positions: &[[f32; 2]]) -> Segment {
+    match fixture.shape {
+        Shape::Strip { reverse, .. } => Segment {
+            targets: (0..count)
+                .map(|i| {
+                    let along = (i as f32 + 0.5) / count as f32;
+                    Target {
+                        index: offset + i,
+                        x: if reverse { 1.0 - along } else { along },
+                        y: 0.5,
+                    }
+                })
+                .collect(),
+            aspect: 1.0,
+            flat: true,
+        },
+        Shape::Matrix { .. } => {
+            // Turn each pixel's place on the canvas back into the matrix's own.
+            let (sin, cos) = (-fixture.rotation).to_radians().sin_cos();
+            let (w, h) = (fixture.width.max(1e-6), fixture.height.max(1e-6));
+            Segment {
+                targets: (0..count)
+                    .map(|i| {
+                        let p = positions[(offset + i) as usize];
+                        let (dx, dy) = (p[0] - fixture.x, p[1] - fixture.y);
+                        Target {
+                            index: offset + i,
+                            x: ((dx * cos - dy * sin) / w + 0.5).clamp(0.0, 1.0),
+                            y: ((dx * sin + dy * cos) / h + 0.5).clamp(0.0, 1.0),
+                        }
+                    })
+                    .collect(),
+                aspect: w / h,
+                flat: false,
+            }
         }
     }
 }
@@ -798,6 +873,75 @@ mod tests {
         plain.add_device(device(1), None);
         plain.audio.dynamics = 1.0;
         assert_eq!(lit(&plain, &quiet), 1.0);
+    }
+
+    #[test]
+    fn an_effect_can_draw_on_each_light_by_itself() {
+        // A level meter fills from the left. Across two strips side by
+        // side, half full lights the first strip only; on each by itself,
+        // it lights the first half of both.
+        let mut show = Show::default();
+        show.layers.clear();
+        show.add_device(device(4), None);
+        show.add_device(device(4), None);
+        show.fixtures[0].x = 0.0;
+        show.fixtures[1].x = 1.0;
+        show.fixtures[1].y = 0.0;
+        let id = show.add_layer("meter");
+        show.layer_mut(id)
+            .unwrap()
+            .params
+            .insert("hold".into(), ParamValue::Bool(false));
+        let half = AudioFeatures {
+            level: 0.5,
+            active: true,
+            ..AudioFeatures::default()
+        };
+        let lit = |show: &Show| {
+            let mut r = Renderer::new();
+            r.sync(show);
+            let mut frame = Vec::new();
+            for i in 0..40 {
+                frame = r.render(show, i as f64 / 60.0, 1.0 / 60.0, &half).to_vec();
+            }
+            frame.iter().map(|px| px.r + px.g + px.b > 0.3).collect::<Vec<bool>>()
+        };
+        assert_eq!(lit(&show), [true, true, true, true, false, false, false, false]);
+        show.layer_mut(id).unwrap().each = true;
+        assert_eq!(lit(&show), [true, true, false, false, true, true, false, false]);
+    }
+
+    #[test]
+    fn a_turned_matrix_drawn_by_itself_keeps_its_own_up_and_down() {
+        // Fire burns from the matrix's own bottom row, even with the
+        // matrix turned upside down on the canvas.
+        let mut show = Show::default();
+        show.layers.clear();
+        show.add_device(device(64), Some((8, 8)));
+        show.fixtures[0].rotation = 180.0;
+        let id = show.add_layer("fire");
+        show.layer_mut(id).unwrap().each = true;
+        let mut r = Renderer::new();
+        r.sync(&show);
+        let mut frame = Vec::new();
+        for i in 0..60 {
+            frame = r
+                .render(&show, i as f64 / 60.0, 1.0 / 60.0, &AudioFeatures::default())
+                .to_vec();
+        }
+        let row = |n: usize| frame[n * 8..n * 8 + 8].iter().map(|px| px.r).sum::<f32>();
+        assert!(row(7) > 4.0, "the last row wired is the bottom: {}", row(7));
+        assert!(row(0) < 0.5, "and the first is the top: {}", row(0));
+        // Across the canvas instead, upside down means flames from the first row.
+        show.layer_mut(id).unwrap().each = false;
+        r.sync(&show);
+        for i in 0..60 {
+            frame = r
+                .render(&show, i as f64 / 60.0, 1.0 / 60.0, &AudioFeatures::default())
+                .to_vec();
+        }
+        let row = |n: usize| frame[n * 8..n * 8 + 8].iter().map(|px| px.r).sum::<f32>();
+        assert!(row(0) > row(7));
     }
 
     #[test]

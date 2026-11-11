@@ -49,6 +49,8 @@ export interface Hello {
   band_groups: [number, number][];
   /** Frame rates the engine can run at. */
   frame_rates: number[];
+  /** The starter scenes that can be added. */
+  looks: { name: string; description: string }[];
   effects: EffectInfo[];
   palettes: Palette[];
 }
@@ -173,6 +175,8 @@ export interface Layer {
   enabled: boolean;
   /** The folder this layer is filed in, if any. */
   group: number | null;
+  /** Drawn on each light by itself instead of once across all of them. */
+  each: boolean;
 }
 
 export interface Scene {
@@ -180,6 +184,8 @@ export interface Scene {
   name: string;
   layers: Layer[];
   groups: LayerGroup[];
+  /** Whether autopilot may switch to this scene. */
+  auto: boolean;
 }
 
 export interface Show {
@@ -193,12 +199,26 @@ export interface Show {
   scenes: Scene[];
   bindings: Binding[];
   master: { brightness: number; blackout: boolean; limit: number };
-  audio: { source: string; sensitivity: number; delay_ms: number };
-  live: { launch: Launch; fade: number; speed: number };
+  audio: {
+    source: string;
+    sensitivity: number;
+    delay_ms: number;
+    /** How much the lights follow the shape of the song, 0 to 1. */
+    dynamics: number;
+  };
+  live: {
+    launch: Launch;
+    fade: number;
+    speed: number;
+    /** Autopilot: changes scene by itself, in time with the music. */
+    auto: { enabled: boolean; every_bars: number; shuffle: boolean; on_drops: boolean };
+  };
   output: {
     frame_rate: number;
     /** Most flashes of the whole picture in a second; 0 means no limit. */
     flash_limit: number;
+    /** Count small changes as flashes too, as guidance for screens does. */
+    flash_strict: boolean;
   };
 }
 
@@ -270,12 +290,21 @@ export interface AudioFeatures {
   bpm: number;
   beat_count: number;
   active: boolean;
+  /** How big this part of the song is against the last minute, 0 to 1. */
+  intensity: number;
+  /** Goes up by one when the song moves to a new section. */
+  section: number;
+  /** Jumps to 1 on a drop, then fades. */
+  drop: number;
 }
 
 export type Command =
   | { type: "add_device"; address: string }
   | { type: "scan_network"; prefix: string }
   | { type: "set_demo"; enabled: boolean }
+  | { type: "start_demo" }
+  | { type: "add_looks" }
+  | { type: "set_scene_auto"; id: number; auto: boolean }
   | {
       type: "add_virtual";
       name: string;
@@ -318,8 +347,17 @@ export type Command =
   | { type: "tap" }
   | { type: "hit" }
   | { type: "auto_tempo" }
-  | { type: "set_live"; launch?: Launch; fade?: number; speed?: number }
-  | { type: "set_output"; frame_rate?: number; flash_limit?: number }
+  | {
+      type: "set_live";
+      launch?: Launch;
+      fade?: number;
+      speed?: number;
+      auto?: boolean;
+      every_bars?: number;
+      shuffle?: boolean;
+      on_drops?: boolean;
+    }
+  | { type: "set_output"; frame_rate?: number; flash_limit?: number; flash_strict?: boolean }
   | { type: "rename_scene"; id: number; name: string }
   | { type: "new_show"; keep_lights: boolean }
   | { type: "export_show" }
@@ -331,11 +369,12 @@ export type Command =
       blend?: Blend;
       enabled?: boolean;
       targets?: number[];
+      each?: boolean;
     }
   | { type: "set_param"; layer: number; param: string; value: ParamValue }
   | { type: "reset_params"; layer: number }
   | { type: "set_master"; brightness?: number; blackout?: boolean; limit?: number }
-  | { type: "set_audio"; source?: string; sensitivity?: number; delay_ms?: number }
+  | { type: "set_audio"; source?: string; sensitivity?: number; delay_ms?: number; dynamics?: number }
   | { type: "save_scene"; name: string }
   | { type: "recall_scene"; id: number }
   | { type: "delete_scene"; id: number }
@@ -370,6 +409,9 @@ const SILENCE: AudioFeatures = {
   bpm: 0,
   beat_count: 0,
   active: false,
+  intensity: 1,
+  section: 0,
+  drop: 0,
 };
 
 class Store<T> {
@@ -607,8 +649,8 @@ export function flashNotice(): void {
   flashNoticePref.set(true);
   engine.toast(
     "info",
-    "Flashing lights can trigger seizures in people with photosensitive epilepsy. Anything faster than " +
-      "3 flashes a second is softened. The switch for this is in Settings, under Lights.",
+    "Flashing lights can trigger seizures in people with photosensitive epilepsy. Hard flashes faster than " +
+      "3 a second are softened. The switch for this is in Settings, under Lights.",
   );
 }
 

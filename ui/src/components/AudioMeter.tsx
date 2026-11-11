@@ -115,6 +115,11 @@ export function AudioMeter() {
         ctx.fillStyle = a.active ? `hsl(${38 + (i / n) * 135} 90% ${48 + v * 14}%)` : "#2a2f3a";
         ctx.fillRect(i * bar, h - height, Math.max(1, bar - 1), height);
       }
+      // A thin line along the top: how big this part of the song is.
+      if (a.active) {
+        ctx.fillStyle = a.drop > 0.3 ? "#ffffff" : "rgba(255, 255, 255, 0.45)";
+        ctx.fillRect(0, 0, w * a.intensity, 1.5);
+      }
       const tempo = a.bpm > 0 ? `${Math.round(a.bpm)} BPM` : a.active ? "no steady beat" : "silent";
       if (tempo !== lastTempo && tempoRef.current) {
         tempoRef.current.textContent = tempo;

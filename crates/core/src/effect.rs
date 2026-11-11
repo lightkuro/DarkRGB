@@ -91,6 +91,52 @@ pub fn hash2(a: u32, b: u32) -> f32 {
     (h >> 8) as f32 / (1u32 << 24) as f32
 }
 
+/// Smooth noise in 0..1 over a plane: neighbouring points get similar
+/// values, unlike `hash2`. Good for flames and clouds.
+pub fn noise2(x: f32, y: f32) -> f32 {
+    let (xf, yf) = (x.floor(), y.floor());
+    let (xi, yi) = (xf as i32 as u32, yf as i32 as u32);
+    // Ease between the four corners of the cell.
+    let (u, v) = (x - xf, y - yf);
+    let (u, v) = (u * u * (3.0 - 2.0 * u), v * v * (3.0 - 2.0 * v));
+    let top = hash2(xi, yi) * (1.0 - u) + hash2(xi.wrapping_add(1), yi) * u;
+    let bottom = hash2(xi, yi.wrapping_add(1)) * (1.0 - u) + hash2(xi.wrapping_add(1), yi.wrapping_add(1)) * u;
+    top * (1.0 - v) + bottom * v
+}
+
+/// Tells effects that wait for a hit when one has landed: on each beat,
+/// or on any hit in the sound. Remembers what it needs between frames.
+#[derive(Clone, Copy, Debug)]
+pub struct HitWatch {
+    last_beat: u32,
+    armed: bool,
+}
+
+impl Default for HitWatch {
+    fn default() -> Self {
+        Self {
+            last_beat: 0,
+            armed: true,
+        }
+    }
+}
+
+impl HitWatch {
+    /// True on the frame a beat begins (`any_hit` false) or a hit lands
+    /// (`any_hit` true). Fires once per hit, however long it rings.
+    pub fn fired(&mut self, audio: &AudioFeatures, any_hit: bool) -> bool {
+        let beat = audio.beat_count != self.last_beat;
+        self.last_beat = audio.beat_count;
+        let hit = self.armed && audio.onset > 0.9;
+        if hit {
+            self.armed = false;
+        } else if audio.onset < 0.5 {
+            self.armed = true;
+        }
+        if any_hit { hit } else { beat }
+    }
+}
+
 pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     if (edge1 - edge0).abs() < f32::EPSILON {
         return if x < edge0 { 0.0 } else { 1.0 };

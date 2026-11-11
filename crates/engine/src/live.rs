@@ -212,13 +212,26 @@ impl Live {
             return None;
         };
         let played = now - mark.at;
+        // A new section right after a change of scene is let pass: acting
+        // on it late, once the minimum time is up, would look arbitrary.
+        // Bars are counted afresh from it, though: sections start on the
+        // song's own phrase boundaries, so the next change by bar count
+        // then lands on one.
+        if features.section != mark.section && played < AUTO_MIN_S {
+            self.auto = Some(AutoMark {
+                at: mark.at,
+                beat: features.beat_count,
+                section: features.section,
+            });
+            return None;
+        }
         let bars_up = if features.bpm > 0.0 {
             // On a beat, so the change lands in time.
             beat && features.beat_count.wrapping_sub(mark.beat) >= settings.every_bars.clamp(1, 64) * 4
         } else {
             played >= settings.every_bars.clamp(1, 64) as f64 * BAR_WITHOUT_TEMPO_S
         };
-        let new_section = settings.on_drops && features.section != mark.section && played >= AUTO_MIN_S;
+        let new_section = settings.on_drops && features.section != mark.section;
         if !bars_up && !new_section {
             return None;
         }
@@ -661,10 +674,12 @@ mod tests {
             None,
             "it starts counting"
         );
-        // A new section a second in: too soon after the last change.
+        // A new section a second in is too soon after the last change. It
+        // is let pass, not saved up for later.
         assert_eq!(live.autopilot(1.0, &show, &music(2, 1), false), None);
-        // Still the new section once the scene has had its minimum time.
-        assert_eq!(live.autopilot(AUTO_MIN_S + 0.1, &show, &music(3, 1), false), Some(b));
+        assert_eq!(live.autopilot(AUTO_MIN_S + 0.1, &show, &music(3, 1), false), None);
+        // The next one, with the scene well under way, changes it at once.
+        assert_eq!(live.autopilot(AUTO_MIN_S + 2.0, &show, &music(4, 2), false), Some(b));
 
         // With that switched off, sections are ignored.
         let mut calm = show.clone();

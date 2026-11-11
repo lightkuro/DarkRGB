@@ -109,6 +109,11 @@ pub struct Layer {
     /// The folder this layer is filed in, if any.
     #[serde(default)]
     pub group: Option<u32>,
+    /// Draw the effect on each light by itself, in the light's own frame,
+    /// instead of once across all of them. A fire then burns up every
+    /// matrix, however the lights are laid out.
+    #[serde(default)]
+    pub each: bool,
 }
 
 /// A saved set of layers that can be recalled in one click.
@@ -328,6 +333,21 @@ pub struct OutputSettings {
     /// switches the limit off. See `safety.rs`.
     #[serde(default = "default_flash_limit")]
     pub flash_limit: f32,
+    /// Count any change of a tenth of full brightness as a flash, as the
+    /// guidance for screens does, instead of only hard flashes.
+    #[serde(default)]
+    pub flash_strict: bool,
+}
+
+impl OutputSettings {
+    /// The share of full brightness that counts as a flash.
+    pub fn flash_share(&self) -> f32 {
+        if self.flash_strict {
+            crate::safety::STRICT
+        } else {
+            crate::safety::STANDARD
+        }
+    }
 }
 
 fn default_flash_limit() -> f32 {
@@ -339,6 +359,7 @@ impl Default for OutputSettings {
         Self {
             frame_rate: 60,
             flash_limit: DEFAULT_FLASH_LIMIT,
+            flash_strict: false,
         }
     }
 }
@@ -544,6 +565,7 @@ impl Show {
                 targets: Vec::new(),
                 enabled: true,
                 group,
+                each: false,
             },
         );
         id
@@ -895,8 +917,14 @@ impl Show {
     /// its id. The first ten scenes get the number keys, so a new user can
     /// switch scenes from the keyboard without setting anything up.
     pub fn save_scene(&mut self, name: &str) -> u32 {
-        let id = self.alloc_id();
         let (layers, groups) = self.scene_part();
+        self.push_scene(name, layers, groups)
+    }
+
+    /// Adds a scene made of the given layers and folders, and gives it a
+    /// number key if one is free. Returns its id.
+    pub fn push_scene(&mut self, name: &str, layers: Vec<Layer>, groups: Vec<LayerGroup>) -> u32 {
+        let id = self.alloc_id();
         self.scenes.push(Scene {
             id,
             name: name.to_string(),

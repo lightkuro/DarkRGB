@@ -47,6 +47,7 @@ const PAGES: { id: SettingsPage; name: string; icon: ReactNode }[] = [
 const setLimit = perFrame((limit: number) => engine.quiet({ type: "set_master", limit }));
 const setDelay = perFrame((delay_ms: number) => engine.quiet({ type: "set_audio", delay_ms }));
 const setFade = perFrame((fade: number) => engine.quiet({ type: "set_live", fade }));
+const setDynamics = perFrame((dynamics: number) => engine.quiet({ type: "set_audio", dynamics }));
 
 /** A setting with its explanation underneath. */
 function Row({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
@@ -80,6 +81,18 @@ function Sound({ show }: { show: Show }) {
   return (
     <>
       <AudioControls />
+      <Slider
+        label="Follow the song's energy"
+        min={0}
+        max={1}
+        value={show.audio.dynamics}
+        format={(v) => (v === 0 ? "Off" : `${Math.round(v * 100)}%`)}
+        onChange={setDynamics}
+      />
+      <p className="hint">
+        Makes the quiet parts of a song dimmer and calmer, so the big parts land harder. Off treats every part
+        of a song alike. Effects you play by hand are never held back.
+      </p>
       <Slider
         label="Light delay"
         min={0}
@@ -165,9 +178,11 @@ function Lights({ show }: { show: Show }) {
       <Row
         title="Flash limit"
         hint={
-          limited
-            ? `No more than ${show.output.flash_limit} flashes of the whole picture in a second. Faster flashing is softened, on the lights and on this screen.`
-            : "Off. Strobes and fast flashes run at full speed."
+          !limited
+            ? "Off. Strobes and fast flashes run at full speed."
+            : show.output.flash_strict
+              ? "Strict: any change of a tenth of full brightness counts, at most three a second."
+              : "At most three hard flashes a second. Faster ones are softened, on the lights and on this screen."
         }
       >
         <Switch
@@ -177,25 +192,32 @@ function Lights({ show }: { show: Show }) {
         />
       </Row>
       {limited && (
-        <div className="segmented" role="radiogroup" aria-label="Flashes allowed in a second">
-          {[3, 4].map((n) => (
-            <button
-              key={n}
-              type="button"
-              role="radio"
-              aria-checked={show.output.flash_limit === n}
-              className={show.output.flash_limit === n ? "selected" : ""}
-              onClick={() => engine.send({ type: "set_output", flash_limit: n })}
-            >
-              {n} a second{n === 3 ? " (recommended)" : ""}
-            </button>
-          ))}
+        <div className="segmented" role="radiogroup" aria-label="What counts as a flash">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!show.output.flash_strict}
+            className={show.output.flash_strict ? "" : "selected"}
+            onClick={() => engine.send({ type: "set_output", flash_strict: false })}
+          >
+            Hard flashes
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={show.output.flash_strict}
+            className={show.output.flash_strict ? "selected" : ""}
+            onClick={() => engine.send({ type: "set_output", flash_strict: true })}
+          >
+            Strict
+          </button>
         </div>
       )}
       <p className="hint">
         Flashing faster than about three times a second can trigger seizures in people with photosensitive
-        epilepsy. Three is the limit used for web pages and four for broadcast. Leave this on when anyone you do
-        not know will see the lights.
+        epilepsy. "Hard flashes" stops strobes and anything that changes the whole picture by a quarter of full
+        brightness or more. "Strict" is the limit used for screens, a tenth; it also flattens most effects that
+        follow fast music. Leave a limit on when anyone you do not know will see the lights.
       </p>
       {status && (
         <p className="hint">
@@ -292,6 +314,60 @@ function LivePage({ show }: { show: Show }) {
       <p className="hint">
         Tap in time with the music to set the tempo by hand when it is not being found, or is found wrong. The
         first tap counts as the first beat of four.
+      </p>
+
+      <h3>Autopilot</h3>
+      <Row
+        title="Change scene by itself"
+        hint="Moves on to another scene in time with the music. A scene you choose yourself plays its full turn first."
+      >
+        <Switch
+          checked={show.live.auto.enabled}
+          label="Autopilot"
+          onChange={(auto) => engine.send({ type: "set_live", auto })}
+        />
+      </Row>
+      <div className="field">
+        <span className="field-head">
+          <span>A new scene every</span>
+        </span>
+        <div className="segmented" role="radiogroup" aria-label="Bars per scene">
+          {[2, 4, 8, 16].map((bars) => (
+            <button
+              key={bars}
+              type="button"
+              role="radio"
+              aria-checked={show.live.auto.every_bars === bars}
+              className={show.live.auto.every_bars === bars ? "selected" : ""}
+              onClick={() => engine.send({ type: "set_live", every_bars: bars })}
+            >
+              {bars} bars
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="field inline">
+        <span>
+          Also when the song changes
+          <span className="hint block">A drop or a breakdown brings the next scene at once.</span>
+        </span>
+        <Switch
+          checked={show.live.auto.on_drops}
+          label="Change scene when the song changes"
+          onChange={(on_drops) => engine.send({ type: "set_live", on_drops })}
+        />
+      </div>
+      <div className="field inline">
+        <span>Shuffle the order</span>
+        <Switch
+          checked={show.live.auto.shuffle}
+          label="Shuffle the order of scenes"
+          onChange={(shuffle) => engine.send({ type: "set_live", shuffle })}
+        />
+      </div>
+      <p className="hint">
+        A bar is four beats. With no steady beat to count, a bar is taken as two seconds. A scene can be kept out
+        of autopilot from its own menu in the scenes bar.
       </p>
 
       <h3>Keys</h3>

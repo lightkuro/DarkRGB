@@ -4,6 +4,7 @@
 use darkrgb_core::color;
 use darkrgb_core::effects;
 use darkrgb_core::layout::MAX_PIXELS;
+use darkrgb_core::looks::LOOKS;
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::show::{Blend, FRAME_RATES};
 use darkrgb_core::{Action, Band, KeyMode, Launch, Rgb, Shape, Show};
@@ -36,6 +37,11 @@ pub enum Command {
     SetDemo {
         enabled: bool,
     },
+    /// The one-click first run: demo lights, the starter scenes, and
+    /// autopilot on, so something worth watching plays at once.
+    StartDemo,
+    /// Adds the starter scenes that are not there yet.
+    AddLooks,
     /// Adds a light that exists only in the preview.
     AddVirtual {
         name: String,
@@ -77,6 +83,9 @@ pub enum Command {
         blend: Option<Blend>,
         enabled: Option<bool>,
         targets: Option<Vec<u32>>,
+        /// Draw on each light by itself instead of once across all.
+        #[serde(default)]
+        each: Option<bool>,
     },
     /// Gives a layer a label. An empty name goes back to the effect's own.
     RenameLayer {
@@ -218,6 +227,9 @@ pub enum Command {
         frame_rate: Option<u32>,
         /// Most flashes a second; 0 switches the limit off.
         flash_limit: Option<f32>,
+        /// Count small changes as flashes too, as guidance for screens does.
+        #[serde(default)]
+        flash_strict: Option<bool>,
     },
     RenameScene {
         id: u32,
@@ -342,6 +354,18 @@ fn name(value: &str, what: &str) -> Result<String, String> {
     Ok(trimmed.chars().take(MAX_NAME).collect())
 }
 
+fn add_looks(show: &mut Show) -> Result<(), String> {
+    let missing = LOOKS
+        .iter()
+        .filter(|look| !show.scenes.iter().any(|s| s.name == look.name))
+        .count();
+    if show.scenes.len() + missing > MAX_SCENES {
+        return Err(format!("a show can have at most {MAX_SCENES} scenes"));
+    }
+    show.add_looks();
+    Ok(())
+}
+
 /// Checks a parameter value against the effect's declaration and returns
 /// the value to store.
 fn checked_param(effect: &str, param: &str, value: &ParamValue) -> Result<ParamValue, String> {
@@ -426,6 +450,22 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             show.set_demo(*enabled);
             Ok(())
         }
+
+        Command::StartDemo => {
+            if show.devices.len() + 3 > MAX_DEVICES {
+                return Err(format!("a show can have at most {MAX_DEVICES} devices"));
+            }
+            show.set_demo(true);
+            add_looks(show)?;
+            show.live.auto.enabled = true;
+            // Start on the first look, so the change is seen at once.
+            if let Some(first) = show.scenes.iter().find(|s| s.name == LOOKS[0].name).map(|s| s.id) {
+                show.recall_scene(first);
+            }
+            Ok(())
+        }
+
+        Command::AddLooks => add_looks(show),
 
         Command::AddVirtual {
             name: light_name,
@@ -581,6 +621,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             blend,
             enabled,
             targets,
+            each,
         } => {
             if let Some(effect) = effect
                 && effects::find(effect).is_none()
@@ -618,6 +659,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 t.sort_unstable();
                 t.dedup();
                 layer.targets = t;
+            }
+            if let Some(e) = each {
+                layer.each = *e;
             }
             Ok(())
         }
@@ -1009,6 +1053,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
         Command::SetOutput {
             frame_rate,
             flash_limit,
+            flash_strict,
         } => {
             let flash_limit = flash_limit.map(|l| finite(l, "The flash limit")).transpose()?;
             if let Some(rate) = frame_rate {
@@ -1020,6 +1065,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             if let Some(limit) = flash_limit {
                 // Zero is off. Anything else is a whole number of flashes.
                 show.output.flash_limit = if limit < 1.0 { 0.0 } else { limit.round().min(30.0) };
+            }
+            if let Some(strict) = flash_strict {
+                show.output.flash_strict = *strict;
             }
             Ok(())
         }
@@ -1272,6 +1320,7 @@ mod tests {
             blend: None,
             enabled: None,
             targets: None,
+            each: None,
         };
         // Same effect: settings stay.
         apply(&mut show, &update("flow")).unwrap();
@@ -1658,6 +1707,7 @@ mod tests {
                     blend: None,
                     enabled: None,
                     targets: Some(targets),
+                    each: None,
                 },
             )
         };
@@ -1921,6 +1971,7 @@ mod tests {
                 &Command::SetOutput {
                     frame_rate,
                     flash_limit,
+                    flash_strict: None,
                 },
             )
         };
@@ -1970,6 +2021,7 @@ mod tests {
             blend: None,
             enabled: None,
             targets: Some(targets),
+            each: None,
         };
         assert!(apply(&mut show, &target(vec![9999])).is_err());
         apply(&mut show, &target(vec![fixture, fixture])).unwrap();
@@ -2057,7 +2109,7 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 40 {
+            let command = match r.next() % 42 {
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {
@@ -2160,9 +2212,12 @@ mod tests {
                     id: scene,
                     auto: r.flag(),
                 },
+                40 => Command::AddLooks,
+                41 => Command::StartDemo,
                 33 => Command::SetOutput {
                     frame_rate: r.maybe(|r| [0, 30, 40, 60, 61, 120, u32::MAX][r.next() as usize % 7]),
                     flash_limit: r.maybe(Awkward::number),
+                    flash_strict: r.maybe(Awkward::flag),
                 },
                 34 => Command::RenameScene {
                     id: scene,
@@ -2236,6 +2291,7 @@ mod tests {
                     blend: r.maybe(|r| blends[r.next() as usize % 4]),
                     enabled: r.maybe(Awkward::flag),
                     targets: r.maybe(|r| vec![fixture, if r.flag() { group } else { r.next() % 50 }]),
+                    each: r.maybe(Awkward::flag),
                 },
                 5 => Command::RemoveDevice { id: device },
                 6 | 7 => Command::SetParam {
@@ -2381,6 +2437,35 @@ mod tests {
         assert!(show.layer_groups[0].pinned);
         // Pinned effects are always on top.
         assert!(show.layers[MAX_LAYERS..].iter().all(|l| l.group == Some(folder)));
+    }
+
+    #[test]
+    fn the_demo_starts_with_lights_scenes_and_autopilot() {
+        let mut show = Show::default();
+        apply(&mut show, &Command::StartDemo).unwrap();
+        assert_eq!(show.devices.len(), 3);
+        assert_eq!(show.scenes.len(), LOOKS.len());
+        assert!(show.live.auto.enabled);
+        assert_eq!(
+            show.current_scene(),
+            Some(show.scenes[0].id),
+            "the first look is playing"
+        );
+        // Strip effects went on the strips and matrix effects on the matrix.
+        let chase = show.scenes.iter().find(|s| s.name == "Neon chase").unwrap();
+        let on = |effect: &str| chase.layers.iter().find(|l| l.effect == effect).unwrap().targets.len();
+        assert_eq!((on("chase"), on("sweep"), on("plasma")), (2, 1, 0));
+        // Doing it again changes nothing but what the user has changed since.
+        let before = show.clone();
+        apply(&mut show, &Command::StartDemo).unwrap();
+        assert_eq!(show, before);
+        // The starter scenes can be added to a show that has its own.
+        let mut own = show_with_device();
+        apply(&mut own, &Command::SaveScene { name: "Mine".into() }).unwrap();
+        apply(&mut own, &Command::AddLooks).unwrap();
+        assert_eq!(own.scenes.len(), LOOKS.len() + 1);
+        assert_eq!(own.scenes[0].name, "Mine");
+        assert!(!own.live.auto.enabled, "adding scenes does not switch autopilot on");
     }
 
     #[test]

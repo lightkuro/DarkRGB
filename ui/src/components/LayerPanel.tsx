@@ -335,6 +335,21 @@ function Targets({ layer, fixtures, groups }: { layer: Layer; fixtures: Fixture[
           </button>
         ))}
       </div>
+      {
+        // Only a choice when it plays on more than one light.
+        (all || layer.targets.length > 1 || layer.targets.some((id) => groups.some((g) => g.id === id))) && (
+          <div className="field inline each">
+            <span title="Off: the effect is drawn once across all of these lights, wherever they are. On: every light gets the whole effect to itself.">
+              Each light on its own
+            </span>
+            <Switch
+              checked={layer.each}
+              label="Draw the effect on each light by itself"
+              onChange={(each) => engine.send({ type: "update_layer", id: layer.id, each })}
+            />
+          </div>
+        )
+      }
     </div>
   );
 }

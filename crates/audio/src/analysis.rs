@@ -55,6 +55,10 @@ const SECTION_RANGE_DB: f32 = 8.0;
 const SECTION_JUMP: f32 = 0.3;
 /// Sections do not change more often than this.
 const SECTION_GAP_S: f32 = 4.0;
+/// Getting this much louder than anything in recent memory, within a few
+/// seconds, is a new section too. It is how the first drop after a quiet
+/// intro is told: there is no louder part yet to measure the intro by.
+const SECTION_SURGE_DB: f32 = 4.0;
 
 const TEMPO_MIN_BPM: f32 = 70.0;
 const TEMPO_MAX_BPM: f32 = 190.0;
@@ -144,6 +148,8 @@ struct SectionMeter {
     steps: u32,
     low: f32,
     high: f32,
+    /// Where `high` was a few seconds ago.
+    high_before: f32,
 }
 
 impl SectionMeter {
@@ -156,7 +162,7 @@ impl SectionMeter {
             // Settling in: a plain average, and nothing to compare with yet.
             self.power += (power - self.power) / self.steps as f32;
             let db = 10.0 * self.power.max(1e-12).log10();
-            (self.low, self.high) = (db, db);
+            (self.low, self.high, self.high_before) = (db, db, db);
             return 1.0;
         }
         self.power += (power - self.power) / span;
@@ -174,8 +180,14 @@ impl SectionMeter {
         } else {
             self.low + (now - self.low) * forget
         };
+        self.high_before += (self.high - self.high_before) / (step_rate * 3.0);
         let range = (self.high - self.low).max(SECTION_RANGE_DB);
         ((now - (self.high - range)) / range).clamp(0.0, 1.0)
+    }
+
+    /// How far, in decibels, the loudest level has just been pushed up.
+    fn surge(&self) -> f32 {
+        self.high - self.high_before
     }
 }
 
@@ -486,6 +498,16 @@ impl Analyzer {
         if (self.steps_since_section as f32) < self.step_rate * SECTION_GAP_S {
             self.settled = intensity;
             self.away_steps = 0;
+            return;
+        }
+        // Louder than anything remembered: a new section even though the
+        // intensity was, and stays, at the top.
+        if self.sections.iter().any(|m| m.surge() > SECTION_SURGE_DB) {
+            self.out.section = self.out.section.wrapping_add(1);
+            self.out.drop = 1.0;
+            self.settled = intensity;
+            self.away_steps = 0;
+            self.steps_since_section = 0;
             return;
         }
         let change = intensity - self.settled;
@@ -1097,6 +1119,21 @@ mod tests {
             assert!((a.0 - b.0).abs() < 0.08, "second {i}: {a:?} against {b:?}");
             assert_eq!(a.1, b.1, "second {i}");
         }
+    }
+
+    #[test]
+    fn the_first_drop_after_a_quieter_intro_is_a_new_section() {
+        // Nothing louder has been heard when the intro plays, so the intro
+        // reads as full. The drop must still be noticed.
+        let trace = follow_song(&song(&[(12.0, 0.12), (14.0, 0.5)], 1.0));
+        assert_eq!(trace[10].1, 0, "{trace:?}");
+        let found = trace
+            .iter()
+            .position(|(_, section, _)| *section == 1)
+            .expect("the drop was missed");
+        assert!((12..=14).contains(&found), "noticed in second {found}: {trace:?}");
+        assert!(trace[found].2 > 0.5, "and it is a drop: {trace:?}");
+        assert_eq!(trace.last().unwrap().1, 1, "counted once: {trace:?}");
     }
 
     #[test]

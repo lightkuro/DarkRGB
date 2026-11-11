@@ -1,23 +1,32 @@
 //! Keeps flashing within what is considered safe for people with
 //! photosensitive epilepsy.
 //!
-//! The rule followed is the one web and broadcast guidance share: no more
-//! than a few flashes in any one second (three by default), where a flash
-//! is the picture's overall brightness rising by a tenth or more of full
-//! brightness after having fallen by as much. It is applied to the finished
-//! frame, so it covers every effect, every key and the on-screen preview.
+//! The rule is the one web and broadcast guidance share: no more than
+//! three flashes in any one second. What counts as a flash is the picture's
+//! overall brightness rising by some share of full brightness after having
+//! fallen by as much. Two shares are offered:
 //!
-//! A rise that would be one flash too many is held just under a tenth, so
-//! it reads as a flicker instead of a flash. As soon as a flash is allowed
-//! again the picture is let through, so brightness that stays is only late,
-//! never lost.
+//! - [`STRICT`], a tenth, is what the guidance for screens says. Almost
+//!   any effect that follows fast music changes by that much several times
+//!   a second, so this setting flattens most of them.
+//! - [`STANDARD`], a quarter, catches what stage-lighting guidance is
+//!   about (strobes, white flashes, blinders) and leaves effects that
+//!   shimmer or pulse gently alone. It is the default.
+//!
+//! The limit is applied to the finished frame, so it covers every effect,
+//! every key and the on-screen preview. A rise that would be one flash too
+//! many is held just under the share, so it reads as a flicker instead of
+//! a flash. As soon as a flash is allowed again the picture is let
+//! through, so brightness that stays is only late, never lost.
 
 use std::collections::VecDeque;
 
 use crate::color::Rgb;
 
-/// A change of this much of full brightness, there and back, is a flash.
-const THRESHOLD: f32 = 0.10;
+/// The share of full brightness that makes a flash under screen guidance.
+pub const STRICT: f32 = 0.10;
+/// The share used by default: hard flashes only.
+pub const STANDARD: f32 = 0.25;
 /// Pictures already this bright cannot flash in the sense that matters.
 const SAFE_DARK: f32 = 0.80;
 /// The time flashes are counted over, in seconds.
@@ -55,14 +64,20 @@ pub fn luminance(frame: &[Rgb]) -> f32 {
 }
 
 impl FlashGuard {
-    /// Limits `frame` to `per_second` flashes. Zero or less switches the
-    /// limit off. `now` is in seconds and must not go backwards. Returns
-    /// true when the frame was held back.
-    pub fn apply(&mut self, frame: &mut [Rgb], now: f64, per_second: f32) -> bool {
+    /// Limits `frame` to `per_second` flashes, a flash being a change of
+    /// `share` of full brightness there and back. Zero or less flashes a
+    /// second switches the limit off. `now` is in seconds and must not go
+    /// backwards. Returns true when the frame was held back.
+    pub fn apply(&mut self, frame: &mut [Rgb], now: f64, per_second: f32, share: f32) -> bool {
         if per_second <= 0.0 || !per_second.is_finite() || frame.is_empty() {
             *self = Self::default();
             return false;
         }
+        let threshold = if share.is_finite() {
+            share.clamp(0.05, 0.9)
+        } else {
+            STANDARD
+        };
         let limit = (per_second.floor() as usize).max(1);
         let dt = ((now - self.last) as f32).clamp(0.0, 0.25);
         self.last = now;
@@ -74,7 +89,7 @@ impl FlashGuard {
         let follow = (dt / FOLLOW_S).min(1.0);
         if self.up {
             // Waiting for the fall that completes the flash.
-            if level <= self.rest - THRESHOLD {
+            if level <= self.rest - threshold {
                 self.up = false;
                 self.rest = level;
             } else if level > self.rest {
@@ -89,7 +104,7 @@ impl FlashGuard {
             self.rest = level;
             return false;
         }
-        if level < self.rest + THRESHOLD || self.rest >= SAFE_DARK {
+        if level < self.rest + threshold || self.rest >= SAFE_DARK {
             // Not a flash: a small change, a slow one, or a bright picture.
             self.rest += (level - self.rest) * follow;
             return false;
@@ -110,7 +125,7 @@ impl FlashGuard {
         }
 
         // One flash too many: hold the picture just under a flash.
-        let allowed = self.rest + THRESHOLD * 0.9;
+        let allowed = self.rest + threshold * 0.9;
         // Brightness goes with the square of the values, so scale by the root.
         let scale = (allowed / level).sqrt();
         for px in frame.iter_mut() {
@@ -125,6 +140,8 @@ mod tests {
     use super::*;
 
     const FRAME_S: f64 = 1.0 / 60.0;
+    /// These tests use the strict share unless they say otherwise.
+    const THRESHOLD: f32 = STRICT;
 
     /// Runs frames of one grey level each through a guard and returns the
     /// brightness that came out of each.
@@ -134,7 +151,7 @@ mod tests {
             .enumerate()
             .map(|(i, level)| {
                 let mut frame = vec![Rgb::new(level, level, level); 8];
-                guard.apply(&mut frame, i as f64 * FRAME_S, per_second);
+                guard.apply(&mut frame, i as f64 * FRAME_S, per_second, THRESHOLD);
                 luminance(&frame)
             })
             .collect()
@@ -260,9 +277,44 @@ mod tests {
             let mut frame = vec![Rgb::BLACK; 16];
             frame[0] = if lit { Rgb::WHITE } else { Rgb::BLACK };
             let before = frame.clone();
-            assert!(!guard.apply(&mut frame, i as f64 * FRAME_S, 3.0));
+            assert!(!guard.apply(&mut frame, i as f64 * FRAME_S, 3.0, THRESHOLD));
             assert_eq!(frame, before);
         }
+    }
+
+    #[test]
+    fn the_standard_share_leaves_shimmer_alone_and_still_stops_a_strobe() {
+        // The picture flickers by 15% of full brightness eight times a
+        // second, as sparkles on hi-hats do.
+        let levels = |i: usize| if (i / 4).is_multiple_of(2) { 0.5f32 } else { 0.32 };
+        let run_at = |share: f32, level: &dyn Fn(usize) -> f32| -> (Vec<f32>, usize) {
+            let mut guard = FlashGuard::default();
+            let mut held = 0;
+            let out = (0..360)
+                .map(|i| {
+                    let mut frame = vec![Rgb::new(level(i), level(i), level(i)); 8];
+                    held += usize::from(guard.apply(&mut frame, i as f64 * FRAME_S, 3.0, share));
+                    luminance(&frame)
+                })
+                .collect();
+            (out, held)
+        };
+        let swing = 0.5f32 * 0.5 - 0.32 * 0.32;
+        assert!(
+            swing > STRICT && swing < STANDARD,
+            "the test's flicker sits between the two: {swing}"
+        );
+        assert_eq!(run_at(STANDARD, &levels).1, 0, "shimmer passes at the standard share");
+        assert!(run_at(STRICT, &levels).1 > 50, "and is held at the strict one");
+        // A strobe is stopped either way.
+        let strobe = |i: usize| if (i / 3).is_multiple_of(2) { 1.0f32 } else { 0.0 };
+        let (out, held) = run_at(STANDARD, &strobe);
+        assert!(held > 50);
+        let rises = (1..out.len()).filter(|i| out[*i] > 0.9 && out[i - 1] < 0.5).count();
+        assert!(rises <= 18 + 1, "{rises} full flashes in six seconds");
+        // A nonsense share falls back to something sane instead of switching the limit off.
+        let (_, held) = run_at(f32::NAN, &strobe);
+        assert!(held > 50);
     }
 
     #[test]
@@ -270,7 +322,7 @@ mod tests {
         let raw: Vec<f32> = strobe(10.0, 2.0).collect();
         assert_eq!(run(raw.iter().copied(), 0.0), raw);
         let mut guard = FlashGuard::default();
-        assert!(!guard.apply(&mut [], 0.0, 3.0), "an empty frame is fine");
+        assert!(!guard.apply(&mut [], 0.0, 3.0, THRESHOLD), "an empty frame is fine");
     }
 
     #[test]
@@ -280,7 +332,7 @@ mod tests {
         for i in 0..60 {
             let lit = (i / 3) % 2 == 0;
             let mut frame = vec![if lit { Rgb::new(1.0, 0.5, 0.0) } else { Rgb::BLACK }; 4];
-            if guard.apply(&mut frame, i as f64 * FRAME_S, 3.0) {
+            if guard.apply(&mut frame, i as f64 * FRAME_S, 3.0, THRESHOLD) {
                 last = frame[0];
             }
         }

@@ -4,7 +4,8 @@ use std::sync::OnceLock;
 
 use crate::color::{Palette, Rgb, palette};
 use crate::effect::{
-    AMBIENT, Effect, EffectDef, EffectInfo, FOLLOWS_SOUND, FrameCtx, HITS_AND_BEATS, hash2, smoothstep,
+    AMBIENT, Effect, EffectDef, EffectInfo, FOLLOWS_SOUND, FrameCtx, HITS_AND_BEATS, HitWatch, hash2, noise2,
+    smoothstep,
 };
 use crate::params::{ParamReader, ParamSpec};
 
@@ -21,8 +22,12 @@ pub fn registry() -> &'static [EffectDef] {
             Energy::def(),
             Scroll::def(),
             Meter::def(),
+            Fire::def(),
             BeatPulse::def(),
             Ripple::def(),
+            Sweep::def(),
+            Chase::def(),
+            Meteors::def(),
             Sparkle::def(),
             Strobe::def(),
             Plasma::def(),
@@ -300,6 +305,436 @@ impl Effect for BeatPulse {
     fn shade(&self, _x: f32, _y: f32, _ctx: &FrameCtx) -> Rgb {
         let level = self.floor + self.envelope * (1.0 - self.floor);
         self.palette.sample(self.hue).scale(level)
+    }
+}
+
+// ----------------------------------------------------------------- Sweep
+
+/// One bar of light on its way across.
+struct Bar {
+    /// How far it has got, 0 at the start to 1 at the far side.
+    at: f32,
+    colour: Rgb,
+    /// Left to right, right to left, or out from the middle.
+    path: usize,
+}
+
+struct Sweep {
+    palette: &'static Palette,
+    time: f32,
+    width: f32,
+    direction: usize,
+    any_hit: bool,
+    bars: Vec<Bar>,
+    hue: f32,
+    flip: bool,
+    watch: HitWatch,
+}
+
+impl Sweep {
+    fn def() -> EffectDef {
+        EffectDef {
+            info: EffectInfo {
+                id: "sweep",
+                name: "Sweep",
+                description: "Each beat sends a bar of light across the lights.",
+                category: HITS_AND_BEATS,
+                audio: true,
+                params: vec![
+                    ParamSpec::palette("palette", "Colours", "neon"),
+                    ParamSpec::float("time", "Crossing time (s)", 0.1, 2.0, 0.45),
+                    ParamSpec::choice(
+                        "direction",
+                        "Direction",
+                        &["Back and forth", "Left to right", "Right to left", "From the middle"],
+                    ),
+                    ParamSpec::float("width", "Width", 0.03, 0.5, 0.14).advanced(),
+                    ParamSpec::choice("trigger", "New bar on", &["Beat", "Any hit"]).advanced(),
+                ],
+            },
+            make: || {
+                Box::new(Sweep {
+                    palette: palette("neon"),
+                    time: 0.45,
+                    width: 0.14,
+                    direction: 0,
+                    any_hit: false,
+                    bars: Vec::new(),
+                    hue: 0.0,
+                    flip: false,
+                    watch: HitWatch::default(),
+                })
+            },
+        }
+    }
+}
+
+impl Effect for Sweep {
+    fn configure(&mut self, p: &ParamReader) {
+        self.palette = p.palette("palette");
+        self.time = p.float("time");
+        self.width = p.float("width");
+        self.direction = p.choice("direction");
+        self.any_hit = p.choice("trigger") == 1;
+    }
+
+    fn update(&mut self, ctx: &FrameCtx) {
+        for bar in &mut self.bars {
+            bar.at += ctx.dt / self.time.max(0.05);
+        }
+        // A bar is done once its tail has left the far side.
+        self.bars.retain(|b| b.at < 1.0 + self.width * 3.0);
+        if self.watch.fired(&ctx.audio, self.any_hit) && self.bars.len() < 12 {
+            self.hue = (self.hue + 0.618_034).fract();
+            self.flip = !self.flip;
+            let path = match self.direction {
+                0 => usize::from(self.flip),
+                1 => 0,
+                2 => 1,
+                _ => 2,
+            };
+            let t = if self.palette.cyclic {
+                self.hue
+            } else {
+                0.35 + self.hue * 0.65
+            };
+            self.bars.push(Bar {
+                at: 0.0,
+                colour: self.palette.sample(t),
+                path,
+            });
+        }
+    }
+
+    fn shade(&self, x: f32, _y: f32, _ctx: &FrameCtx) -> Rgb {
+        let mut out = Rgb::BLACK;
+        for bar in &self.bars {
+            // How far along the bar's own path this pixel is.
+            let along = match bar.path {
+                0 => x,
+                1 => 1.0 - x,
+                _ => (x - 0.5).abs() * 2.0,
+            };
+            // Behind the bar's front edge: a bright head, then a fading tail.
+            let behind = bar.at - along;
+            let level = if behind < 0.0 {
+                0.0
+            } else if behind < self.width {
+                1.0
+            } else {
+                (1.0 - (behind - self.width) / (self.width * 2.0)).max(0.0).powi(2) * 0.6
+            };
+            out = out.add(bar.colour.scale(level));
+        }
+        out
+    }
+}
+
+// ----------------------------------------------------------------- Chase
+
+struct Chase {
+    palette: &'static Palette,
+    blocks: f32,
+    fill: f32,
+    sync: usize,
+    speed: f32,
+    glide: bool,
+    /// How far the pattern has moved, in blocks (a block and its gap).
+    travelled: f32,
+    glow: f32,
+}
+
+impl Chase {
+    /// Steps per beat for each choice; zero runs at its own speed.
+    const PER_BEAT: [f32; 3] = [1.0, 2.0, 0.0];
+    /// A step moves the pattern a quarter of the way to the next block.
+    /// A whole block per step would land every block where the last one
+    /// was, and look like standing still.
+    const STEP: f32 = 0.25;
+
+    fn def() -> EffectDef {
+        EffectDef {
+            info: EffectInfo {
+                id: "chase",
+                name: "Chase",
+                description: "Blocks of colour that step along in time with the beat.",
+                category: HITS_AND_BEATS,
+                audio: true,
+                params: vec![
+                    ParamSpec::palette("palette", "Colours", "candy"),
+                    ParamSpec::float("blocks", "Blocks", 1.0, 12.0, 4.0),
+                    ParamSpec::choice("sync", "Steps", &["1 per beat", "2 per beat", "Own speed"]),
+                    ParamSpec::float("fill", "Block length", 0.1, 0.9, 0.5).advanced(),
+                    ParamSpec::float("speed", "Own speed", 0.0, 6.0, 2.0).advanced(),
+                    ParamSpec::bool("glide", "Glide between steps", false).advanced(),
+                ],
+            },
+            make: || {
+                Box::new(Chase {
+                    palette: palette("candy"),
+                    blocks: 4.0,
+                    fill: 0.5,
+                    sync: 0,
+                    speed: 2.0,
+                    glide: false,
+                    travelled: 0.0,
+                    glow: 1.0,
+                })
+            },
+        }
+    }
+}
+
+impl Effect for Chase {
+    fn configure(&mut self, p: &ParamReader) {
+        self.palette = p.palette("palette");
+        self.blocks = p.float("blocks").round().max(1.0);
+        self.fill = p.float("fill");
+        self.sync = p.choice("sync");
+        self.speed = p.float("speed");
+        self.glide = p.bool("glide");
+    }
+
+    fn update(&mut self, ctx: &FrameCtx) {
+        let per_beat = Self::PER_BEAT[self.sync.min(2)];
+        if per_beat > 0.0 && ctx.audio.bpm > 0.0 {
+            // In time: one whole step per beat (or half beat). Without
+            // glide the move happens in the first part of the step, so it
+            // reads as a step and not as a crawl.
+            let steps = ctx.beats * per_beat as f64;
+            let within = steps.fract() as f32;
+            let eased = if self.glide {
+                within
+            } else {
+                smoothstep(0.0, 0.25, within)
+            };
+            self.travelled = ((steps.floor() % 4096.0) as f32 + eased) * Self::STEP;
+        } else {
+            self.travelled = (self.travelled + ctx.dt * self.speed * Self::STEP) % 1024.0;
+        }
+        // Brighter with the music, never dark without it.
+        let target = if ctx.audio.active {
+            0.45 + 0.55 * ctx.audio.level
+        } else {
+            1.0
+        };
+        self.glow += (target - self.glow) * (ctx.dt * 10.0).min(1.0);
+    }
+
+    fn shade(&self, x: f32, _y: f32, _ctx: &FrameCtx) -> Rgb {
+        let u = x * self.blocks - self.travelled;
+        let within = u.rem_euclid(1.0);
+        if within > self.fill {
+            return Rgb::BLACK;
+        }
+        // Each block keeps its colour as it travels.
+        let block = (u.floor().rem_euclid(self.blocks)) / self.blocks;
+        // Soft ends, so a block does not pop on and off a pixel at a time.
+        let edge = (within.min(self.fill - within) / 0.08).clamp(0.0, 1.0);
+        self.palette.sample(block).scale(self.glow * edge)
+    }
+}
+
+// ------------------------------------------------------------------ Fire
+
+struct Fire {
+    palette: &'static Palette,
+    height: f32,
+    speed: f32,
+    react: f32,
+    /// How far the flames have risen, for scrolling the noise.
+    rise: f32,
+    /// The flames' height right now, following the bass.
+    lift: f32,
+}
+
+impl Fire {
+    fn def() -> EffectDef {
+        EffectDef {
+            info: EffectInfo {
+                id: "fire",
+                name: "Fire",
+                description: "Flames that leap with the bass. Along a strip, a bed of embers that flares.",
+                category: FOLLOWS_SOUND,
+                audio: true,
+                params: vec![
+                    ParamSpec::palette("palette", "Colours", "fire"),
+                    ParamSpec::float("height", "Height", 0.2, 1.0, 0.6),
+                    ParamSpec::float("speed", "Speed", 0.2, 3.0, 1.0).advanced(),
+                    ParamSpec::float("react", "React to sound", 0.0, 1.0, 0.7).advanced(),
+                ],
+            },
+            make: || {
+                Box::new(Fire {
+                    palette: palette("fire"),
+                    height: 0.6,
+                    speed: 1.0,
+                    react: 0.7,
+                    rise: 0.0,
+                    lift: 0.6,
+                })
+            },
+        }
+    }
+}
+
+impl Effect for Fire {
+    fn configure(&mut self, p: &ParamReader) {
+        self.palette = p.palette("palette");
+        self.height = p.float("height");
+        self.speed = p.float("speed");
+        self.react = p.float("react");
+    }
+
+    fn update(&mut self, ctx: &FrameCtx) {
+        let a = &ctx.audio;
+        self.rise = (self.rise + ctx.dt * self.speed * 2.2) % 4096.0;
+        // With no sound the fire burns at its set height; with sound it
+        // sinks low in the quiet and leaps on the bass.
+        let drive = if a.active { a.bass.max(a.level * 0.6) } else { 0.6 };
+        let target = self.height * ((1.0 - self.react) + self.react * (0.35 + 1.1 * drive));
+        let rate = if target > self.lift { 14.0 } else { 5.0 };
+        self.lift += (target - self.lift) * (ctx.dt * rate).min(1.0);
+    }
+
+    fn shade(&self, x: f32, y: f32, ctx: &FrameCtx) -> Rgb {
+        // Two layers of noise drifting upward at different speeds.
+        let heat = |sx: f32, sy: f32| {
+            0.6 * noise2(sx * 5.0, sy * 4.0 + self.rise) + 0.4 * noise2(sx * 11.0 + 31.0, sy * 9.0 + self.rise * 1.7)
+        };
+        if ctx.flat {
+            // Embers: no up or down, so the flames become how hot each spot is.
+            let glow = heat(x * 2.0, 0.0) * (0.45 + self.lift);
+            return self.palette.sample(glow.clamp(0.0, 0.95)).scale((glow * 1.3).min(1.0));
+        }
+        // 0 at the bottom, 1 at the top.
+        let up = 1.0 - y;
+        // Hot at the base, cooling with height; the noise tears the top edge.
+        let flame = (1.0 - up / self.lift.max(0.05)) * 0.75 + (heat(x, y) - 0.5) * 0.9;
+        if flame <= 0.0 {
+            return Rgb::BLACK;
+        }
+        self.palette.sample(flame.min(0.95)).scale((flame * 1.6).min(1.0))
+    }
+}
+
+// --------------------------------------------------------------- Meteors
+
+struct Meteor {
+    /// The head's place along its path; it starts before 0 and ends past 1.
+    head: f32,
+    /// Across the lights, 0..1. Only matters where there is a second dimension.
+    lane: f32,
+    colour: Rgb,
+    backward: bool,
+}
+
+struct Meteors {
+    palette: &'static Palette,
+    speed: f32,
+    tail: f32,
+    any_hit: bool,
+    direction: usize,
+    meteors: Vec<Meteor>,
+    count: u32,
+    watch: HitWatch,
+}
+
+impl Meteors {
+    fn def() -> EffectDef {
+        EffectDef {
+            info: EffectInfo {
+                id: "meteors",
+                name: "Meteors",
+                description: "Streaks with fading tails, set off by hits. They fall on a matrix and run along a strip.",
+                category: HITS_AND_BEATS,
+                audio: true,
+                params: vec![
+                    ParamSpec::palette("palette", "Colours", "ice"),
+                    ParamSpec::float("speed", "Speed", 0.2, 3.0, 1.1),
+                    ParamSpec::float("tail", "Tail length", 0.05, 0.8, 0.35),
+                    ParamSpec::choice("trigger", "New ones on", &["Any hit", "Beat"]).advanced(),
+                    ParamSpec::choice("direction", "Direction", &["Forward", "Backward", "Both"]).advanced(),
+                ],
+            },
+            make: || {
+                Box::new(Meteors {
+                    palette: palette("ice"),
+                    speed: 1.1,
+                    tail: 0.35,
+                    any_hit: true,
+                    direction: 0,
+                    meteors: Vec::new(),
+                    count: 0,
+                    watch: HitWatch::default(),
+                })
+            },
+        }
+    }
+}
+
+impl Effect for Meteors {
+    fn configure(&mut self, p: &ParamReader) {
+        self.palette = p.palette("palette");
+        self.speed = p.float("speed");
+        self.tail = p.float("tail");
+        self.any_hit = p.choice("trigger") == 0;
+        self.direction = p.choice("direction");
+    }
+
+    fn update(&mut self, ctx: &FrameCtx) {
+        for m in &mut self.meteors {
+            m.head += ctx.dt * self.speed;
+        }
+        self.meteors.retain(|m| m.head < 1.0 + self.tail);
+        if self.watch.fired(&ctx.audio, self.any_hit) {
+            // One along a strip; a few side by side where there is room.
+            let batch = if ctx.flat { 1 } else { 3 };
+            for _ in 0..batch {
+                if self.meteors.len() >= 24 {
+                    break;
+                }
+                self.count = self.count.wrapping_add(1);
+                let colour = self.palette.sample(0.45 + 0.5 * hash2(self.count, 7));
+                self.meteors.push(Meteor {
+                    head: -0.02 - 0.15 * hash2(self.count, 3),
+                    lane: hash2(self.count, 11),
+                    colour,
+                    backward: match self.direction {
+                        0 => false,
+                        1 => true,
+                        _ => self.count.is_multiple_of(2),
+                    },
+                });
+            }
+        }
+    }
+
+    fn shade(&self, x: f32, y: f32, ctx: &FrameCtx) -> Rgb {
+        let mut out = Rgb::BLACK;
+        for m in &self.meteors {
+            // Along a strip they run its length; on a matrix they fall.
+            let (along, across) = if ctx.flat {
+                (x, 1.0)
+            } else {
+                // Wide enough to light a full column of a small matrix.
+                (y, (1.5 - (x - m.lane).abs() / 0.05).clamp(0.0, 1.0))
+            };
+            if across <= 0.0 {
+                continue;
+            }
+            let along = if m.backward { 1.0 - along } else { along };
+            let behind = m.head - along;
+            if behind < 0.0 || behind > self.tail {
+                continue;
+            }
+            let fade = 1.0 - behind / self.tail;
+            // A white-hot head on a coloured tail.
+            let head = (1.0 - behind / 0.03).max(0.0);
+            let colour = m.colour.lerp(Rgb::WHITE, head * 0.8);
+            out = out.add(colour.scale(fade.powf(1.5) * across));
+        }
+        out
     }
 }
 
@@ -994,5 +1429,175 @@ mod tests {
         // With no tempo found, it falls back to the steady rate.
         let fallback = flashes(&synced, &silent, 5.0);
         assert!((29..=31).contains(&fallback), "{fallback}");
+    }
+    /// The brightest pixel along a strip, and where it is.
+    fn peak_along(fx: &dyn Effect, c: &FrameCtx) -> (f32, f32) {
+        (0..200)
+            .map(|i| {
+                let x = i as f32 / 199.0;
+                let px = fx.shade(x, 0.5, c);
+                (px.r.max(px.g).max(px.b), x)
+            })
+            .fold((0.0, 0.0), |best, now| if now.0 > best.0 { now } else { best })
+    }
+
+    #[test]
+    fn sweep_sends_a_bar_across_on_each_beat() {
+        let mut fx = make("sweep");
+        let quiet = |beat_count| AudioFeatures {
+            beat_count,
+            active: true,
+            ..AudioFeatures::default()
+        };
+        let c = ctx(0.0, quiet(0), true);
+        fx.update(&c);
+        assert_eq!(peak_along(fx.as_ref(), &c).0, 0.0, "dark until a beat");
+        // A beat: a bar starts at one end and travels to the other.
+        fx.update(&ctx(0.0, quiet(1), true));
+        let mut places = Vec::new();
+        for frame in 1..=24 {
+            let c = ctx(frame as f64 / 60.0, quiet(1), true);
+            fx.update(&c);
+            let (level, at) = peak_along(fx.as_ref(), &c);
+            assert!(level > 0.5, "frame {frame}");
+            places.push(at);
+        }
+        assert!(places[0] > 0.8 || places[0] < 0.2, "it starts at an end: {places:?}");
+        let travelled = (places[23] - places[0]).abs();
+        assert!(travelled > 0.6, "it crossed most of the way in 0.4 s: {places:?}");
+        // Long after, it has gone.
+        for frame in 25..120 {
+            fx.update(&ctx(frame as f64 / 60.0, quiet(1), true));
+        }
+        assert_eq!(peak_along(fx.as_ref(), &ctx(2.0, quiet(1), true)).0, 0.0);
+    }
+
+    #[test]
+    fn chase_moves_one_block_per_beat() {
+        let mut fx = make("chase");
+        let at_beats = |beats: f64| AudioFeatures {
+            bpm: 120.0,
+            beat_count: beats.floor() as u32,
+            beat_phase: beats.fract() as f32,
+            level: 1.0,
+            active: true,
+            ..AudioFeatures::default()
+        };
+        // Which of eighty pixels are lit, as a string of marks.
+        let picture = |fx: &dyn Effect, c: &FrameCtx| -> String {
+            (0..80)
+                .map(|i| {
+                    let px = fx.shade((i as f32 + 0.5) / 80.0, 0.5, c);
+                    if px.r.max(px.g).max(px.b) > 0.2 { '#' } else { '.' }
+                })
+                .collect()
+        };
+        // Let the brightness settle, then look late in two beats running.
+        let mut c = ctx(0.0, at_beats(8.9), true);
+        for _ in 0..60 {
+            fx.update(&c);
+        }
+        let first = picture(fx.as_ref(), &c);
+        c = ctx(0.5, at_beats(9.9), true);
+        fx.update(&c);
+        let second = picture(fx.as_ref(), &c);
+        assert_ne!(first, second);
+        // Four blocks across eighty pixels are twenty pixels apart; a step
+        // is a quarter of that.
+        let shifted: String = first.chars().cycle().skip(75).take(80).collect();
+        assert_eq!(second, shifted, "one beat later the pattern is five pixels along");
+        // Within a beat, after the step, it holds still.
+        fx.update(&ctx(0.6, at_beats(9.5), true));
+        let held = picture(fx.as_ref(), &ctx(0.6, at_beats(9.5), true));
+        fx.update(&ctx(0.7, at_beats(9.8), true));
+        assert_eq!(held, picture(fx.as_ref(), &ctx(0.7, at_beats(9.8), true)));
+    }
+
+    #[test]
+    fn fire_burns_from_the_bottom_and_leaps_with_the_bass() {
+        let lit_rows = |bass: f32| {
+            let mut fx = make("fire");
+            let audio = AudioFeatures {
+                bass,
+                level: bass,
+                active: true,
+                ..AudioFeatures::default()
+            };
+            let mut c = ctx(0.0, audio, false);
+            for frame in 0..90 {
+                c = ctx(frame as f64 / 60.0, audio, false);
+                fx.update(&c);
+            }
+            // How bright each row is on average, bottom row first.
+            (0..10)
+                .map(|row| {
+                    let y = 1.0 - (row as f32 + 0.5) / 10.0;
+                    (0..40).map(|i| fx.shade((i as f32 + 0.5) / 40.0, y, &c).r).sum::<f32>() / 40.0
+                })
+                .collect::<Vec<f32>>()
+        };
+        let calm = lit_rows(0.0);
+        let loud = lit_rows(1.0);
+        assert!(calm[0] > 0.5, "the base always burns: {calm:?}");
+        assert!(
+            calm[0] > calm[4] && calm[9] < 0.05,
+            "hot at the bottom, dark at the top: {calm:?}"
+        );
+        let height = |rows: &[f32]| rows.iter().filter(|r| **r > 0.15).count();
+        assert!(height(&loud) >= height(&calm) + 2, "calm {calm:?} loud {loud:?}");
+    }
+
+    #[test]
+    fn meteors_start_on_a_hit_run_the_strip_and_leave_a_tail() {
+        let mut fx = make("meteors");
+        let with_onset = |onset: f32| AudioFeatures {
+            onset,
+            active: true,
+            ..AudioFeatures::default()
+        };
+        fx.update(&ctx(0.0, with_onset(0.0), true));
+        assert_eq!(peak_along(fx.as_ref(), &ctx(0.0, with_onset(0.0), true)).0, 0.0);
+        fx.update(&ctx(0.0, with_onset(1.0), true));
+        // The hit rings on for a while; it must still be only one meteor.
+        let mut heads = Vec::new();
+        for frame in 1..=30 {
+            let c = ctx(
+                frame as f64 / 60.0,
+                with_onset(if frame < 6 { 0.95 } else { 0.0 }),
+                true,
+            );
+            fx.update(&c);
+            heads.push(peak_along(fx.as_ref(), &c));
+        }
+        assert!(heads[10].0 > 0.8);
+        assert!(heads[29].1 > heads[10].1 + 0.2, "the head moves along: {heads:?}");
+        // Behind the head the light fades rather than stops.
+        let c = ctx(0.5, with_onset(0.0), true);
+        let head = heads[29].1;
+        let near = fx.shade(head - 0.05, 0.5, &c);
+        let far = fx.shade(head - 0.25, 0.5, &c);
+        assert!(near.b > far.b && far.b > 0.0, "near {near:?} far {far:?}");
+        assert_eq!(
+            fx.shade((head + 0.1).min(1.0), 0.5, &c),
+            Rgb::BLACK,
+            "nothing ahead of it"
+        );
+    }
+
+    #[test]
+    fn smooth_noise_is_smooth_and_covers_its_range() {
+        let mut low = 1.0f32;
+        let mut high = 0.0f32;
+        for i in 0..2000 {
+            let (x, y) = (i as f32 * 0.037, i as f32 * 0.011);
+            let v = noise2(x, y);
+            assert!((0.0..=1.0).contains(&v));
+            assert!((noise2(x + 0.01, y) - v).abs() < 0.05, "a small step is a small change");
+            low = low.min(v);
+            high = high.max(v);
+        }
+        assert!(low < 0.2 && high > 0.8, "{low}..{high}");
+        // Negative coordinates are as good as positive ones.
+        assert!((0.0..=1.0).contains(&noise2(-3.7, -0.2)));
     }
 }

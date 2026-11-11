@@ -354,6 +354,11 @@ code {
   font-size: 12px;
 }
 
+.field.inline.each {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .hint.block {
   display: block;
 }
@@ -2269,7 +2274,16 @@ input.number {
 }
 
 .scene.current .chip,
-.scene.current .scene-more {
+.scene.current /* A scene autopilot will not pick. */
+.scene.skipped .chip {
+  border-style: dashed;
+}
+
+.chip.autopilot {
+  flex: none;
+}
+
+.scene-more {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);

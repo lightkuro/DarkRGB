@@ -25,6 +25,7 @@ use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use darkrgb_core::audio::{BAND_MAX_HZ, BASS, MID, TREBLE, band_edge_hz, group_bands};
+use darkrgb_core::looks::LOOKS;
 use darkrgb_core::show::FRAME_RATES;
 use darkrgb_core::{BANDS, color, effects};
 use futures_util::{SinkExt, StreamExt};
@@ -195,6 +196,8 @@ fn hello() -> String {
         "band_hz": (0..=BANDS).map(|i| band_edge_hz(i, BAND_MAX_HZ).round()).collect::<Vec<f32>>(),
         "effects": effects,
         "palettes": color::palettes(),
+        // Names of the starter scenes, so the UI can tell which are missing.
+        "looks": LOOKS.iter().map(|l| json!({ "name": l.name, "description": l.description })).collect::<Vec<_>>(),
     })
     .to_string()
 }

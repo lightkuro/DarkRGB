@@ -72,6 +72,7 @@ fn make_solid(shared: &Arc<Shared>, colour: &str) {
             blend: None,
             enabled: None,
             targets: None,
+            each: None,
         })
         .unwrap();
     shared
@@ -548,6 +549,7 @@ fn a_beat_fired_by_hand_sets_off_effects_that_wait_for_one() {
             blend: None,
             enabled: None,
             targets: None,
+            each: None,
         })
         .unwrap();
     // With no sound and no beat, the pulse stays dark.
@@ -672,6 +674,7 @@ fn the_frame_rate_can_be_lowered() {
         .execute(&Command::SetOutput {
             frame_rate: Some(30),
             flash_limit: None,
+            flash_strict: None,
         })
         .unwrap();
     wait_for("the stream to start", || sim.stats().frames > 5);
@@ -800,6 +803,7 @@ fn a_hundred_and_twenty_frames_a_second_reach_the_device() {
         .execute(&Command::SetOutput {
             frame_rate: Some(120),
             flash_limit: None,
+            flash_strict: None,
         })
         .unwrap();
     wait_for("the stream to start", || sim.stats().frames > 5);
@@ -840,6 +844,7 @@ fn a_strobe_is_limited_at_the_device_and_the_limit_can_be_switched_off() {
             blend: None,
             enabled: None,
             targets: None,
+            each: None,
         })
         .unwrap();
     shared
@@ -866,6 +871,7 @@ fn a_strobe_is_limited_at_the_device_and_the_limit_can_be_switched_off() {
         .execute(&Command::SetOutput {
             frame_rate: None,
             flash_limit: Some(0.0),
+            flash_strict: None,
         })
         .unwrap();
     std::thread::sleep(Duration::from_millis(300));
@@ -982,6 +988,7 @@ fn next_scene_previous_scene_freeze_and_speed() {
             blend: None,
             enabled: None,
             targets: None,
+            each: None,
         })
         .unwrap();
     let moving = |sim: &Sim| {

@@ -213,7 +213,12 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
             }
         }
         // Last of all, so nothing can get around it: the flash limit.
-        window_limited |= guard.apply(renderer.frame_mut(), now, show.output.flash_limit);
+        window_limited |= guard.apply(
+            renderer.frame_mut(),
+            now,
+            show.output.flash_limit,
+            show.output.flash_share(),
+        );
         outputs.send(&show, &renderer);
 
         let preview_every = (show.output.frame_rate / PREVIEW_RATE).max(1) as u64;

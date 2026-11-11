@@ -8,6 +8,7 @@ pub mod color;
 pub mod effect;
 pub mod effects;
 pub mod layout;
+pub mod looks;
 pub mod params;
 pub mod render;
 pub mod safety;

@@ -1,6 +1,6 @@
 // Scenes along the bottom: saved looks, one click (or one key) each.
 
-import { ChevronUp, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ChevronUp, Plus, RefreshCw, Shuffle, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   engine,
@@ -12,7 +12,7 @@ import {
   type Scene,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
-import { ConfirmButton, NameField, useDismiss } from "./ui";
+import { ConfirmButton, NameField, Switch, useDismiss } from "./ui";
 
 function SaveScene() {
   const [name, setName] = useState<string | null>(null);
@@ -67,6 +67,14 @@ function SceneMenu({ scene, left, close }: { scene: Scene; left: number; close: 
         onCommit={(name) => engine.send({ type: "rename_scene", id: scene.id, name })}
       />
       <KeyAssign action={{ type: "scene", id: scene.id }} />
+      <div className="field inline">
+        <span>Autopilot may pick it</span>
+        <Switch
+          checked={scene.auto}
+          label={`Autopilot may pick ${scene.name}`}
+          onChange={(auto) => engine.send({ type: "set_scene_auto", id: scene.id, auto })}
+        />
+      </div>
       <div className="layer-footer">
         <button
           type="button"
@@ -104,9 +112,26 @@ export function ScenesBar() {
   const closeMenu = useCallback(() => setMenu(null), []);
   if (!show) return <footer className="scenes" />;
   const menuScene = menu ? show.scenes.find((s) => s.id === menu.id) : undefined;
+  const auto = show.live.auto;
+  const missingLooks = (hello?.looks ?? []).filter((look) => !show.scenes.some((s) => s.name === look.name));
   return (
     <footer className="scenes">
       <span className="scenes-label">Scenes</span>
+      {show.scenes.length > 1 && (
+        <button
+          type="button"
+          className={`chip autopilot ${auto.enabled ? "selected" : ""}`}
+          aria-pressed={auto.enabled}
+          title={
+            auto.enabled
+              ? `Autopilot is on: a new scene every ${auto.every_bars} bars${auto.on_drops ? ", and when the song changes" : ""}. Click to switch it off.`
+              : "Autopilot: change scene by itself, in time with the music"
+          }
+          onClick={() => engine.send({ type: "set_live", auto: !auto.enabled })}
+        >
+          <Shuffle size={13} /> Autopilot
+        </button>
+      )}
       <div className="scene-list">
         {show.scenes.map((scene) => {
           const binding = show.bindings.find((b) => b.action.type === "scene" && b.action.id === scene.id);
@@ -114,7 +139,9 @@ export function ScenesBar() {
           return (
             <span
               key={scene.id}
-              className={`scene ${current === scene.id ? "current" : ""} ${waiting ? "waiting" : ""}`}
+              className={`scene ${current === scene.id ? "current" : ""} ${waiting ? "waiting" : ""} ${
+                scene.auto ? "" : "skipped"
+              }`}
             >
               <button
                 type="button"
@@ -146,6 +173,16 @@ export function ScenesBar() {
           );
         })}
         <SaveScene />
+        {show.scenes.length === 0 && missingLooks.length > 0 && show.fixtures.length > 0 && (
+          <button
+            type="button"
+            className="chip add"
+            title="Ready-made scenes to start from. They are yours to change or delete."
+            onClick={() => engine.send({ type: "add_looks" })}
+          >
+            <Sparkles size={14} /> Add starter scenes
+          </button>
+        )}
       </div>
       {menu && menuScene && <SceneMenu key={menu.id} scene={menuScene} left={menu.left} close={closeMenu} />}
       {hello && (

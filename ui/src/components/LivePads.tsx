@@ -405,6 +405,16 @@ export function LivePads() {
             format={(v) => `${v.toFixed(2)}×`}
             onChange={setSensitivity}
           />
+          {show.scenes.length > 1 && (
+            <div className="field inline">
+              <span>Autopilot</span>
+              <Switch
+                checked={show.live.auto.enabled}
+                label="Autopilot"
+                onChange={(auto) => engine.send({ type: "set_live", auto })}
+              />
+            </div>
+          )}
           <div className="field inline">
             <span>Flash limit</span>
             <Switch

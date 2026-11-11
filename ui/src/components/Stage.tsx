@@ -521,12 +521,12 @@ export function Stage() {
           <div className="or">
             <span>or</span>
           </div>
-          <button type="button" className="button wide demo" onClick={() => engine.send({ type: "set_demo", enabled: true })}>
+          <button type="button" className="button wide demo" onClick={() => engine.send({ type: "start_demo" })}>
             <Sparkles size={15} /> Try it with demo lights
           </button>
           <p className="hint">
-            Demo lights exist only on this screen. Play some music and watch them react; switch them off again under
-            Lights.
+            Demo lights exist only on this screen. They come with a few ready-made scenes that change by
+            themselves in time with the music. Play something and watch.
           </p>
         </div>
       )}
