@@ -83,6 +83,10 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
     let mut window_limited = false;
     let mut last_beat = 0u32;
     let mut last_now = 0.0f64;
+    // The clock the effects run on. It can run fast or slow, and stops
+    // while the picture is frozen.
+    let mut show_time = 0.0f64;
+    let mut frozen_audio: Option<AudioFeatures> = None;
     let mut needs_sync = true;
     // Counts layout changes, so a client can tell which positions a preview
     // frame belongs to.
@@ -154,10 +158,9 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
 
         let dt = frame_start.duration_since(last_frame).as_secs_f32().min(0.25);
         last_frame = frame_start;
-        let time = frame_start.duration_since(started).as_secs_f64();
         let now = shared.now();
         let heard = delay.step(now, shared.audio.features(), show.audio.delay_ms);
-        let (audio, launch) = {
+        let (audio, launch, cues, frozen) = {
             let live = shared.live.lock().unwrap();
             let clocked = live.clocked(now, heard);
             let beat = clocked.beat_count != last_beat;
@@ -166,7 +169,12 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
                 .should_launch(now, last_now, show.live.launch, &clocked, beat)
                 .then(|| live.pending.map(|p| p.scene))
                 .flatten();
-            (live.with_hits(now, clocked), launch)
+            (
+                live.with_hits(now, clocked),
+                launch,
+                live.cues(now),
+                live.is_frozen(&base),
+            )
         };
         last_now = now;
         if let Some(scene) = launch {
@@ -174,13 +182,24 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
             shared.launch_scene(scene);
         }
 
-        renderer.render(&show, time, dt, &audio);
+        // Frozen: time stands still and the sound is what it was, so the
+        // effects draw the same picture. Brightness and blackout still work.
+        let (audio, dt) = if frozen {
+            (*frozen_audio.get_or_insert(audio), 0.0)
+        } else {
+            frozen_audio = None;
+            (audio, dt * show.live.speed.clamp(0.1, 8.0))
+        };
+        show_time += dt as f64;
+        let time = show_time;
+
+        renderer.render_with(&show, time, dt, &audio, &cues);
         if let Some(leaving) = &mut fade {
             let t = frame_start.duration_since(leaving.started).as_secs_f32() / leaving.seconds;
             if t >= 1.0 {
                 fade = None;
             } else {
-                leaving.from.render(&leaving.show, time, dt, &audio);
+                leaving.from.render_with(&leaving.show, time, dt, &audio, &cues);
                 // Ease in and out, so the change has no hard edge.
                 let eased = t * t * (3.0 - 2.0 * t);
                 renderer.mix_in(leaving.from.frame(), 1.0 - eased);

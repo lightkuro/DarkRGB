@@ -121,6 +121,16 @@ impl Default for AudioFeatures {
 }
 
 impl AudioFeatures {
+    /// What a layer that ignores the music hears: nothing, and no beat.
+    /// Only hits fired by hand reach it.
+    pub fn silenced(&self) -> AudioFeatures {
+        AudioFeatures {
+            // Present, so effects do not fall back to their no-sound look.
+            active: true,
+            ..AudioFeatures::default()
+        }
+    }
+
     /// Band loudness at a position 0..1 across the spectrum, interpolated.
     pub fn band_at(&self, t: f32) -> f32 {
         let f = t.clamp(0.0, 1.0) * (BANDS - 1) as f32;

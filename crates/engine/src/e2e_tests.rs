@@ -496,7 +496,7 @@ fn a_held_key_flashes_and_a_toggled_key_stays() {
     let bind = |key: &str, action, mode| {
         shared
             .execute(&Command::Bind {
-                key: key.into(),
+                key: Some(key.into()),
                 label: String::new(),
                 action,
                 mode,
@@ -555,7 +555,7 @@ fn a_beat_fired_by_hand_sets_off_effects_that_wait_for_one() {
     assert!(all(&sim, 0), "{:?}", sim.frame());
     shared
         .execute(&Command::Bind {
-            key: "Space".into(),
+            key: Some("Space".into()),
             label: String::new(),
             action: Action::Hit,
             mode: KeyMode::Toggle,
@@ -590,6 +590,7 @@ fn a_scene_waits_for_the_beat_when_asked_to() {
         .execute(&Command::SetLive {
             launch: Some(Launch::Beat),
             fade: None,
+            speed: None,
         })
         .unwrap();
 
@@ -635,6 +636,7 @@ fn a_scene_change_can_fade_in() {
         .execute(&Command::SetLive {
             launch: None,
             fade: Some(0.6),
+            speed: None,
         })
         .unwrap();
 
@@ -679,7 +681,7 @@ async fn a_key_held_by_a_client_that_disappears_is_let_go() {
     let layer = shared.show.lock().unwrap().layers[0].id;
     shared
         .execute(&Command::Bind {
-            key: "KeyF".into(),
+            key: Some("KeyF".into()),
             label: "F".into(),
             action: Action::Layer { id: layer },
             mode: KeyMode::Hold,
@@ -695,11 +697,26 @@ async fn a_key_held_by_a_client_that_disappears_is_let_go() {
         .await
         .unwrap();
 
-    let state = next_json(&mut ws, "state").await;
+    // The first state and the first live message come in either order.
+    let (mut state, mut live) = (None, None);
+    while state.is_none() || live.is_none() {
+        let message = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .expect("the first messages never arrived");
+        if let Message::Text(text) = message.unwrap().unwrap() {
+            let value: Value = serde_json::from_str(text.as_str()).unwrap();
+            if value["type"] == "state" {
+                state = Some(value);
+            } else if value["type"] == "live" {
+                live = Some(value);
+            }
+        }
+    }
+    let (state, live) = (state.unwrap(), live.unwrap());
     assert_eq!(state["show"]["bindings"][0]["key"], "KeyF");
     assert_eq!(state["current_scene"], Value::Null);
-    let live = next_json(&mut ws, "live").await;
     assert_eq!(live["held"], json!([]));
+    assert_eq!(live["frozen"], false);
 
     let press = json!({ "type": "trigger", "binding": key, "down": true });
     ws.send(Message::Text(press.to_string().into())).await.unwrap();
@@ -852,4 +869,149 @@ fn a_strobe_is_limited_at_the_device_and_the_limit_can_be_switched_off() {
     wait_for("the report to clear", || {
         !engine.shared.stats.lock().unwrap().flash_limited
     });
+}
+
+#[test]
+fn a_fired_pad_sets_off_its_effect_and_a_held_scene_comes_and_goes() {
+    use crate::commands::QuickPad;
+    let (engine, sim) = engine_with_strip();
+    let shared = &engine.shared;
+    make_solid(shared, "#000000");
+    wait_for("dark", || all(&sim, 0));
+    let press = |binding, down| shared.execute(&Command::Trigger { binding, down });
+
+    // A ready-made pulse: dark until fired, whatever the music does.
+    shared.execute(&Command::AddQuickPad { kind: QuickPad::Pulse }).unwrap();
+    let pulse = shared.show.lock().unwrap().bindings[0].id;
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(all(&sim, 0));
+    press(pulse, true).unwrap();
+    wait_for("the pulse", || sim.frame().iter().any(|b| *b > 60));
+    press(pulse, false).unwrap();
+    wait_for("the pulse to fade", || all(&sim, 0));
+
+    // A ready-made flash: white while held.
+    shared.execute(&Command::AddQuickPad { kind: QuickPad::Flash }).unwrap();
+    let flash = shared.show.lock().unwrap().bindings[1].id;
+    press(flash, true).unwrap();
+    wait_for("white while held", || all(&sim, 255));
+    press(flash, false).unwrap();
+    wait_for("dark again", || all(&sim, 0));
+
+    // A scene on a held key shows only while the key is down.
+    shared.execute(&Command::SaveScene { name: "Dark".into() }).unwrap();
+    make_solid(shared, "#ffffff");
+    shared.execute(&Command::SaveScene { name: "Bright".into() }).unwrap();
+    wait_for("white", || all(&sim, 255));
+    let dark = shared.show.lock().unwrap().scenes[0].id;
+    shared
+        .execute(&Command::Bind {
+            key: Some("KeyQ".into()),
+            label: "Q".into(),
+            action: Action::Scene { id: dark },
+            mode: KeyMode::Hold,
+        })
+        .unwrap();
+    let key = shared
+        .show
+        .lock()
+        .unwrap()
+        .binding_for(Action::Scene { id: dark })
+        .unwrap()
+        .id;
+    let before = shared.show.lock().unwrap().clone();
+    press(key, true).unwrap();
+    wait_for("the held scene", || all(&sim, 0));
+    assert_eq!(*shared.show.lock().unwrap(), before, "holding a scene saves nothing");
+    press(key, false).unwrap();
+    wait_for("back to what was playing", || all(&sim, 255));
+}
+
+#[test]
+fn next_scene_previous_scene_freeze_and_speed() {
+    let (engine, sim) = engine_with_strip();
+    let shared = &engine.shared;
+    for (name, colour) in [("Red", "#ff0000"), ("Green", "#00ff00"), ("Blue", "#0000ff")] {
+        make_solid(shared, colour);
+        shared.execute(&Command::SaveScene { name: name.into() }).unwrap();
+    }
+    let pad = |action| {
+        shared
+            .execute(&Command::Bind {
+                key: None,
+                label: String::new(),
+                action,
+                mode: KeyMode::Toggle,
+            })
+            .unwrap();
+        shared.show.lock().unwrap().binding_for(action).unwrap().id
+    };
+    let press = |binding| {
+        shared.execute(&Command::Trigger { binding, down: true }).unwrap();
+        shared.execute(&Command::Trigger { binding, down: false }).unwrap();
+    };
+    let colour = || {
+        let f = sim.frame();
+        (f[0] > 128, f[1] > 128, f[2] > 128)
+    };
+    let (next, previous) = (pad(Action::NextScene), pad(Action::PrevScene));
+    wait_for("blue", || colour() == (false, false, true));
+    press(next);
+    wait_for("round to red", || colour() == (true, false, false));
+    press(next);
+    wait_for("green", || colour() == (false, true, false));
+    press(previous);
+    press(previous);
+    wait_for("back round to blue", || colour() == (false, false, true));
+
+    // Freeze: a moving effect stops moving, and blackout still works.
+    let layer = shared.show.lock().unwrap().layers[0].id;
+    shared
+        .execute(&Command::UpdateLayer {
+            id: layer,
+            effect: Some("plasma".into()),
+            opacity: None,
+            blend: None,
+            enabled: None,
+            targets: None,
+        })
+        .unwrap();
+    let moving = |sim: &Sim| {
+        let first = sim.frame();
+        std::thread::sleep(Duration::from_millis(250));
+        sim.frame() != first
+    };
+    wait_for("plasma to move", || moving(&sim));
+    let freeze = pad(Action::Freeze);
+    press(freeze);
+    assert!(shared.live.lock().unwrap().status().frozen);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!moving(&sim), "the picture should stand still while frozen");
+    shared
+        .execute(&Command::SetMaster {
+            brightness: None,
+            blackout: Some(true),
+            limit: None,
+        })
+        .unwrap();
+    wait_for("blackout while frozen", || all(&sim, 0));
+    shared
+        .execute(&Command::SetMaster {
+            brightness: None,
+            blackout: Some(false),
+            limit: None,
+        })
+        .unwrap();
+    press(freeze);
+    wait_for("moving again", || moving(&sim));
+
+    // Speed is kept within its range.
+    shared
+        .execute(&Command::SetLive {
+            launch: None,
+            fade: None,
+            speed: Some(0.01),
+        })
+        .unwrap();
+    assert_eq!(shared.show.lock().unwrap().live.speed, 0.25);
 }

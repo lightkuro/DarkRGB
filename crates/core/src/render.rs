@@ -10,6 +10,22 @@ use crate::layout::{Fixture, Shape};
 use crate::params::ParamReader;
 use crate::show::{Blend, Layer, Show};
 
+/// A hit fired by hand for one layer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerHit {
+    pub layer: u32,
+    /// 1 at the moment of the hit, fading to 0.
+    pub pulse: f32,
+    /// How many hits the layer has been sent so far.
+    pub count: u32,
+}
+
+/// What a performer adds to a frame on top of the music.
+#[derive(Clone, Debug, Default)]
+pub struct Cues {
+    pub hits: Vec<LayerHit>,
+}
+
 /// A pixel a layer draws on, with its position inside the layer's area.
 struct Target {
     index: u32,
@@ -98,9 +114,14 @@ impl Renderer {
         }
     }
 
-    /// Renders one frame. Colours are display-referred, before master
-    /// brightness and device gamma.
+    /// Renders one frame from the show and the music alone.
     pub fn render(&mut self, show: &Show, time: f64, dt: f32, audio: &AudioFeatures) -> &[Rgb] {
+        self.render_with(show, time, dt, audio, &Cues::default())
+    }
+
+    /// Renders one frame. Colours are display-referred, before device
+    /// gamma. `cues` carries what was fired by hand.
+    pub fn render_with(&mut self, show: &Show, time: f64, dt: f32, audio: &AudioFeatures, cues: &Cues) -> &[Rgb] {
         self.frame.fill(Rgb::BLACK);
         for layer in &show.layers {
             // A folder can switch its layers off and scale their strength.
@@ -113,8 +134,22 @@ impl Renderer {
             let (Some(state), Some(def)) = (self.layers.get_mut(&layer.id), effects::find(&layer.effect)) else {
                 continue;
             };
-            // Each layer hears its own part of the sound.
-            let heard = audio.routed(layer.sound.band, layer.sound.gain);
+            // Each layer hears its own part of the sound, or none of it.
+            let mut heard = if layer.sound.manual {
+                audio.silenced()
+            } else {
+                audio.routed(layer.sound.band, layer.sound.gain)
+            };
+            // A hit fired by hand reaches this layer whatever it listens to.
+            if let Some(hit) = cues.hits.iter().find(|h| h.layer == layer.id) {
+                let pulse = hit.pulse.clamp(0.0, 1.0);
+                heard.beat = heard.beat.max(pulse);
+                heard.onset = heard.onset.max(pulse);
+                for onset in &mut heard.onsets {
+                    *onset = onset.max(pulse);
+                }
+                heard.beat_count = heard.beat_count.wrapping_add(hit.count);
+            }
             let ctx = FrameCtx {
                 time,
                 dt,
@@ -635,6 +670,81 @@ mod tests {
         assert!((brightness(&show) - 0.25).abs() < 1e-5);
         show.layers[0].sound.pulse = 0.5;
         assert!((brightness(&show) - 0.625).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_hit_fired_by_hand_reaches_only_its_layer() {
+        let mut show = Show::default();
+        show.layers.clear();
+        show.add_device(device(1), None);
+        show.add_device(device(1), None);
+        let (left, right) = (show.fixtures[0].id, show.fixtures[1].id);
+        let a = show.add_layer("beat_pulse");
+        let b = show.add_layer("beat_pulse");
+        show.layer_mut(a).unwrap().targets = vec![left];
+        show.layer_mut(b).unwrap().targets = vec![right];
+        for id in [a, b] {
+            let layer = show.layer_mut(id).unwrap();
+            layer.params.insert("floor".into(), ParamValue::Number(0.0));
+            layer.blend = Blend::Normal;
+        }
+        let mut r = Renderer::new();
+        r.sync(&show);
+        let silence = AudioFeatures::default();
+        let frame = r.render(&show, 0.0, 1.0 / 60.0, &silence).to_vec();
+        assert_eq!(frame, [Rgb::BLACK, Rgb::BLACK]);
+
+        let cues = Cues {
+            hits: vec![LayerHit {
+                layer: b,
+                pulse: 1.0,
+                count: 1,
+            }],
+        };
+        let frame = r.render_with(&show, 0.02, 1.0 / 60.0, &silence, &cues).to_vec();
+        assert_eq!(frame[0], Rgb::BLACK, "the other layer heard nothing");
+        assert!(frame[1].r + frame[1].g + frame[1].b > 0.5, "{:?}", frame[1]);
+    }
+
+    #[test]
+    fn a_layer_set_to_ignore_the_music_reacts_only_when_fired() {
+        let mut show = Show::default();
+        show.layers.clear();
+        show.add_device(device(1), None);
+        let id = show.add_layer("beat_pulse");
+        show.layer_mut(id)
+            .unwrap()
+            .params
+            .insert("floor".into(), ParamValue::Number(0.0));
+        show.layer_mut(id).unwrap().sound.manual = true;
+        let mut r = Renderer::new();
+        r.sync(&show);
+        // Loud music with a beat on every frame: nothing.
+        for i in 1..30 {
+            let music = AudioFeatures {
+                level: 1.0,
+                beat: 1.0,
+                onset: 1.0,
+                onsets: [1.0; 3],
+                beat_count: i,
+                bpm: 120.0,
+                active: true,
+                ..AudioFeatures::default()
+            };
+            let frame = r.render(&show, i as f64 / 60.0, 1.0 / 60.0, &music).to_vec();
+            assert_eq!(frame[0], Rgb::BLACK, "frame {i}");
+        }
+        let cues = Cues {
+            hits: vec![LayerHit {
+                layer: id,
+                pulse: 1.0,
+                count: 1,
+            }],
+        };
+        let frame = r
+            .render_with(&show, 1.0, 1.0 / 60.0, &AudioFeatures::default(), &cues)
+            .to_vec();
+        assert!(frame[0].r + frame[0].g + frame[0].b > 0.5);
     }
 
     #[test]

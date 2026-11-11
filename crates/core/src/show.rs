@@ -36,6 +36,9 @@ pub struct Sound {
     /// any effect, including ones that ignore sound themselves.
     #[serde(default)]
     pub pulse: f32,
+    /// The layer ignores the music and reacts only when fired by hand.
+    #[serde(default)]
+    pub manual: bool,
 }
 
 impl Default for Sound {
@@ -44,6 +47,7 @@ impl Default for Sound {
             band: Band::All,
             gain: 1.0,
             pulse: 0.0,
+            manual: false,
         }
     }
 }
@@ -59,6 +63,11 @@ pub struct LayerGroup {
     /// Multiplies the strength of every effect inside, 0..1.
     #[serde(default = "one")]
     pub opacity: f32,
+    /// Pinned folders stay on top of the stack and are left alone by scene
+    /// changes: they are not saved in scenes and not replaced by them. It
+    /// is where things played by hand live, such as a flash.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// A named set of lights, such as "Ceiling". An effect can play on a
@@ -158,36 +167,71 @@ pub enum Action {
     TapTempo,
     /// Fires a beat by hand, so effects that wait for one go off now.
     Hit,
+    /// Switches to the scene after the one that is playing.
+    NextScene,
+    /// Switches to the scene before the one that is playing.
+    PrevScene,
+    /// Stops the picture where it is.
+    Freeze,
 }
 
 impl Action {
-    /// Actions that have a state to flip, so "while held" means something.
+    /// Actions that have a state to flip.
     pub fn is_switch(&self) -> bool {
         matches!(
             self,
-            Action::Layer { .. } | Action::LayerGroup { .. } | Action::LightGroup { .. } | Action::Blackout
+            Action::Layer { .. }
+                | Action::LayerGroup { .. }
+                | Action::LightGroup { .. }
+                | Action::Blackout
+                | Action::Freeze
         )
+    }
+
+    /// Whether "only while the key is down" means something: for anything
+    /// that switches, and for a scene, which is shown while held.
+    pub fn can_hold(&self) -> bool {
+        self.is_switch() || matches!(self, Action::Scene { .. })
+    }
+
+    /// Whether the thing has a reaction that a press can set off.
+    pub fn can_fire(&self) -> bool {
+        matches!(self, Action::Layer { .. } | Action::LayerGroup { .. })
+    }
+
+    /// The nearest behaviour to `mode` that this action supports.
+    pub fn allowed(&self, mode: KeyMode) -> KeyMode {
+        match mode {
+            KeyMode::Hold if self.can_hold() => KeyMode::Hold,
+            KeyMode::Fire if self.can_fire() => KeyMode::Fire,
+            _ => KeyMode::Toggle,
+        }
     }
 }
 
-/// How a key that switches something behaves.
+/// What a press of a pad or its key does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyMode {
-    /// Each press flips it.
+    /// Each press does it: flips a switch, changes a scene.
     #[default]
     Toggle,
-    /// Flipped only while the key is down.
+    /// Flipped, or shown, only while the key is down.
     Hold,
+    /// Sets off the effect's reaction, as if a beat had hit.
+    Fire,
 }
 
-/// A key on the keyboard tied to something in the show.
+/// A pad in the live view, tied to something in the show, usually with a
+/// key on the keyboard. The order of the list is the order of the pads.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Binding {
     pub id: u32,
     /// Where the key sits on the keyboard, as browsers name it: `KeyA`,
-    /// `Digit1`, `Space`. The same key on any keyboard layout.
-    pub key: String,
+    /// `Digit1`, `Space`. The same key on any keyboard layout. A pad
+    /// without a key is pressed by mouse or touch.
+    #[serde(default)]
+    pub key: Option<String>,
     /// What is printed on that key on the user's keyboard, for display.
     #[serde(default)]
     pub label: String,
@@ -209,13 +253,26 @@ pub enum Launch {
 }
 
 /// Settings for performing live.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LiveSettings {
     #[serde(default)]
     pub launch: Launch,
     /// Seconds a scene change takes to fade in, 0..10. Zero cuts.
     #[serde(default)]
     pub fade: f32,
+    /// How fast everything moves, 0.25..4. One is normal.
+    #[serde(default = "one")]
+    pub speed: f32,
+}
+
+impl Default for LiveSettings {
+    fn default() -> Self {
+        Self {
+            launch: Launch::Now,
+            fade: 0.0,
+            speed: 1.0,
+        }
+    }
 }
 
 /// Frame rates the engine can run at. 120 only helps short strips: the
@@ -332,7 +389,11 @@ fn tidy(layers: &mut Vec<Layer>, groups: &[LayerGroup]) {
             rest = other;
         }
     }
-    *layers = ordered;
+    // Pinned folders sit above everything else, in the order they were in.
+    let pinned = |l: &Layer| l.group.is_some_and(|g| groups.iter().any(|x| x.id == g && x.pinned));
+    let (top, below): (Vec<Layer>, Vec<Layer>) = ordered.into_iter().partition(pinned);
+    *layers = below;
+    layers.extend(top);
 }
 
 impl Default for Show {
@@ -409,9 +470,17 @@ impl Show {
             Blend::Add
         };
         let group = group.filter(|g| self.layer_groups.iter().any(|x| x.id == *g));
+        // On top of its folder; otherwise on top of everything that is not
+        // pinned, since pinned folders stay above the rest.
+        let top = self
+            .layers
+            .iter()
+            .position(|l| self.is_pinned(l))
+            .unwrap_or(self.layers.len());
+        let pinned_folder = group.is_some_and(|g| self.layer_groups.iter().any(|x| x.id == g && x.pinned));
         let at = group
             .and_then(|g| self.layers.iter().rposition(|l| l.group == Some(g)))
-            .map_or(self.layers.len(), |last| last + 1);
+            .map_or(if pinned_folder { self.layers.len() } else { top }, |last| last + 1);
         self.layers.insert(
             at,
             Layer {
@@ -438,8 +507,48 @@ impl Show {
             name: name.to_string(),
             enabled: true,
             opacity: 1.0,
+            pinned: false,
         });
         id
+    }
+
+    fn is_pinned(&self, layer: &Layer) -> bool {
+        layer
+            .group
+            .is_some_and(|g| self.layer_groups.iter().any(|x| x.id == g && x.pinned))
+    }
+
+    /// The part of the stack a scene saves: everything outside pinned folders.
+    pub fn scene_part(&self) -> (Vec<Layer>, Vec<LayerGroup>) {
+        let layers = self.layers.iter().filter(|l| !self.is_pinned(l)).cloned().collect();
+        let groups = self.layer_groups.iter().filter(|g| !g.pinned).cloned().collect();
+        (layers, groups)
+    }
+
+    /// What plays when a scene is switched to: the scene's layers with the
+    /// pinned folders, as they are now, kept on top.
+    pub fn scene_stack(&self, scene: &Scene) -> (Vec<Layer>, Vec<LayerGroup>) {
+        let pinned: Vec<&LayerGroup> = self.layer_groups.iter().filter(|g| g.pinned).collect();
+        let kept: Vec<&Layer> = self.layers.iter().filter(|l| self.is_pinned(l)).collect();
+        // A scene saved before a folder was pinned may still hold that
+        // folder or its layers; the pinned ones win.
+        let mut layers: Vec<Layer> = scene
+            .layers
+            .iter()
+            .filter(|l| {
+                !kept.iter().any(|k| k.id == l.id) && !l.group.is_some_and(|g| pinned.iter().any(|p| p.id == g))
+            })
+            .cloned()
+            .collect();
+        layers.extend(kept.into_iter().cloned());
+        let mut groups: Vec<LayerGroup> = scene
+            .groups
+            .iter()
+            .filter(|g| !pinned.iter().any(|p| p.id == g.id))
+            .cloned()
+            .collect();
+        groups.extend(pinned.into_iter().cloned());
+        (layers, groups)
     }
 
     /// Removes a folder. Its layers go with it, or stay in place unfiled.
@@ -537,7 +646,12 @@ impl Show {
             Action::Layer { id } => layers.contains(&id),
             Action::LayerGroup { id } => folders.contains(&id),
             Action::LightGroup { id } => light_groups.iter().any(|g| g.id == id),
-            Action::Blackout | Action::TapTempo | Action::Hit => true,
+            Action::Blackout
+            | Action::TapTempo
+            | Action::Hit
+            | Action::NextScene
+            | Action::PrevScene
+            | Action::Freeze => true,
         });
     }
 
@@ -546,20 +660,60 @@ impl Show {
         self.bindings.iter().find(|b| b.action == action)
     }
 
-    /// Ties a key to an action and returns the binding's id. A key does
-    /// one thing and a thing has one key, so earlier bindings of either
-    /// are replaced.
+    /// Ties a key to an action and returns the pad's id. See [`Show::add_pad`].
     pub fn bind(&mut self, key: &str, label: &str, action: Action, mode: KeyMode) -> u32 {
-        self.bindings.retain(|b| b.key != key && b.action != action);
+        self.add_pad(Some(key), label, action, mode)
+    }
+
+    /// Gives an action a pad, with or without a key, and returns the pad's
+    /// id. A thing has one pad: if it has one already, that pad is changed
+    /// and keeps its place. A key does one thing: a pad that had the key
+    /// stays, without it.
+    pub fn add_pad(&mut self, key: Option<&str>, label: &str, action: Action, mode: KeyMode) -> u32 {
+        let mode = action.allowed(mode);
+        if let Some(key) = key {
+            for other in self.bindings.iter_mut().filter(|b| b.key.as_deref() == Some(key)) {
+                other.key = None;
+                other.label.clear();
+            }
+        }
+        let (key, label) = (key.map(str::to_string), if key.is_some() { label } else { "" });
+        if let Some(pad) = self.bindings.iter_mut().find(|b| b.action == action) {
+            pad.key = key;
+            pad.label = label.to_string();
+            pad.mode = mode;
+            return pad.id;
+        }
         let id = self.alloc_id();
         self.bindings.push(Binding {
             id,
-            key: key.to_string(),
+            key,
             label: label.to_string(),
             action,
             mode,
         });
         id
+    }
+
+    /// The scene `step` places after the one that is playing (before, for
+    /// a negative step), going round at the ends. `from` is the scene to
+    /// count from when what is playing matches no scene.
+    pub fn scene_after(&self, from: Option<u32>, step: i32) -> Option<u32> {
+        if self.scenes.is_empty() {
+            return None;
+        }
+        let count = self.scenes.len() as i32;
+        let at = self
+            .current_scene()
+            .or(from)
+            .and_then(|id| self.scenes.iter().position(|s| s.id == id));
+        let next = match at {
+            Some(at) => (at as i32 + step).rem_euclid(count),
+            // Nothing to count from: start at the first, or the last going back.
+            None if step >= 0 => 0,
+            None => count - 1,
+        };
+        Some(self.scenes[next as usize].id)
     }
 
     /// Adds a device and one fixture covering all of its pixels, placed
@@ -692,15 +846,16 @@ impl Show {
     /// switch scenes from the keyboard without setting anything up.
     pub fn save_scene(&mut self, name: &str) -> u32 {
         let id = self.alloc_id();
+        let (layers, groups) = self.scene_part();
         self.scenes.push(Scene {
             id,
             name: name.to_string(),
-            layers: self.layers.clone(),
-            groups: self.layer_groups.clone(),
+            layers,
+            groups,
         });
         let free = "1234567890"
             .chars()
-            .find(|digit| !self.bindings.iter().any(|b| b.key == format!("Digit{digit}")));
+            .find(|digit| !self.bindings.iter().any(|b| b.key == Some(format!("Digit{digit}"))));
         if let Some(digit) = free {
             self.bind(
                 &format!("Digit{digit}"),
@@ -718,8 +873,7 @@ impl Show {
         let Some(scene) = self.scenes.iter().find(|s| s.id == id) else {
             return false;
         };
-        self.layers = scene.layers.clone();
-        self.layer_groups = scene.groups.clone();
+        (self.layers, self.layer_groups) = self.scene_stack(scene);
         self.tidy_layers();
         // An effect that was never saved in a scene is gone now, and its
         // key with it.
@@ -727,11 +881,13 @@ impl Show {
         true
     }
 
-    /// The scene whose layers and folders are exactly what is playing.
+    /// The scene whose layers and folders are exactly what is playing,
+    /// pinned folders aside.
     pub fn current_scene(&self) -> Option<u32> {
+        let (layers, groups) = self.scene_part();
         self.scenes
             .iter()
-            .find(|s| s.layers == self.layers && s.groups == self.layer_groups)
+            .find(|s| s.layers == layers && s.groups == groups)
             .map(|s| s.id)
     }
 
@@ -817,6 +973,7 @@ impl Show {
             self.audio.sensitivity,
             self.audio.delay_ms,
             self.live.fade,
+            self.live.speed,
             self.output.flash_limit,
         ];
         if numbers.iter().any(|n| !n.is_finite()) {
@@ -1080,23 +1237,78 @@ mod tests {
     fn a_key_does_one_thing_and_a_thing_has_one_key() {
         let mut show = Show::default();
         let layer = show.layers[0].id;
-        show.bind("KeyA", "A", Action::Layer { id: layer }, KeyMode::Toggle);
+        let pad = show.bind("KeyA", "A", Action::Layer { id: layer }, KeyMode::Toggle);
         show.bind("KeyA", "A", Action::Blackout, KeyMode::Hold);
-        assert_eq!(show.bindings.len(), 1, "the key moved to blackout");
-        show.bind("KeyB", "B", Action::Blackout, KeyMode::Toggle);
-        assert_eq!(show.bindings.len(), 1, "blackout moved to the new key");
-        assert_eq!(show.bindings[0].key, "KeyB");
+        assert_eq!(show.bindings.len(), 2);
+        assert_eq!(show.bindings[0].key, None, "the key moved to blackout; the pad stayed");
+        assert_eq!(show.bindings[0].label, "");
+        let blackout = show.bind("KeyB", "B", Action::Blackout, KeyMode::Toggle);
+        assert_eq!(show.bindings.len(), 2, "blackout kept its one pad");
+        assert_eq!(show.bindings[1].key.as_deref(), Some("KeyB"));
         assert_eq!(show.binding_for(Action::Blackout).unwrap().mode, KeyMode::Toggle);
+        // A pad that gets a key again keeps its id and its place.
+        assert_eq!(show.bind("KeyC", "C", Action::Layer { id: layer }, KeyMode::Hold), pad);
+        assert_eq!(show.bindings.iter().map(|b| b.id).collect::<Vec<_>>(), [pad, blackout]);
+    }
+
+    #[test]
+    fn pads_need_no_key_and_only_do_what_their_thing_can() {
+        let mut show = Show::default();
+        let layer = show.layers[0].id;
+        let scene = show.save_scene("One");
+        // A pad for touch only.
+        let pad = show.add_pad(None, "ignored", Action::Layer { id: layer }, KeyMode::Fire);
+        assert_eq!(show.bindings.last().unwrap().key, None);
+        assert_eq!(show.bindings.last().unwrap().label, "");
+        assert_eq!(show.bindings.last().unwrap().mode, KeyMode::Fire);
+        assert_eq!(show.add_pad(None, "", Action::Layer { id: layer }, KeyMode::Hold), pad);
+
+        // An effect can be fired and held; a scene held but not fired; a tap neither.
+        assert_eq!(Action::Scene { id: scene }.allowed(KeyMode::Hold), KeyMode::Hold);
+        assert_eq!(Action::Scene { id: scene }.allowed(KeyMode::Fire), KeyMode::Toggle);
+        assert_eq!(Action::Blackout.allowed(KeyMode::Fire), KeyMode::Toggle);
+        assert_eq!(Action::Freeze.allowed(KeyMode::Hold), KeyMode::Hold);
+        assert_eq!(Action::TapTempo.allowed(KeyMode::Hold), KeyMode::Toggle);
+        assert_eq!(Action::NextScene.allowed(KeyMode::Hold), KeyMode::Toggle);
+        show.add_pad(None, "", Action::NextScene, KeyMode::Fire);
+        assert_eq!(show.binding_for(Action::NextScene).unwrap().mode, KeyMode::Toggle);
+        show.prune_bindings();
+        assert!(
+            show.binding_for(Action::NextScene).is_some(),
+            "it points at nothing that can vanish"
+        );
+    }
+
+    #[test]
+    fn next_and_previous_scene_go_round() {
+        let mut show = Show::default();
+        assert_eq!(show.scene_after(None, 1), None);
+        let a = show.save_scene("A");
+        show.add_layer("solid");
+        let b = show.save_scene("B");
+        show.add_layer("flow");
+        let c = show.save_scene("C");
+        assert_eq!(show.current_scene(), Some(c));
+        assert_eq!(show.scene_after(None, 1), Some(a), "after the last comes the first");
+        assert_eq!(show.scene_after(None, -1), Some(b));
+        // What is playing matches no scene: count from the one given, or from an end.
+        show.add_layer("sparkle");
+        assert_eq!(show.current_scene(), None);
+        assert_eq!(show.scene_after(Some(a), 1), Some(b));
+        assert_eq!(show.scene_after(None, 1), Some(a));
+        assert_eq!(show.scene_after(None, -1), Some(c));
+        assert_eq!(show.scene_after(Some(9999), 1), Some(a));
     }
 
     #[test]
     fn scenes_take_the_number_keys_until_they_run_out() {
         let mut show = Show::default();
         let first = show.save_scene("one");
-        assert_eq!(show.binding_for(Action::Scene { id: first }).unwrap().key, "Digit1");
+        let key_of = |show: &Show, id| show.binding_for(Action::Scene { id }).unwrap().key.clone().unwrap();
+        assert_eq!(key_of(&show, first), "Digit1");
         show.bind("Digit2", "2", Action::Blackout, KeyMode::Toggle);
         let second = show.save_scene("two");
-        assert_eq!(show.binding_for(Action::Scene { id: second }).unwrap().key, "Digit3");
+        assert_eq!(key_of(&show, second), "Digit3");
         for n in 0..10 {
             show.save_scene(&format!("more {n}"));
         }
@@ -1118,6 +1330,62 @@ mod tests {
         assert!(show.binding_for(Action::Layer { id: extra }).is_some());
         show.delete_scene(scene);
         assert!(show.binding_for(Action::Layer { id: extra }).is_none());
+    }
+
+    #[test]
+    fn pinned_folders_stay_on_top_and_through_scene_changes() {
+        let mut show = Show::default();
+        let plasma = show.layers[0].id;
+        let live = show.add_layer_group("Live");
+        show.layer_groups[0].pinned = true;
+        let flash = show.add_layer_in("solid", Some(live));
+        show.bind("KeyF", "F", Action::Layer { id: flash }, KeyMode::Hold);
+        // A new effect goes under the pinned folder, not over it.
+        let ripple = show.add_layer("ripple");
+        let order = |show: &Show| show.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+        assert_eq!(order(&show), [plasma, ripple, flash]);
+
+        // A scene saves everything but the pinned folder.
+        let both = show.save_scene("Both");
+        assert_eq!(show.scenes[0].layers.len(), 2);
+        assert!(show.scenes[0].groups.is_empty());
+        assert_eq!(show.current_scene(), Some(both));
+        show.layers.retain(|l| l.id != ripple);
+        let one = show.save_scene("One");
+
+        // Switching scenes keeps the pinned folder, its effect and its key.
+        assert!(show.recall_scene(both));
+        assert_eq!(order(&show), [plasma, ripple, flash]);
+        assert_eq!(show.layer_groups.len(), 1);
+        assert!(show.binding_for(Action::Layer { id: flash }).is_some());
+        assert_eq!(show.current_scene(), Some(both));
+        assert!(show.recall_scene(one));
+        assert_eq!(order(&show), [plasma, flash]);
+        // Changing something in the pinned folder does not make it "no scene".
+        show.layer_mut(flash).unwrap().enabled = false;
+        assert_eq!(show.current_scene(), Some(one));
+
+        // Tidying puts a pinned folder's effects back on top wherever they were put.
+        show.layers.reverse();
+        show.tidy_layers();
+        assert_eq!(order(&show), [plasma, flash]);
+        let mut mended = show.clone();
+        mended.repair();
+        assert_eq!(mended, show);
+    }
+
+    #[test]
+    fn a_folder_pinned_after_a_scene_was_saved_is_not_doubled() {
+        let mut show = Show::default();
+        let folder = show.add_layer_group("Hits");
+        let hit = show.add_layer_in("beat_pulse", Some(folder));
+        let scene = show.save_scene("With hits");
+        assert_eq!(show.scenes[0].layers.len(), 2, "saved while the folder was ordinary");
+        show.layer_groups[0].pinned = true;
+        assert!(show.recall_scene(scene));
+        assert_eq!(show.layers.iter().filter(|l| l.id == hit).count(), 1);
+        assert_eq!(show.layer_groups.iter().filter(|g| g.id == folder).count(), 1);
+        assert!(show.layer_groups[0].pinned);
     }
 
     #[test]

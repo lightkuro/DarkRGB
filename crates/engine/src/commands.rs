@@ -10,7 +10,10 @@ use darkrgb_core::{Action, Band, KeyMode, Launch, Rgb, Shape, Show};
 use serde::Deserialize;
 
 const MAX_NAME: usize = 80;
+/// Most effects outside pinned folders, which is also the most a scene holds.
 const MAX_LAYERS: usize = 32;
+/// Most effects inside pinned folders. They play on top of every scene.
+const MAX_PINNED: usize = 16;
 const MAX_SCENES: usize = 200;
 const MAX_DEVICES: usize = 256;
 const MAX_GROUPS: usize = 64;
@@ -90,6 +93,8 @@ pub enum Command {
         band: Option<Band>,
         gain: Option<f32>,
         pulse: Option<f32>,
+        /// Ignore the music; react only when fired by hand.
+        manual: Option<bool>,
     },
     /// Puts the stack in a new order and files each layer in a folder or
     /// in none. Lists every layer once, bottom first.
@@ -107,6 +112,8 @@ pub enum Command {
         name: Option<String>,
         enabled: Option<bool>,
         opacity: Option<f32>,
+        /// Keep the folder on top and through scene changes.
+        pinned: Option<bool>,
     },
     /// Removes a folder. Its effects stay unless `keep_layers` is false.
     RemoveLayerGroup {
@@ -132,9 +139,12 @@ pub enum Command {
         fixtures: Vec<u32>,
         group: Option<u32>,
     },
-    /// Ties a key to something. The key, and the thing, lose any earlier tie.
+    /// Gives something a pad in the live view, with a key or without. A
+    /// thing has one pad, so this also changes the key or behaviour of
+    /// the pad it has. A key does one thing: a pad that had it loses it.
     Bind {
-        key: String,
+        #[serde(default)]
+        key: Option<String>,
         #[serde(default)]
         label: String,
         action: Action,
@@ -145,8 +155,21 @@ pub enum Command {
         id: u32,
         mode: KeyMode,
     },
+    /// Takes the key off a pad and keeps the pad.
+    ClearKey {
+        id: u32,
+    },
+    /// Removes a pad, and its key with it.
     Unbind {
         id: u32,
+    },
+    /// Puts the pads in a new order. Lists every pad once.
+    ArrangePads {
+        order: Vec<u32>,
+    },
+    /// Adds a ready-made pad together with the effect it plays.
+    AddQuickPad {
+        kind: QuickPad,
     },
     /// A key went down or came up. Handled by the app, which keeps track
     /// of what is being held.
@@ -162,6 +185,11 @@ pub enum Command {
     },
     /// Writes a copy of the show to the Documents folder. Handled by the app.
     ExportShow,
+    /// Does what a plain press of a pad for `action` would do, for things
+    /// that have no pad of their own. Handled by the app.
+    Perform {
+        action: Action,
+    },
     /// One tap of the tempo. Handled by the app.
     Tap,
     /// Fires a beat by hand. Handled by the app.
@@ -171,6 +199,7 @@ pub enum Command {
     SetLive {
         launch: Option<Launch>,
         fade: Option<f32>,
+        speed: Option<f32>,
     },
     SetOutput {
         frame_rate: Option<u32>,
@@ -212,6 +241,24 @@ pub enum Command {
         name: String,
     },
 }
+
+/// Pads that come with their own effect, for playing without setting
+/// anything up first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuickPad {
+    /// Everything white while held.
+    Flash,
+    /// A strobe while held.
+    Strobe,
+    /// A burst of colour on each press.
+    Pulse,
+}
+
+/// The folder ready-made pads put their effects in.
+const QUICK_FOLDER: &str = "Live";
+/// Keys suggested for ready-made pads, in order of preference.
+const QUICK_KEYS: [&str; 8] = ["KeyF", "KeyG", "KeyH", "KeyJ", "KeyK", "KeyL", "KeyV", "KeyN"];
 
 /// Where one layer goes in the stack: see `Command::ArrangeLayers`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -309,11 +356,49 @@ fn checked_param(effect: &str, param: &str, value: &ParamValue) -> Result<ParamV
     }
 }
 
-/// Applies a command to the show. On error the show is unchanged.
+/// Applies a command to the show. On error the show is unchanged: the
+/// work is done on a copy, which replaces the show only if all of it
+/// succeeded.
 pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
+    let mut next = show.clone();
+    checked(&mut next, command)?;
+    *show = next;
+    Ok(())
+}
+
+fn checked(show: &mut Show, command: &Command) -> Result<(), String> {
+    change(show, command)?;
+    // Whatever was moved, added or pinned: folders stay together and
+    // pinned ones on top.
+    show.tidy_layers();
+    // Checked here, after the fact, because many commands can add to
+    // either count: adding, copying, moving between folders, pinning.
+    let pinned = show
+        .layers
+        .iter()
+        .filter(|l| {
+            l.group
+                .is_some_and(|g| show.layer_groups.iter().any(|x| x.id == g && x.pinned))
+        })
+        .count();
+    if show.layers.len() - pinned > MAX_LAYERS {
+        return Err(format!(
+            "a show can have at most {MAX_LAYERS} effects outside pinned folders"
+        ));
+    }
+    if pinned > MAX_PINNED {
+        return Err(format!(
+            "pinned folders can hold at most {MAX_PINNED} effects between them"
+        ));
+    }
+    Ok(())
+}
+
+fn change(show: &mut Show, command: &Command) -> Result<(), String> {
     match command {
         Command::AddDevice { .. } | Command::ScanNetwork { .. } => Err("that command needs the network".into()),
         Command::Trigger { .. }
+        | Command::Perform { .. }
         | Command::Tap
         | Command::Hit
         | Command::AutoTempo
@@ -456,9 +541,6 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             if effects::find(effect).is_none() {
                 return Err(format!("unknown effect {effect:?}"));
             }
-            if show.layers.len() >= MAX_LAYERS {
-                return Err(format!("a show can have at most {MAX_LAYERS} layers"));
-            }
             if let Some(group) = group
                 && !show.layer_groups.iter().any(|g| g.id == *group)
             {
@@ -543,9 +625,6 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
                 .iter()
                 .position(|l| l.id == *id)
                 .ok_or("that layer no longer exists")?;
-            if show.layers.len() >= MAX_LAYERS {
-                return Err(format!("a show can have at most {MAX_LAYERS} layers"));
-            }
             let mut copy = show.layers[at].clone();
             copy.id = show.alloc_id();
             show.layers.insert(at + 1, copy);
@@ -557,6 +636,7 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             band,
             gain,
             pulse,
+            manual,
         } => {
             let gain = gain.map(|g| finite(g, "Sensitivity")).transpose()?;
             let pulse = pulse.map(|p| finite(p, "Brightness follows sound")).transpose()?;
@@ -580,6 +660,9 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(p) = pulse {
                 sound.pulse = p.clamp(0.0, 1.0);
+            }
+            if let Some(m) = manual {
+                sound.manual = *m;
             }
             Ok(())
         }
@@ -635,6 +718,7 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             name: new_name,
             enabled,
             opacity,
+            pinned,
         } => {
             let new_name = new_name.as_deref().map(|n| name(n, "The name")).transpose()?;
             let opacity = opacity.map(|o| finite(o, "Strength")).transpose()?;
@@ -651,6 +735,9 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(o) = opacity {
                 folder.opacity = o.clamp(0.0, 1.0);
+            }
+            if let Some(p) = pinned {
+                folder.pinned = *p;
             }
             Ok(())
         }
@@ -726,7 +813,9 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             action,
             mode,
         } => {
-            if !valid_key(key) {
+            if let Some(key) = key
+                && !valid_key(key)
+            {
                 return Err("that key cannot be used; pick a letter, a number, space or punctuation".into());
             }
             let exists = match *action {
@@ -734,21 +823,24 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
                 Action::Layer { id } => show.layers.iter().any(|l| l.id == id),
                 Action::LayerGroup { id } => show.layer_groups.iter().any(|g| g.id == id),
                 Action::LightGroup { id } => show.light_groups.iter().any(|g| g.id == id),
-                Action::Blackout | Action::TapTempo | Action::Hit => true,
+                Action::Blackout
+                | Action::TapTempo
+                | Action::Hit
+                | Action::NextScene
+                | Action::PrevScene
+                | Action::Freeze => true,
             };
             if !exists {
-                return Err("the thing that key was for no longer exists".into());
+                return Err("the thing that pad was for no longer exists".into());
             }
-            // Replacing an existing key does not add to the count.
-            let replaces = show.bindings.iter().any(|b| b.key == *key || b.action == *action);
-            if !replaces && show.bindings.len() >= MAX_BINDINGS {
-                return Err(format!("a show can have at most {MAX_BINDINGS} keys"));
+            // Changing the pad a thing already has does not add to the count.
+            let has_pad = show.bindings.iter().any(|b| b.action == *action);
+            if !has_pad && show.bindings.len() >= MAX_BINDINGS {
+                return Err(format!("a show can have at most {MAX_BINDINGS} pads"));
             }
             // What is printed on the key: a character or two, never markup.
             let label: String = label.trim().chars().filter(|c| !c.is_control()).take(8).collect();
-            // Only things with a state to flip can be held.
-            let mode = if action.is_switch() { *mode } else { KeyMode::Toggle };
-            show.bind(key, &label, *action, mode);
+            show.add_pad(key.as_deref(), &label, *action, *mode);
             Ok(())
         }
 
@@ -758,9 +850,86 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
                 .iter_mut()
                 .find(|b| b.id == *id)
                 .ok_or("that key is no longer set up")?;
-            if binding.action.is_switch() {
-                binding.mode = *mode;
+            binding.mode = binding.action.allowed(*mode);
+            Ok(())
+        }
+
+        Command::ClearKey { id } => {
+            let binding = show
+                .bindings
+                .iter_mut()
+                .find(|b| b.id == *id)
+                .ok_or("that pad no longer exists")?;
+            binding.key = None;
+            binding.label.clear();
+            Ok(())
+        }
+
+        Command::ArrangePads { order } => {
+            let mut wanted = order.clone();
+            let mut have: Vec<u32> = show.bindings.iter().map(|b| b.id).collect();
+            wanted.sort_unstable();
+            have.sort_unstable();
+            if wanted != have {
+                return Err("the pads changed in the meantime; try again".into());
             }
+            let mut pads = std::mem::take(&mut show.bindings);
+            for id in order {
+                let at = pads.iter().position(|b| b.id == *id).expect("checked above");
+                show.bindings.push(pads.remove(at));
+            }
+            Ok(())
+        }
+
+        Command::AddQuickPad { kind } => {
+            let has_folder = show.layer_groups.iter().any(|g| g.name == QUICK_FOLDER);
+            if show.bindings.len() >= MAX_BINDINGS {
+                return Err(format!("a show can have at most {MAX_BINDINGS} pads"));
+            }
+            if !has_folder && show.layer_groups.len() >= MAX_GROUPS {
+                return Err(format!("a show can have at most {MAX_GROUPS} folders"));
+            }
+            // Pinned, so that changing scene does not take the pads away.
+            let folder = match show.layer_groups.iter().find(|g| g.name == QUICK_FOLDER) {
+                Some(folder) => folder.id,
+                None => {
+                    let id = show.add_layer_group(QUICK_FOLDER);
+                    show.layer_groups.last_mut().expect("just added").pinned = true;
+                    id
+                }
+            };
+            let (effect, label, mode) = match kind {
+                QuickPad::Flash => ("solid", "White flash", KeyMode::Hold),
+                QuickPad::Strobe => ("strobe", "Strobe", KeyMode::Hold),
+                QuickPad::Pulse => ("beat_pulse", "Pulse", KeyMode::Fire),
+            };
+            let id = show.add_layer_in(effect, Some(folder));
+            let layer = show.layer_mut(id).expect("just added");
+            layer.name = Some(label.to_string());
+            match kind {
+                QuickPad::Flash => {
+                    // Off until its key is held; then it covers everything.
+                    layer.enabled = false;
+                    layer.blend = Blend::Normal;
+                    layer.params.insert("colour".into(), ParamValue::Text("#ffffff".into()));
+                }
+                QuickPad::Strobe => {
+                    layer.enabled = false;
+                    layer.blend = Blend::Normal;
+                    layer.params.insert("rate".into(), ParamValue::Number(10.0));
+                }
+                QuickPad::Pulse => {
+                    // On, dark, and deaf to the music: it lights when fired.
+                    layer.blend = Blend::Add;
+                    layer.sound.manual = true;
+                    layer.params.insert("floor".into(), ParamValue::Number(0.0));
+                }
+            }
+            let key = QUICK_KEYS
+                .iter()
+                .find(|k| !show.bindings.iter().any(|b| b.key.as_deref() == Some(**k)));
+            let label = key.map(|k| k.trim_start_matches("Key").to_string()).unwrap_or_default();
+            show.add_pad(key.copied(), &label, Action::Layer { id }, mode);
             Ok(())
         }
 
@@ -773,13 +942,17 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
-        Command::SetLive { launch, fade } => {
+        Command::SetLive { launch, fade, speed } => {
             let fade = fade.map(|f| finite(f, "The fade time")).transpose()?;
+            let speed = speed.map(|s| finite(s, "The speed")).transpose()?;
             if let Some(l) = launch {
                 show.live.launch = *l;
             }
             if let Some(f) = fade {
                 show.live.fade = f.clamp(0.0, 10.0);
+            }
+            if let Some(s) = speed {
+                show.live.speed = s.clamp(0.25, 4.0);
             }
             Ok(())
         }
@@ -887,9 +1060,10 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
                 return Err(format!("a show can have at most {MAX_SCENES} scenes"));
             }
             // Saving under an existing name replaces that scene.
+            let (layers, groups) = show.scene_part();
             if let Some(existing) = show.scenes.iter_mut().find(|s| s.name == scene_name) {
-                existing.layers = show.layers.clone();
-                existing.groups = show.layer_groups.clone();
+                existing.layers = layers;
+                existing.groups = groups;
                 show.prune_bindings();
             } else {
                 show.save_scene(&scene_name);
@@ -1153,7 +1327,8 @@ mod tests {
                 layer: 4,
                 band: Some(Band::Treble),
                 gain: None,
-                pulse: None
+                pulse: None,
+                manual: None,
             }
         );
         assert_eq!(
@@ -1162,7 +1337,8 @@ mod tests {
                 layer: 4,
                 band: Some(Band::Range { low: 0.2, high: 0.6 }),
                 gain: Some(2.0),
-                pulse: None
+                pulse: None,
+                manual: None,
             }
         );
         assert_eq!(
@@ -1225,6 +1401,7 @@ mod tests {
                 band: Some(Band::Range { low: 0.9, high: -3.0 }),
                 gain: Some(100.0),
                 pulse: Some(7.0),
+                manual: None,
             },
         )
         .unwrap();
@@ -1240,6 +1417,7 @@ mod tests {
             }),
             gain: Some(1.0),
             pulse: None,
+            manual: None,
         };
         assert!(apply(&mut show.clone(), &bad).is_err());
         assert_eq!(show, before);
@@ -1372,6 +1550,7 @@ mod tests {
                 name: None,
                 enabled: Some(false),
                 opacity: Some(7.0),
+                pinned: None,
             },
         )
         .unwrap();
@@ -1479,7 +1658,7 @@ mod tests {
             apply(
                 show,
                 &Command::Bind {
-                    key: key.into(),
+                    key: Some(key.into()),
                     label: "  \u{7}Q  and far too long ".into(),
                     action,
                     mode,
@@ -1510,12 +1689,119 @@ mod tests {
         .unwrap();
         assert_eq!(show.binding_for(Action::TapTempo).unwrap().mode, KeyMode::Toggle);
 
-        // Removing the effect removes its key; unbinding removes the other.
+        // Removing the effect removes its pad; unbinding removes the other.
         apply(&mut show, &Command::RemoveLayer { id: layer }).unwrap();
         assert_eq!(show.bindings.len(), 1);
+        // A key can be taken off a pad without removing the pad.
+        apply(&mut show, &Command::ClearKey { id: tap }).unwrap();
+        assert_eq!(show.bindings[0].key, None);
+        assert!(apply(&mut show, &Command::ClearKey { id: 9999 }).is_err());
         apply(&mut show, &Command::Unbind { id: tap }).unwrap();
         assert!(apply(&mut show, &Command::Unbind { id: tap }).is_err());
         assert!(show.bindings.is_empty());
+    }
+
+    #[test]
+    fn pads_can_be_made_without_keys_reordered_and_added_ready_made() {
+        let mut show = show_with_device();
+        let layer = show.layers[0].id;
+        // A pad with no key, as a touch screen would add it.
+        apply(
+            &mut show,
+            &parse(&format!(
+                r#"{{"type":"bind","action":{{"type":"layer","id":{layer}}},"mode":"fire"}}"#
+            )),
+        )
+        .unwrap();
+        assert_eq!(
+            (show.bindings[0].key.clone(), show.bindings[0].mode),
+            (None, KeyMode::Fire)
+        );
+
+        // Ready-made pads bring their effect, in a folder of their own, with a key suggested.
+        for kind in [QuickPad::Flash, QuickPad::Strobe, QuickPad::Pulse] {
+            apply(&mut show, &Command::AddQuickPad { kind }).unwrap();
+        }
+        assert_eq!(show.layer_groups.len(), 1, "one folder for all of them");
+        assert_eq!(show.layer_groups[0].name, "Live");
+        assert!(
+            show.layer_groups[0].pinned,
+            "so that scene changes leave the pads alone"
+        );
+        // Saving and switching scenes keeps every ready-made pad.
+        let pads_before = show.bindings.clone();
+        apply(&mut show, &Command::SaveScene { name: "A".into() }).unwrap();
+        apply(
+            &mut show,
+            &Command::AddLayer {
+                effect: "flow".into(),
+                group: None,
+            },
+        )
+        .unwrap();
+        let scene = show.scenes[0].id;
+        apply(&mut show, &Command::RecallScene { id: scene }).unwrap();
+        assert_eq!(show.bindings[..pads_before.len()], pads_before[..]);
+        assert_eq!(show.layers.iter().filter(|l| l.group.is_some()).count(), 3);
+        show.scenes.clear();
+        show.prune_bindings();
+        let made: Vec<_> = show.layers.iter().filter(|l| l.group.is_some()).collect();
+        assert_eq!(
+            made.iter().map(|l| l.name.clone().unwrap()).collect::<Vec<_>>(),
+            ["White flash", "Strobe", "Pulse"]
+        );
+        assert!(!made[0].enabled && !made[1].enabled, "held pads start switched off");
+        assert!(made[2].enabled && made[2].sound.manual, "the pulse waits to be fired");
+        let keys: Vec<_> = show.bindings[1..]
+            .iter()
+            .map(|b| (b.key.clone().unwrap(), b.mode))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ("KeyF".to_string(), KeyMode::Hold),
+                ("KeyG".to_string(), KeyMode::Hold),
+                ("KeyH".to_string(), KeyMode::Fire)
+            ]
+        );
+        assert_eq!(show.bindings[1].label, "F");
+        // A suggested key that is taken is skipped.
+        apply(&mut show, &Command::AddQuickPad { kind: QuickPad::Flash }).unwrap();
+        assert_eq!(show.bindings.last().unwrap().key.as_deref(), Some("KeyJ"));
+
+        // Reordering needs every pad named once.
+        let ids: Vec<u32> = show.bindings.iter().map(|b| b.id).collect();
+        let mut reversed = ids.clone();
+        reversed.reverse();
+        apply(
+            &mut show,
+            &Command::ArrangePads {
+                order: reversed.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(show.bindings.iter().map(|b| b.id).collect::<Vec<_>>(), reversed);
+        assert!(
+            apply(
+                &mut show,
+                &Command::ArrangePads {
+                    order: ids[1..].to_vec()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            apply(
+                &mut show,
+                &Command::ArrangePads {
+                    order: vec![ids[0]; ids.len()]
+                }
+            )
+            .is_err()
+        );
+        let mut mended = show.clone();
+        mended.repair();
+        assert_eq!(mended, show);
     }
 
     #[test]
@@ -1546,10 +1832,14 @@ mod tests {
             &Command::SetLive {
                 launch: Some(Launch::Bar),
                 fade: Some(-1.0),
+                speed: Some(100.0),
             },
         )
         .unwrap();
-        assert_eq!((show.live.launch, show.live.fade), (Launch::Bar, 0.0));
+        assert_eq!(
+            (show.live.launch, show.live.fade, show.live.speed),
+            (Launch::Bar, 0.0, 4.0)
+        );
         let output = |show: &mut Show, frame_rate, flash_limit| {
             apply(
                 show,
@@ -1677,6 +1967,7 @@ mod tests {
     fn no_sequence_of_commands_can_make_the_show_invalid() {
         let mut r = Awkward(0x2545_F491);
         let blends = [Blend::Normal, Blend::Add, Blend::Lighten, Blend::Multiply];
+        let modes = [KeyMode::Toggle, KeyMode::Hold, KeyMode::Fire];
         let params = ["speed", "colour", "palette", "origin", "mirror", "nope"];
 
         let mut show = show_with_device();
@@ -1691,7 +1982,7 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 36 {
+            let command = match r.next() % 39 {
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {
@@ -1722,6 +2013,7 @@ mod tests {
                     name: r.maybe(Awkward::text),
                     enabled: r.maybe(Awkward::flag),
                     opacity: r.maybe(Awkward::number),
+                    pinned: r.maybe(Awkward::flag),
                 },
                 23 => Command::RemoveLayerGroup {
                     id: folder,
@@ -1740,27 +2032,47 @@ mod tests {
                     group: r.maybe(|_| group),
                 },
                 28 | 29 => Command::Bind {
-                    key: ["KeyA", "KeyB", "Digit1", "Space", "Escape", "", "Keyzz"][r.next() as usize % 7].into(),
+                    key: r.maybe(|r| {
+                        ["KeyA", "KeyB", "Digit1", "Space", "Escape", "", "Keyzz"][r.next() as usize % 7].into()
+                    }),
                     label: r.text(),
-                    action: match r.next() % 7 {
+                    action: match r.next() % 10 {
                         0 => Action::Scene { id: scene },
                         1 => Action::Layer { id: layer },
                         2 => Action::LayerGroup { id: folder },
                         3 => Action::LightGroup { id: group },
                         4 => Action::Blackout,
                         5 => Action::TapTempo,
+                        6 => Action::NextScene,
+                        7 => Action::PrevScene,
+                        8 => Action::Freeze,
                         _ => Action::Hit,
                     },
-                    mode: if r.flag() { KeyMode::Hold } else { KeyMode::Toggle },
+                    mode: modes[r.next() as usize % 3],
                 },
                 30 => Command::UpdateBinding {
                     id: binding,
-                    mode: if r.flag() { KeyMode::Hold } else { KeyMode::Toggle },
+                    mode: modes[r.next() as usize % 3],
+                },
+                36 => Command::ClearKey { id: binding },
+                37 => Command::ArrangePads {
+                    order: {
+                        let mut order: Vec<u32> = show.bindings.iter().map(|b| b.id).collect();
+                        order.reverse();
+                        if r.next().is_multiple_of(5) {
+                            order.pop();
+                        }
+                        order
+                    },
+                },
+                38 => Command::AddQuickPad {
+                    kind: [QuickPad::Flash, QuickPad::Strobe, QuickPad::Pulse][r.next() as usize % 3],
                 },
                 31 => Command::Unbind { id: binding },
                 32 => Command::SetLive {
                     launch: r.maybe(|r| [Launch::Now, Launch::Beat, Launch::Bar][r.next() as usize % 3]),
                     fade: r.maybe(Awkward::number),
+                    speed: r.maybe(Awkward::number),
                 },
                 33 => Command::SetOutput {
                     frame_rate: r.maybe(|r| [0, 30, 40, 60, 61, 120, u32::MAX][r.next() as usize % 7]),
@@ -1807,6 +2119,7 @@ mod tests {
                     }),
                     gain: r.maybe(Awkward::number),
                     pulse: r.maybe(Awkward::number),
+                    manual: r.maybe(Awkward::flag),
                 },
                 0 => Command::UpdateDevice {
                     id: device,
@@ -1873,7 +2186,17 @@ mod tests {
             if let Err(problem) = show.validate() {
                 panic!("{command:?} left the show invalid: {problem}");
             }
-            assert!(show.layers.len() <= MAX_LAYERS && show.scenes.len() <= MAX_SCENES);
+            let pinned = show
+                .layers
+                .iter()
+                .filter(|l| show.layer_groups.iter().any(|g| Some(g.id) == l.group && g.pinned))
+                .count();
+            assert!(
+                show.layers.len() - pinned <= MAX_LAYERS && pinned <= MAX_PINNED,
+                "{command:?}"
+            );
+            assert!(show.scenes.iter().all(|s| s.layers.len() <= MAX_LAYERS), "{command:?}");
+            assert!(show.scenes.len() <= MAX_SCENES);
             assert!(show.layer_groups.len() <= MAX_GROUPS && show.light_groups.len() <= MAX_GROUPS);
             assert!(show.bindings.len() <= MAX_BINDINGS);
             for layer in &show.layers {
@@ -1886,11 +2209,19 @@ mod tests {
                 );
             }
             assert!((0.05..=1.0).contains(&show.master.limit), "{command:?}");
-            assert!(show.bindings.iter().all(|b| valid_key(&b.key)), "{command:?}");
+            assert!(
+                show.bindings.iter().flat_map(|b| &b.key).all(|k| valid_key(k)),
+                "{command:?}"
+            );
+            assert!((0.25..=4.0).contains(&show.live.speed), "{command:?}");
+            assert!(
+                show.bindings.iter().all(|b| b.action.allowed(b.mode) == b.mode),
+                "{command:?} left a pad doing something its thing cannot"
+            );
             for (i, b) in show.bindings.iter().enumerate() {
                 let clash = show.bindings[..i]
                     .iter()
-                    .any(|x| x.key == b.key || x.action == b.action);
+                    .any(|x| (b.key.is_some() && x.key == b.key) || x.action == b.action);
                 assert!(!clash, "{command:?} left two keys for one thing, or one key for two");
             }
             // Nothing dangles: every folder, group and key points at
@@ -1911,6 +2242,56 @@ mod tests {
             accepted > 2_000,
             "only {accepted} commands were accepted; the test is not exercising much"
         );
+    }
+
+    #[test]
+    fn pinned_folders_have_their_own_smaller_limit() {
+        let mut show = show_with_device();
+        apply(
+            &mut show,
+            &Command::AddLayerGroup {
+                name: "Live".into(),
+                layer: None,
+            },
+        )
+        .unwrap();
+        let folder = show.layer_groups[0].id;
+        let pin = |show: &mut Show, pinned| {
+            apply(
+                show,
+                &Command::UpdateLayerGroup {
+                    id: folder,
+                    name: None,
+                    enabled: None,
+                    opacity: None,
+                    pinned: Some(pinned),
+                },
+            )
+        };
+        let add = |show: &mut Show, group| {
+            apply(
+                show,
+                &Command::AddLayer {
+                    effect: "solid".into(),
+                    group,
+                },
+            )
+        };
+        pin(&mut show, true).unwrap();
+        for _ in 0..MAX_PINNED {
+            add(&mut show, Some(folder)).unwrap();
+        }
+        assert!(add(&mut show, Some(folder)).unwrap_err().contains("pinned"));
+        // The ordinary limit is separate: the stack can still fill up.
+        while show.layers.len() < MAX_LAYERS + MAX_PINNED {
+            add(&mut show, None).unwrap();
+        }
+        assert!(add(&mut show, None).is_err());
+        // Unpinning would put too many effects in the ordinary part.
+        assert!(pin(&mut show, false).is_err());
+        assert!(show.layer_groups[0].pinned);
+        // Pinned effects are always on top.
+        assert!(show.layers[MAX_LAYERS..].iter().all(|l| l.group == Some(folder)));
     }
 
     #[test]

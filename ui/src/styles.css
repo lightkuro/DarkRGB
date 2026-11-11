@@ -354,6 +354,10 @@ code {
   font-size: 12px;
 }
 
+.hint.block {
+  display: block;
+}
+
 .callout {
   padding: 8px 10px;
   border-radius: var(--radius-small);
@@ -1332,6 +1336,15 @@ input.number {
   font-variant-numeric: tabular-nums;
 }
 
+.folder-pin {
+  display: inline-grid;
+  color: var(--teal);
+}
+
+.folder-main .folder-pin svg {
+  color: var(--teal);
+}
+
 .folder-settings {
   display: grid;
   gap: 10px;
@@ -1612,6 +1625,147 @@ input.number {
 
 .pad.missing {
   opacity: 0.4;
+}
+
+.pads-bar {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-height: 27px;
+}
+
+.pads-bar .spacer {
+  flex: 1;
+}
+
+/* Setting pads up: they are picked, not pressed. */
+.pad.editing {
+  border-style: dashed;
+  cursor: pointer;
+}
+
+.pad.editing.selected {
+  border-style: solid;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 1px var(--teal);
+}
+
+.pad.add {
+  width: 100%;
+  place-items: center;
+  align-content: center;
+  border-style: dashed;
+  background: none;
+  color: var(--muted);
+  text-align: center;
+}
+
+.pad {
+  position: relative;
+  overflow: hidden;
+}
+
+/* The colours of the effect a pad belongs to. */
+.pad-colour {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  opacity: 0.85;
+}
+
+.pad-editor {
+  flex: 1 1 100%;
+  align-self: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 8px;
+  max-width: 460px;
+  padding: 10px 12px;
+  border: 1px solid var(--teal);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.pad-editor-name {
+  font-weight: 620;
+}
+
+.pad-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.text-button.danger:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.add-pad {
+  position: relative;
+}
+
+.add-pad-menu {
+  position: fixed;
+  width: 260px;
+  overflow-y: auto;
+  display: grid;
+  gap: 2px;
+}
+
+.add-pad-menu h3 {
+  margin: 8px 0 2px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.add-pad-menu h3:first-child {
+  margin-top: 0;
+}
+
+.add-pad-menu button {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  text-align: left;
+}
+
+.add-pad-menu button:hover {
+  background: var(--raised-2);
+}
+
+/* Faders for the whole show, in the bar above the pads. */
+.live-faders {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 18px;
+}
+
+.live-faders .field {
+  width: 170px;
+  gap: 0;
+}
+
+.live-faders .field.inline {
+  width: auto;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 /* ----------------------------------------------------------- settings */

@@ -32,7 +32,7 @@ import {
 } from "../engine";
 import { AudioControls, Tempo } from "./AudioMeter";
 import { DemoSwitch } from "./DevicePanel";
-import { KeyAssign, Keycap } from "./Keys";
+import { KeyAssign, Keycap, modeNote } from "./Keys";
 import { ConfirmButton, NameField, Slider, Switch } from "./ui";
 
 const PAGES: { id: SettingsPage; name: string; icon: ReactNode }[] = [
@@ -238,13 +238,22 @@ export function actionName(action: Action, show: Show, effectName: (id: string) 
       return "Tap the tempo";
     case "hit":
       return "Fire a beat";
+    case "next_scene":
+      return "Next scene";
+    case "prev_scene":
+      return "Previous scene";
+    case "freeze":
+      return "Freeze the picture";
   }
 }
 
 function LivePage({ show }: { show: Show }) {
   const hello = useHello();
   const effectName = (id: string) => hello?.effects.find((e) => e.id === id)?.name ?? id;
-  const sorted = [...show.bindings].sort((a, b) => a.key.localeCompare(b.key));
+  // Pads with keys, by key. Pads without one are set up in the Live view.
+  const sorted = show.bindings
+    .filter((b) => b.key)
+    .sort((a, b) => (a.key ?? "").localeCompare(b.key ?? ""));
   return (
     <>
       <div className="field">
@@ -287,12 +296,15 @@ function LivePage({ show }: { show: Show }) {
 
       <h3>Keys</h3>
       <p className="hint">
-        Scenes, effects, folders and groups of lights get their keys where they are listed. These three belong to
-        the whole show.
+        Scenes, effects, folders and groups of lights get their keys where they are listed, or in the Live view
+        under Customize. These belong to the whole show.
       </p>
       <KeyAssign action={{ type: "blackout" }} label="Blackout" />
       <KeyAssign action={{ type: "tap_tempo" }} label="Tap the tempo" />
       <KeyAssign action={{ type: "hit" }} label="Fire a beat" />
+      <KeyAssign action={{ type: "next_scene" }} label="Next scene" />
+      <KeyAssign action={{ type: "prev_scene" }} label="Previous scene" />
+      <KeyAssign action={{ type: "freeze" }} label="Freeze the picture" />
       <p className="hint">
         Firing a beat sets off every effect that waits for one, such as Beat pulse and Ripple, with or without
         music.
@@ -306,7 +318,7 @@ function LivePage({ show }: { show: Show }) {
               <li key={binding.id}>
                 <Keycap binding={binding} />
                 <span className="key-what">{actionName(binding.action, show, effectName)}</span>
-                <span className="hint">{binding.mode === "hold" ? "while held" : ""}</span>
+                <span className="hint">{modeNote(binding)}</span>
                 <button
                   type="button"
                   className="icon-button"

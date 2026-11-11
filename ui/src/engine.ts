@@ -103,6 +103,8 @@ export interface LayerGroup {
   name: string;
   enabled: boolean;
   opacity: number;
+  /** Stays on top, and is left alone when the scene changes. */
+  pinned: boolean;
 }
 
 /** What a key does. */
@@ -113,15 +115,22 @@ export type Action =
   | { type: "light_group"; id: number }
   | { type: "blackout" }
   | { type: "tap_tempo" }
-  | { type: "hit" };
+  | { type: "hit" }
+  | { type: "next_scene" }
+  | { type: "prev_scene" }
+  | { type: "freeze" };
 
-/** Whether a key flips its thing on each press, or only while held down. */
-export type KeyMode = "toggle" | "hold";
+/**
+ * What a press does: act on each press, act only while held down, or set
+ * off the effect's reaction as if a beat had hit.
+ */
+export type KeyMode = "toggle" | "hold" | "fire";
 
+/** A pad in the live view. Usually it has a key; it does not need one. */
 export interface Binding {
   id: number;
-  /** The key's place on the keyboard, such as `KeyA`. */
-  key: string;
+  /** The key's place on the keyboard, such as `KeyA`, if the pad has one. */
+  key: string | null;
   /** What is printed on the key. */
   label: string;
   action: Action;
@@ -146,6 +155,8 @@ export interface Sound {
   gain: number;
   /** How much the layer's brightness follows the sound, 0 to 1. */
   pulse: number;
+  /** The layer ignores the music and reacts only when fired by hand. */
+  manual: boolean;
 }
 
 export interface Layer {
@@ -183,7 +194,7 @@ export interface Show {
   bindings: Binding[];
   master: { brightness: number; blackout: boolean; limit: number };
   audio: { source: string; sensitivity: number; delay_ms: number };
-  live: { launch: Launch; fade: number };
+  live: { launch: Launch; fade: number; speed: number };
   output: {
     frame_rate: number;
     /** Most flashes of the whole picture in a second; 0 means no limit. */
@@ -199,6 +210,8 @@ export interface Live {
   pending_scene: number | null;
   /** The tempo tapped by hand, or 0 when the music's own is followed. */
   tapped_bpm: number;
+  /** The picture has been frozen by a press. */
+  frozen: boolean;
 }
 
 export interface DeviceStats {
@@ -270,7 +283,7 @@ export type Command =
     }
   | { type: "rename_layer"; id: number; name: string }
   | { type: "duplicate_layer"; id: number }
-  | { type: "set_sound"; layer: number; band?: Band; gain?: number; pulse?: number }
+  | { type: "set_sound"; layer: number; band?: Band; gain?: number; pulse?: number; manual?: boolean }
   | { type: "remove_device"; id: number }
   | { type: "update_device"; id: number; name?: string; enabled?: boolean; gamma?: number; brightness?: number }
   | {
@@ -288,20 +301,24 @@ export type Command =
   | { type: "remove_layer"; id: number }
   | { type: "arrange_layers"; order: { id: number; group: number | null }[] }
   | { type: "add_layer_group"; name: string; layer?: number }
-  | { type: "update_layer_group"; id: number; name?: string; enabled?: boolean; opacity?: number }
+  | { type: "update_layer_group"; id: number; name?: string; enabled?: boolean; opacity?: number; pinned?: boolean }
   | { type: "remove_layer_group"; id: number; keep_layers: boolean }
   | { type: "add_light_group"; name: string }
   | { type: "update_light_group"; id: number; name?: string; enabled?: boolean; brightness?: number }
   | { type: "remove_light_group"; id: number }
   | { type: "group_lights"; fixtures: number[]; group: number | null }
-  | { type: "bind"; key: string; label: string; action: Action; mode: KeyMode }
+  | { type: "bind"; key: string | null; label: string; action: Action; mode: KeyMode }
   | { type: "update_binding"; id: number; mode: KeyMode }
+  | { type: "clear_key"; id: number }
   | { type: "unbind"; id: number }
+  | { type: "arrange_pads"; order: number[] }
+  | { type: "add_quick_pad"; kind: "flash" | "strobe" | "pulse" }
   | { type: "trigger"; binding: number; down: boolean }
+  | { type: "perform"; action: Action }
   | { type: "tap" }
   | { type: "hit" }
   | { type: "auto_tempo" }
-  | { type: "set_live"; launch?: Launch; fade?: number }
+  | { type: "set_live"; launch?: Launch; fade?: number; speed?: number }
   | { type: "set_output"; frame_rate?: number; flash_limit?: number }
   | { type: "rename_scene"; id: number; name: string }
   | { type: "new_show"; keep_lights: boolean }
@@ -374,7 +391,7 @@ class Engine {
   readonly hello = new Store<Hello | null>(null);
   readonly show = new Store<Show | null>(null);
   readonly status = new Store<Status | null>(null);
-  readonly live = new Store<Live>({ held: [], pending_scene: null, tapped_bpm: 0 });
+  readonly live = new Store<Live>({ held: [], pending_scene: null, tapped_bpm: 0, frozen: false });
   /** The scene that is playing exactly as it was saved, if any. */
   readonly currentScene = new Store<number | null>(null);
   readonly toasts = new Store<Toast[]>([]);

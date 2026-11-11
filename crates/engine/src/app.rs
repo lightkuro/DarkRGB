@@ -163,6 +163,7 @@ impl Shared {
             Command::AddDevice { address } => return self.add_device(address),
             Command::ScanNetwork { prefix } => return self.scan_network(prefix),
             Command::Trigger { binding, down } => return self.trigger(*binding, *down),
+            Command::Perform { action } => return self.perform(*action),
             Command::RecallScene { id } => return self.recall_scene(*id),
             Command::Tap => {
                 self.live.lock().unwrap().tap(self.now(), self.audio.features());
@@ -185,14 +186,12 @@ impl Shared {
         }
         {
             let mut show = self.show.lock().unwrap();
-            // Work on a copy so a rejected command cannot leave the show
-            // half changed.
-            let mut next = show.clone();
-            commands::apply(&mut next, command)?;
-            if *show == next {
+            // `apply` changes nothing if the command is refused.
+            let before = show.clone();
+            commands::apply(&mut show, command)?;
+            if *show == before {
                 return Ok(None);
             }
-            *show = next;
         }
         if let Command::SetAudio {
             source, sensitivity, ..
@@ -209,7 +208,7 @@ impl Shared {
         Ok(None)
     }
 
-    /// A key went down or came up.
+    /// A pad or its key went down or came up.
     fn trigger(self: &Arc<Self>, binding: u32, down: bool) -> Result<Option<String>, String> {
         let (action, mode) = {
             let show = self.show.lock().unwrap();
@@ -225,7 +224,7 @@ impl Shared {
                 None => return Err("that key is no longer set up".into()),
             }
         };
-        if action.is_switch() && mode == KeyMode::Hold {
+        if mode == KeyMode::Hold && action.can_hold() {
             if self.live.lock().unwrap().hold(binding, down) {
                 self.bump_live();
             }
@@ -234,10 +233,62 @@ impl Shared {
         if !down {
             return Ok(None);
         }
+        if mode == KeyMode::Fire && action.can_fire() {
+            // Set off the reaction of the effect, or of every effect in the folder.
+            let layers: Vec<u32> = {
+                let show = self.show.lock().unwrap();
+                match action {
+                    Action::Layer { id } => vec![id],
+                    Action::LayerGroup { id } => show
+                        .layers
+                        .iter()
+                        .filter(|l| l.group == Some(id))
+                        .map(|l| l.id)
+                        .collect(),
+                    _ => Vec::new(),
+                }
+            };
+            self.live.lock().unwrap().fire(&layers, self.now());
+            self.bump_live();
+            return Ok(None);
+        }
+        self.perform(action)
+    }
+
+    /// What a plain press does for an action.
+    fn perform(self: &Arc<Self>, action: Action) -> Result<Option<String>, String> {
         match action {
             Action::Scene { id } => self.recall_scene(id),
+            Action::NextScene | Action::PrevScene => {
+                let step = if action == Action::NextScene { 1 } else { -1 };
+                // Count from a scene that is still waiting for its beat, so
+                // quick presses step on instead of asking for the same one.
+                let (waiting, last) = {
+                    let live = self.live.lock().unwrap();
+                    (live.pending.map(|p| p.scene), live.last_scene)
+                };
+                let next = {
+                    let show = self.show.lock().unwrap();
+                    let count = show.scenes.len() as i32;
+                    match waiting.and_then(|id| show.scenes.iter().position(|s| s.id == id)) {
+                        Some(at) => Some(show.scenes[(at as i32 + step).rem_euclid(count) as usize].id),
+                        None => show.scene_after(last, step),
+                    }
+                };
+                match next {
+                    Some(id) => self.recall_scene(id),
+                    None => Ok(None),
+                }
+            }
             Action::TapTempo => self.execute(&Command::Tap),
             Action::Hit => self.execute(&Command::Hit),
+            Action::Freeze => {
+                let mut live = self.live.lock().unwrap();
+                live.frozen = !live.frozen;
+                drop(live);
+                self.bump_live();
+                Ok(None)
+            }
             Action::Layer { .. } | Action::LayerGroup { .. } | Action::LightGroup { .. } | Action::Blackout => {
                 self.flip(action);
                 Ok(None)
@@ -265,7 +316,12 @@ impl Shared {
                 show.master.blackout = !show.master.blackout;
                 Some(())
             }
-            Action::Scene { .. } | Action::TapTempo | Action::Hit => None,
+            Action::Scene { .. }
+            | Action::TapTempo
+            | Action::Hit
+            | Action::NextScene
+            | Action::PrevScene
+            | Action::Freeze => None,
         };
         drop(show);
         if flipped.is_some() {
@@ -384,6 +440,7 @@ impl Shared {
         {
             let mut live = self.live.lock().unwrap();
             live.pending = None;
+            live.last_scene = Some(id);
             if changed {
                 live.scene_serial += 1;
             }

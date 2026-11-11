@@ -34,8 +34,9 @@ export function usable(code: string): boolean {
   return /^(Key[A-Z]|Digit[0-9]|Numpad[0-9])$/.test(code) || PUNCTUATION.includes(code);
 }
 
-/** What to show on a keycap. */
+/** What to show on a keycap. Empty for a pad without a key. */
 export function keyLabel(binding: Pick<Binding, "key" | "label">): string {
+  if (!binding.key) return "";
   if (binding.key === "Space") return "Space";
   if (binding.key.startsWith("Numpad")) return `Num ${binding.key.slice(6)}`;
   if (binding.label) return binding.label.toUpperCase();

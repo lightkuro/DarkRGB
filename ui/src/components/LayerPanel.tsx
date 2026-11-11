@@ -16,6 +16,7 @@ import {
   FolderOpen,
   FolderPlus,
   GripVertical,
+  Pin,
   Plus,
   RotateCcw,
   Settings2,
@@ -80,8 +81,8 @@ function gradient(palette: Palette): string {
   return `linear-gradient(90deg, ${stops.join(", ")})`;
 }
 
-/** A small picture of a layer's colours, for its collapsed row. */
-function swatch(layer: Layer, effect: EffectInfo | undefined, hello: Hello): string {
+/** A small picture of a layer's colours, for its collapsed row and its pad. */
+export function swatch(layer: Layer, effect: EffectInfo | undefined, hello: Hello): string {
   const value = (spec: ParamSpec) => String(layer.params[spec.id] ?? spec.default);
   const palette = effect?.params.find((p) => p.kind === "palette");
   if (palette) {
@@ -460,6 +461,23 @@ function SoundControls({ layer, hello, advanced }: { layer: Layer; hello: Hello;
   );
 }
 
+/** For effects played by hand: deaf to the music, lit only when fired. */
+function ManualSwitch({ layer }: { layer: Layer }) {
+  return (
+    <div className="field inline">
+      <span>
+        Only when fired
+        <span className="hint block">Ignores the music. Give it a key set to "Fire it".</span>
+      </span>
+      <Switch
+        checked={layer.sound.manual}
+        label="React only when fired"
+        onChange={(manual) => engine.send({ type: "set_sound", layer: layer.id, manual })}
+      />
+    </div>
+  );
+}
+
 function LayerName({ layer }: { layer: Layer }) {
   const [draft, setDraft] = useState<string | null>(null);
   const commit = () => {
@@ -555,7 +573,8 @@ function LayerBody({
       {basic.map((spec) => (
         <ParamControl key={spec.id} layer={layer} spec={spec} />
       ))}
-      {usesSound && <SoundControls layer={layer} hello={hello} advanced={advanced} />}
+      {usesSound && !layer.sound.manual && <SoundControls layer={layer} hello={hello} advanced={advanced} />}
+      {layer.sound.manual && !advanced && <ManualSwitch layer={layer} />}
       <Targets layer={layer} fixtures={fixtures} groups={show.light_groups} />
       <Slider
         label="Strength"
@@ -594,6 +613,7 @@ function LayerBody({
           {extra.map((spec) => (
             <ParamControl key={spec.id} layer={layer} spec={spec} />
           ))}
+          {effect?.audio && <ManualSwitch layer={layer} />}
           <Slider
             label="Brightness follows sound"
             min={0}
@@ -669,7 +689,8 @@ function LayerBody({
 /** What a collapsed row says about its layer, beyond the name. */
 function summary(layer: Layer, show: Show, hello: Hello): string[] {
   const parts: string[] = [];
-  if (layer.sound.band.type !== "all") parts.push(bandName(layer.sound.band, hello));
+  if (layer.sound.manual) parts.push("when fired");
+  else if (layer.sound.band.type !== "all") parts.push(bandName(layer.sound.band, hello));
   if (layer.targets.length === 1) {
     const id = layer.targets[0];
     const name = show.fixtures.find((f) => f.id === id)?.name ?? show.light_groups.find((g) => g.id === id)?.name;
@@ -729,6 +750,19 @@ function FolderSettings({ folder, onAdd }: { folder: LayerGroup; onAdd: () => vo
         }))}
       />
       <KeyAssign action={{ type: "layer_group", id: folder.id }} />
+      <div className="field inline">
+        <span>
+          Keep through scene changes
+          <span className="hint block">
+            Stays on top and is not part of any scene. For things you play by hand, like a flash.
+          </span>
+        </span>
+        <Switch
+          checked={folder.pinned}
+          label="Keep this folder through scene changes"
+          onChange={(pinned) => engine.send({ type: "update_layer_group", id: folder.id, pinned })}
+        />
+      </div>
       <div className="layer-footer">
         <button type="button" className="text-button" onClick={onAdd}>
           <Plus size={13} /> Add an effect here
@@ -983,6 +1017,11 @@ export function LayerPanel() {
             <span className="folder-name">{folder.name}</span>
             <span className="folder-count">{layers.length}</span>
             {folder.opacity < 0.995 && <span className="folder-count">{Math.round(folder.opacity * 100)}%</span>}
+            {folder.pinned && (
+              <span className="folder-pin" title="Kept on top and through scene changes">
+                <Pin size={12} aria-label="Pinned" />
+              </span>
+            )}
           </button>
           {binding && <Keycap binding={binding} held={live.held.includes(binding.id)} />}
           <IconButton

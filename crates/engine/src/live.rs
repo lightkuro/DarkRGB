@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use darkrgb_core::{Action, AudioFeatures, KeyMode, Launch, Show};
+use darkrgb_core::{Action, AudioFeatures, Cues, KeyMode, Launch, LayerHit, Show};
 use serde::Serialize;
 
 /// A new run of taps starts after a pause this long.
@@ -100,6 +100,8 @@ pub struct LiveStatus {
     pub pending_scene: Option<u32>,
     /// The tapped tempo, or 0 when the music's own tempo is used.
     pub tapped_bpm: f32,
+    /// The picture is stopped where it is.
+    pub frozen: bool,
 }
 
 #[derive(Debug, Default)]
@@ -113,6 +115,15 @@ pub struct Live {
     hits: u32,
     /// Counts scene changes, so the frame loop can tell one from an edit.
     pub scene_serial: u64,
+    /// The scene last switched to, to count "next" and "previous" from
+    /// when what is playing has since been edited.
+    pub last_scene: Option<u32>,
+    /// Hits fired by hand for single layers: when the last one was, and
+    /// how many there have been. Kept, because an effect tells a new hit
+    /// by the count going up.
+    fired: HashMap<u32, (f64, u32)>,
+    /// The picture has been frozen by a press (not by a key being held).
+    pub frozen: bool,
 }
 
 impl Live {
@@ -123,6 +134,7 @@ impl Live {
             held,
             pending_scene: self.pending.map(|p| p.scene),
             tapped_bpm: self.tempo.bpm(),
+            frozen: self.frozen,
         }
     }
 
@@ -147,10 +159,45 @@ impl Live {
         }
     }
 
-    /// Releases every held key and forgets a waiting scene. The tempo stays.
+    /// Releases every held key, unfreezes, and forgets a waiting scene.
+    /// The tempo stays.
     pub fn let_go(&mut self) {
         self.held.clear();
         self.pending = None;
+        self.frozen = false;
+        self.last_scene = None;
+    }
+
+    /// Fires a hit into each of `layers`, as if a beat had landed on them.
+    pub fn fire(&mut self, layers: &[u32], now: f64) {
+        for layer in layers {
+            let entry = self.fired.entry(*layer).or_insert((now, 0));
+            *entry = (now, entry.1.wrapping_add(1));
+        }
+    }
+
+    /// What has been fired by hand, as the renderer wants it.
+    pub fn cues(&self, now: f64) -> Cues {
+        let hits = self
+            .fired
+            .iter()
+            .map(|(layer, (at, count))| LayerHit {
+                layer: *layer,
+                pulse: (-(now - at).max(0.0) / PULSE_FADE_S).exp() as f32,
+                count: *count,
+            })
+            .collect();
+        Cues { hits }
+    }
+
+    /// Whether the picture should stand still: frozen by a press, or the
+    /// other way round for as long as a freeze key is held.
+    pub fn is_frozen(&self, show: &Show) -> bool {
+        let held = show
+            .bindings
+            .iter()
+            .any(|b| b.action == Action::Freeze && b.mode == KeyMode::Hold && self.is_held(b.id));
+        self.frozen != held
     }
 
     pub fn is_held(&self, binding: u32) -> bool {
@@ -200,10 +247,17 @@ impl Live {
     /// is tied to, for as long as it is down.
     pub fn overlay(&self, show: &Show) -> Show {
         let mut out = show.clone();
-        for binding in show.bindings.iter().filter(|b| b.mode == KeyMode::Hold) {
-            if !self.is_held(binding.id) {
-                continue;
+        let held = |b: &&darkrgb_core::Binding| b.mode == KeyMode::Hold && self.is_held(b.id);
+        // A held scene first, so that keys held with it act on its effects.
+        for binding in show.bindings.iter().filter(held) {
+            if let Action::Scene { id } = binding.action
+                && let Some(scene) = show.scenes.iter().find(|s| s.id == id)
+            {
+                // Pinned folders stay, as they do on a real scene change.
+                (out.layers, out.layer_groups) = show.scene_stack(scene);
             }
+        }
+        for binding in show.bindings.iter().filter(held) {
             match binding.action {
                 Action::Layer { id } => {
                     if let Some(layer) = out.layer_mut(id) {
@@ -221,7 +275,13 @@ impl Live {
                     }
                 }
                 Action::Blackout => out.master.blackout = !out.master.blackout,
-                Action::Scene { .. } | Action::TapTempo | Action::Hit => {}
+                // Scenes were dealt with above; freezing is the frame loop's.
+                Action::Scene { .. }
+                | Action::TapTempo
+                | Action::Hit
+                | Action::NextScene
+                | Action::PrevScene
+                | Action::Freeze => {}
             }
         }
         out
@@ -394,6 +454,76 @@ mod tests {
         live.hold(toggle, false);
         assert_eq!(live.overlay(&show), show);
         assert!(!live.hold(cut, false), "releasing twice is harmless");
+    }
+
+    #[test]
+    fn a_held_scene_shows_only_while_held_and_other_keys_act_on_it() {
+        let mut show = Show::default();
+        let plasma = show.layers[0].id;
+        // A scene with one effect of its own, built aside and saved.
+        let (scene, other) = {
+            let saved = show.layers.clone();
+            show.layers.clear();
+            let solid = show.add_layer("solid");
+            let scene = show.save_scene("Flash");
+            show.layers = saved;
+            (scene, solid)
+        };
+        let key = show.bind("KeyQ", "Q", Action::Scene { id: scene }, KeyMode::Hold);
+        let cut = show.bind("KeyW", "W", Action::Layer { id: other }, KeyMode::Hold);
+        assert_eq!(
+            show.binding_for(Action::Scene { id: scene }).unwrap().mode,
+            KeyMode::Hold
+        );
+
+        let mut live = Live::default();
+        live.hold(key, true);
+        let seen = live.overlay(&show);
+        assert_eq!(seen.layers.iter().map(|l| l.id).collect::<Vec<_>>(), [other]);
+        assert_eq!(show.layers[0].id, plasma, "the saved show still plays its own effects");
+        // A second key held with it flips an effect of the held scene.
+        live.hold(cut, true);
+        assert!(!live.overlay(&show).layers[0].enabled);
+        live.hold(cut, false);
+        live.hold(key, false);
+        assert_eq!(live.overlay(&show), show);
+    }
+
+    #[test]
+    fn fired_hits_are_per_layer_fade_and_keep_counting() {
+        let mut live = Live::default();
+        assert!(live.cues(0.0).hits.is_empty());
+        live.fire(&[7, 9], 1.0);
+        live.fire(&[9], 1.2);
+        let cues = live.cues(1.2);
+        let of = |cues: &Cues, layer| *cues.hits.iter().find(|h| h.layer == layer).unwrap();
+        assert_eq!(of(&cues, 7).count, 1);
+        assert_eq!(of(&cues, 9).count, 2);
+        assert!(of(&cues, 9).pulse > 0.99);
+        assert!(of(&cues, 7).pulse < 0.2, "fired 0.2 s ago, mostly faded");
+        // Long after, the pulse is gone but the count stays, so nothing fires twice.
+        let later = live.cues(60.0);
+        assert!(of(&later, 9).pulse < 1e-6);
+        assert_eq!(of(&later, 9).count, 2);
+    }
+
+    #[test]
+    fn freeze_by_press_and_by_holding() {
+        let mut show = Show::default();
+        let hold = show.bind("KeyZ", "Z", Action::Freeze, KeyMode::Hold);
+        let mut live = Live::default();
+        assert!(!live.is_frozen(&show));
+        live.hold(hold, true);
+        assert!(live.is_frozen(&show));
+        live.hold(hold, false);
+        assert!(!live.is_frozen(&show));
+        // Frozen by a press, holding the key lets it run for a moment.
+        live.frozen = true;
+        assert!(live.is_frozen(&show) && live.status().frozen);
+        live.hold(hold, true);
+        assert!(!live.is_frozen(&show));
+        live.let_go();
+        assert!(!live.is_frozen(&show), "a new show starts moving");
     }
 
     #[test]
