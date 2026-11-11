@@ -219,7 +219,12 @@ export interface Scene {
   groups: LayerGroup[];
   /** Whether autopilot may switch to this scene. */
   auto: boolean;
+  /** The parts of a song autopilot uses it for. */
+  mood: Mood;
 }
+
+/** The parts of a song a scene suits. */
+export type Mood = "any" | "calm" | "big";
 
 export interface Show {
   version: number;
@@ -249,6 +254,8 @@ export interface Show {
     auto: { enabled: boolean; every_bars: number; shuffle: boolean; on_drops: boolean };
     /** Where the four faders of the Live view stand, 0 to 1. */
     faders: number[];
+    /** The scene to change to when the music stops, and after how many seconds. */
+    idle: { scene: number | null; after: number };
   };
   output: {
     frame_rate: number;
@@ -274,6 +281,8 @@ export interface Live {
   tapped_bpm: number;
   /** The picture has been frozen by a press. */
   frozen: boolean;
+  /** The music has stopped and the scene chosen for that is showing. */
+  idle: boolean;
 }
 
 export interface DeviceStats {
@@ -491,6 +500,8 @@ export type Command =
   | { type: "set_link"; layer: number; param: string; source: Source; amount: number }
   | { type: "remove_link"; layer: number; param: string }
   | { type: "set_fader"; n: number; value: number }
+  | { type: "set_scene_mood"; id: number; mood: Mood }
+  | { type: "set_idle"; scene: number | null; after?: number }
   | { type: "set_master"; brightness?: number; blackout?: boolean; limit?: number }
   | { type: "set_audio"; source?: string; sensitivity?: number; delay_ms?: number; dynamics?: number }
   | { type: "save_scene"; name: string }
@@ -551,7 +562,7 @@ class Engine {
   readonly hello = new Store<Hello | null>(null);
   readonly show = new Store<Show | null>(null);
   readonly status = new Store<Status | null>(null);
-  readonly live = new Store<Live>({ held: [], pending_scene: null, tapped_bpm: 0, frozen: false });
+  readonly live = new Store<Live>({ held: [], pending_scene: null, tapped_bpm: 0, frozen: false, idle: false });
   readonly library = new Store<Library>({
     available: false,
     current: null,

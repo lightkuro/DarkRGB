@@ -245,6 +245,18 @@ pub struct Layer {
     pub links: Vec<Link>,
 }
 
+/// The parts of a song a scene suits, for autopilot to choose by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mood {
+    #[default]
+    Any,
+    /// For breakdowns and quiet stretches.
+    Calm,
+    /// For drops and the loud parts.
+    Big,
+}
+
 /// A saved set of layers that can be recalled in one click.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Scene {
@@ -257,6 +269,9 @@ pub struct Scene {
     /// Whether autopilot may switch to this scene.
     #[serde(default = "yes")]
     pub auto: bool,
+    /// The parts of a song autopilot uses it for.
+    #[serde(default)]
+    pub mood: Mood,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -405,6 +420,33 @@ pub struct LiveSettings {
     /// Where the faders of the Live view stand, 0..1. Links follow them.
     #[serde(default)]
     pub faders: [f32; FADERS],
+    #[serde(default)]
+    pub idle: Idle,
+}
+
+/// What the lights do when the music stops: after a while they change to
+/// a scene chosen for it, and come back when the music does.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Idle {
+    /// The scene to wait in. `None` stays on whatever is playing.
+    #[serde(default)]
+    pub scene: Option<u32>,
+    /// Seconds of silence before changing to it, 3..600.
+    #[serde(default = "default_idle_after")]
+    pub after: f32,
+}
+
+fn default_idle_after() -> f32 {
+    20.0
+}
+
+impl Default for Idle {
+    fn default() -> Self {
+        Self {
+            scene: None,
+            after: default_idle_after(),
+        }
+    }
 }
 
 impl Default for LiveSettings {
@@ -415,6 +457,7 @@ impl Default for LiveSettings {
             speed: 1.0,
             auto: Autopilot::default(),
             faders: [0.0; FADERS],
+            idle: Idle::default(),
         }
     }
 }
@@ -1157,6 +1200,7 @@ impl Show {
             layers,
             groups,
             auto: true,
+            mood: Mood::Any,
         });
         let free = "1234567890"
             .chars()
@@ -1200,6 +1244,9 @@ impl Show {
     pub fn delete_scene(&mut self, id: u32) -> bool {
         let before = self.scenes.len();
         self.scenes.retain(|s| s.id != id);
+        if self.live.idle.scene == Some(id) {
+            self.live.idle.scene = None;
+        }
         self.prune_bindings();
         self.scenes.len() != before
     }
@@ -1222,6 +1269,19 @@ impl Show {
             self.output.frame_rate = OutputSettings::default().frame_rate;
         }
         self.live.auto.every_bars = self.live.auto.every_bars.clamp(1, 64);
+        if self
+            .live
+            .idle
+            .scene
+            .is_some_and(|id| !self.scenes.iter().any(|s| s.id == id))
+        {
+            self.live.idle.scene = None;
+        }
+        self.live.idle.after = if self.live.idle.after.is_finite() {
+            self.live.idle.after.clamp(3.0, 600.0)
+        } else {
+            default_idle_after()
+        };
         for fader in &mut self.live.faders {
             *fader = if fader.is_finite() { fader.clamp(0.0, 1.0) } else { 0.0 };
         }

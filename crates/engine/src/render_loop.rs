@@ -118,9 +118,9 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
         }
         if show_changed || live_changed {
             live_revisions.mark_unchanged();
-            let (next, serial) = {
-                let live = shared.live.lock().unwrap();
-                (live.overlay(&base), live.scene_serial)
+            let (next, serial, fade_s) = {
+                let mut live = shared.live.lock().unwrap();
+                (live.overlay(&base), live.scene_serial, live.take_fade(base.live.fade))
             };
             let previous = std::mem::replace(&mut show, next);
             // A change of scene fades in, if the show asks for that. The
@@ -128,12 +128,12 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
             // the new one starts fresh, which the fade hides.
             if serial != scene_serial {
                 scene_serial = serial;
-                if show.live.fade > 0.0 && show.fixtures == previous.fixtures {
+                if fade_s > 0.0 && show.fixtures == previous.fixtures {
                     fade = Some(Fade {
                         show: previous,
                         from: std::mem::replace(&mut renderer, Renderer::new()),
                         started: frame_start,
-                        seconds: show.live.fade,
+                        seconds: fade_s,
                     });
                 }
             }
@@ -160,9 +160,11 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
         last_frame = frame_start;
         let now = shared.now();
         let heard = delay.step(now, shared.audio.features(), show.audio.delay_ms);
-        let (audio, launch, cues, frozen) = {
+        let (audio, launch, cues, frozen, idle_changed) = {
             let mut live = shared.live.lock().unwrap();
             let clocked = live.clocked(now, heard);
+            // The music stopping, or starting again.
+            let idle_changed = live.idle_step(now, &base, &clocked);
             let beat = clocked.beat_count != last_beat;
             last_beat = clocked.beat_count;
             // A scene the user asked for comes first; autopilot only has
@@ -174,6 +176,8 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
             let launch = match (asked, live.pending) {
                 (Some(scene), _) => Some(scene),
                 (None, Some(_)) => None,
+                // Nothing changes by itself while waiting for the music.
+                (None, None) if live.idle => None,
                 (None, None) => live.autopilot(now, &base, &clocked, beat),
             };
             (
@@ -181,9 +185,14 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
                 launch,
                 live.cues(now),
                 live.is_frozen(&base),
+                idle_changed,
             )
         };
         last_now = now;
+        if idle_changed {
+            // Seen by this loop on its next frame, and by the clients.
+            shared.bump_live();
+        }
         if let Some(scene) = launch {
             // Seen by this loop on its next frame, like any other change.
             shared.launch_scene(scene);

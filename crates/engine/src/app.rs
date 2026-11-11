@@ -160,7 +160,7 @@ impl Shared {
         self.revision.send_modify(|r| *r += 1);
     }
 
-    fn bump_live(&self) {
+    pub(crate) fn bump_live(&self) {
         self.live_rev.send_modify(|r| *r += 1);
     }
 

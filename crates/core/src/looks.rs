@@ -8,7 +8,7 @@
 use crate::audio::Band;
 use crate::effects;
 use crate::params::{ParamValue, Params};
-use crate::show::{Blend, Kind, LINK_STRENGTH, Layer, Link, Only, Show, Sound, Source};
+use crate::show::{Blend, Kind, LINK_STRENGTH, Layer, Link, Mood, Only, Show, Sound, Source};
 
 pub struct LookLayer {
     pub effect: &'static str,
@@ -36,6 +36,8 @@ pub enum Value {
 pub struct Look {
     pub name: &'static str,
     pub description: &'static str,
+    /// The parts of a song it suits, for autopilot.
+    pub mood: Mood,
     /// Bottom layer first.
     pub layers: &'static [LookLayer],
 }
@@ -70,6 +72,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Pulse",
         description: "A new colour on every beat, with sparks on the highs.",
+        mood: Mood::Big,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -89,6 +92,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Spectrum",
         description: "The music's spectrum on matrices, its colours running along strips.",
+        mood: Mood::Any,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -116,6 +120,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Neon chase",
         description: "Blocks stepping with the beat over a slow neon glow.",
+        mood: Mood::Big,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -135,6 +140,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Fire",
         description: "Flames on every light that leap with the bass.",
+        mood: Mood::Any,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -150,6 +156,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Rain",
         description: "Streaks falling on every hit, over deep blue.",
+        mood: Mood::Any,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -162,6 +169,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Sweep",
         description: "A bar of light across everything on each beat, and a pulse underneath.",
+        mood: Mood::Big,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -182,6 +190,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Calm",
         description: "Slow warm colour for the quiet parts.",
+        mood: Mood::Calm,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -198,6 +207,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Aurora",
         description: "Slow green and violet light, with a few stars.",
+        mood: Mood::Calm,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -219,6 +229,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Fairy lights",
         description: "A string of coloured bulbs, each slowly brightening and dimming.",
+        mood: Mood::Calm,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -231,6 +242,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Candy cane",
         description: "Red and white stripes travelling along every light.",
+        mood: Mood::Any,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -249,6 +261,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Snowfall",
         description: "Snow drifting down over a deep blue night.",
+        mood: Mood::Calm,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -261,6 +274,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Red and green",
         description: "Blocks of Christmas colours that swap places with the music.",
+        mood: Mood::Big,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -284,6 +298,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Warm glow",
         description: "Candlelight: warm white that breathes, for when the music is off.",
+        mood: Mood::Calm,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -302,6 +317,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Colour hits",
         description: "Hard blocks of colour that change on every beat.",
+        mood: Mood::Big,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -319,6 +335,7 @@ pub const LOOKS: &[Look] = &[
     Look {
         name: "Storm",
         description: "Fast streaks on every hit over blacklight purple.",
+        mood: Mood::Big,
         layers: &[
             LookLayer {
                 blend: Blend::Normal,
@@ -449,7 +466,11 @@ impl Show {
         if let Some(first) = layers.first_mut() {
             first.blend = Blend::Normal;
         }
-        Some(self.push_scene(look.name, layers, Vec::new()))
+        let id = self.push_scene(look.name, layers, Vec::new());
+        if let Some(scene) = self.scenes.last_mut() {
+            scene.mood = look.mood;
+        }
+        Some(id)
     }
 
     /// Adds the starter looks for this show's kind that are not there

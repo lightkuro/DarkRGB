@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use darkrgb_core::{Action, AudioFeatures, Cues, KeyMode, Launch, LayerHit, Show};
+use darkrgb_core::{Action, AudioFeatures, Cues, KeyMode, Launch, LayerHit, Mood, Show};
 use serde::Serialize;
 
 /// A new run of taps starts after a pause this long.
@@ -90,6 +90,8 @@ const BAR_WITHOUT_TEMPO_S: f64 = 2.0;
 /// Autopilot leaves a scene up at least this long, however many new
 /// sections the song goes through.
 const AUTO_MIN_S: f64 = 4.0;
+/// The shortest fade into and out of the scene shown in silence.
+const IDLE_FADE_S: f32 = 2.0;
 
 /// Where autopilot started counting for the scene that is playing.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -117,6 +119,8 @@ pub struct LiveStatus {
     pub tapped_bpm: f32,
     /// The picture is stopped where it is.
     pub frozen: bool,
+    /// The music has stopped and the scene chosen for that is showing.
+    pub idle: bool,
 }
 
 #[derive(Debug, Default)]
@@ -142,6 +146,14 @@ pub struct Live {
     auto: Option<AutoMark>,
     /// Feeds the shuffle; changes each time it is used.
     shuffle: u32,
+    /// When the sound was last heard to stop, while it stays stopped.
+    quiet_since: Option<f64>,
+    /// The music has stopped for long enough: the scene chosen for
+    /// silence is showing in place of what is playing.
+    pub idle: bool,
+    /// The last change of scene was into or out of silence, which always
+    /// fades.
+    idle_fade: bool,
 }
 
 impl Live {
@@ -153,6 +165,7 @@ impl Live {
             pending_scene: self.pending.map(|p| p.scene),
             tapped_bpm: self.tempo.bpm(),
             frozen: self.frozen,
+            idle: self.idle,
         }
     }
 
@@ -191,6 +204,46 @@ impl Live {
     /// so that it counts the new scene's bars from now.
     pub fn scene_changed(&mut self) {
         self.auto = None;
+        // A scene chosen on purpose is shown, silence or not. The wait
+        // for silence starts again from here.
+        self.idle = false;
+        self.quiet_since = None;
+    }
+
+    /// Watches for the music stopping and starting. After the show's
+    /// chosen stretch of silence the scene set aside for it takes over,
+    /// and what was playing comes back with the sound. Returns true when
+    /// that has just changed.
+    pub fn idle_step(&mut self, now: f64, show: &Show, features: &AudioFeatures) -> bool {
+        let idle = show.live.idle;
+        let has_scene = idle.scene.is_some_and(|id| show.scenes.iter().any(|s| s.id == id));
+        let waiting = if !has_scene || features.active {
+            self.quiet_since = None;
+            false
+        } else {
+            let since = *self.quiet_since.get_or_insert(now);
+            now - since >= idle.after.clamp(3.0, 600.0) as f64
+        };
+        if waiting == self.idle {
+            return false;
+        }
+        self.idle = waiting;
+        self.idle_fade = true;
+        self.scene_serial += 1;
+        // Autopilot counts afresh when the music is back.
+        self.auto = None;
+        true
+    }
+
+    /// How long the change of scene just made should fade for, given the
+    /// show's own setting. Going into silence and coming out of it never
+    /// cut.
+    pub fn take_fade(&mut self, show_fade: f32) -> f32 {
+        if std::mem::take(&mut self.idle_fade) {
+            show_fade.max(IDLE_FADE_S)
+        } else {
+            show_fade
+        }
     }
 
     /// The scene autopilot wants to switch to on this frame, if any.
@@ -237,6 +290,29 @@ impl Live {
         }
 
         let current = show.current_scene().or(self.last_scene);
+        // Scenes say which parts of a song they suit. In a big part the
+        // calm ones are passed over, and in a quiet part the big ones,
+        // as long as that leaves something to change to.
+        let energy = if features.active { features.intensity } else { 0.5 };
+        let part = if features.drop > 0.5 || energy > 0.75 {
+            Mood::Big
+        } else if energy < 0.35 {
+            Mood::Calm
+        } else {
+            Mood::Any
+        };
+        let suits = |mood: Mood| match part {
+            Mood::Big => mood != Mood::Calm,
+            Mood::Calm => mood != Mood::Big,
+            Mood::Any => true,
+        };
+        let fitting: Vec<u32> = show
+            .scenes
+            .iter()
+            .filter(|s| s.auto && suits(s.mood) && Some(s.id) != current)
+            .map(|s| s.id)
+            .collect();
+        let usable = if fitting.is_empty() { usable } else { fitting };
         let next = if settings.shuffle {
             let others: Vec<u32> = usable.iter().copied().filter(|id| Some(*id) != current).collect();
             // A small generator is plenty for picking a scene.
@@ -248,7 +324,7 @@ impl Live {
             let count = show.scenes.len();
             (1..=count)
                 .map(|step| &show.scenes[(at.map_or(step - 1, |at| at + step)) % count])
-                .find(|s| s.auto && Some(s.id) != current)
+                .find(|s| usable.contains(&s.id) && Some(s.id) != current)
                 .map(|s| s.id)?
         };
         self.auto = None;
@@ -334,6 +410,18 @@ impl Live {
     /// is tied to, for as long as it is down.
     pub fn overlay(&self, show: &Show) -> Show {
         let mut out = show.clone();
+        // With the music stopped, the scene chosen for silence shows. The
+        // saved show is not changed: when the music is back, so is what
+        // was playing.
+        if self.idle
+            && let Some(scene) = show
+                .live
+                .idle
+                .scene
+                .and_then(|id| show.scenes.iter().find(|s| s.id == id))
+        {
+            (out.layers, out.layer_groups) = show.scene_stack(scene);
+        }
         let held = |b: &&darkrgb_core::Binding| b.mode == KeyMode::Hold && self.is_held(b.id);
         // A held scene first, so that keys held with it act on its effects.
         for binding in show.bindings.iter().filter(held) {
@@ -741,6 +829,129 @@ mod tests {
             seen.insert(next);
         }
         assert_eq!(seen.len(), 3, "every scene gets its turn");
+    }
+
+    #[test]
+    fn autopilot_picks_scenes_that_suit_the_part_of_the_song() {
+        // A is calm, B suits anything, C is big. A is playing.
+        let (mut show, [a, b, c]) = auto_show();
+        show.scenes[0].mood = Mood::Calm;
+        show.scenes[2].mood = Mood::Big;
+        let part = |intensity: f32, drop: f32| AudioFeatures {
+            intensity,
+            drop,
+            active: true,
+            ..AudioFeatures::default()
+        };
+        // Asks what would come next, without a tempo: by the clock.
+        let next = |show: &Show, features: &AudioFeatures| {
+            let mut live = Live::default();
+            live.autopilot(0.0, show, features, false);
+            live.autopilot(5.0, show, features, false)
+        };
+        // A quiet part: the big scene is passed over, wherever it is in the order.
+        show.recall_scene(b);
+        assert_eq!(
+            next(&show, &part(0.1, 0.0)),
+            Some(a),
+            "from B, quiet: C is skipped, round to A"
+        );
+        // A big part: the calm one is passed over.
+        show.recall_scene(c);
+        assert_eq!(next(&show, &part(0.9, 0.0)), Some(b), "from C, big: A is skipped");
+        show.recall_scene(b);
+        assert_eq!(next(&show, &part(0.5, 1.0)), Some(c), "a drop counts as big");
+        // In between, the order is the order.
+        show.recall_scene(a);
+        assert_eq!(next(&show, &part(0.5, 0.0)), Some(b));
+        show.recall_scene(b);
+        assert_eq!(next(&show, &part(0.5, 0.0)), Some(c));
+        // If nothing else suits, it still changes rather than sticking.
+        show.scenes[1].mood = Mood::Big;
+        show.recall_scene(a);
+        assert_eq!(
+            next(&show, &part(0.1, 0.0)),
+            Some(b),
+            "only big scenes are left to go to"
+        );
+        // Shuffled, the same rule holds.
+        show.scenes[1].mood = Mood::Any;
+        show.live.auto.shuffle = true;
+        show.recall_scene(b);
+        for _ in 0..10 {
+            assert_eq!(next(&show, &part(0.1, 0.0)), Some(a));
+        }
+    }
+
+    #[test]
+    fn silence_brings_the_scene_chosen_for_it_and_music_brings_the_show_back() {
+        let (mut show, [a, b, _]) = auto_show();
+        show.live.idle.scene = Some(b);
+        show.live.idle.after = 10.0;
+        show.live.fade = 0.0;
+        let mut live = Live::default();
+        let quiet = AudioFeatures::default();
+        let playing = music(1, 0);
+        let stack = |live: &Live, show: &Show| live.overlay(show).layers.len();
+        let own = show.layers.len();
+        let waiting = show.scenes[1].layers.len();
+        assert_ne!(own, waiting);
+
+        assert!(!live.idle_step(0.0, &show, &playing));
+        assert!(!live.idle_step(1.0, &show, &quiet), "silence has only just begun");
+        assert!(
+            !live.idle_step(10.5, &show, &quiet),
+            "counted from when it began, not from zero"
+        );
+        let serial = live.scene_serial;
+        assert!(live.idle_step(11.0, &show, &quiet), "ten seconds of silence");
+        assert!(live.idle && live.status().idle);
+        assert_eq!(live.scene_serial, serial + 1, "the frame loop sees a change of scene");
+        assert_eq!(stack(&live, &show), waiting, "the waiting scene shows");
+        assert_eq!(show.current_scene(), Some(a), "and the show itself is as it was");
+        assert_eq!(live.take_fade(0.0), IDLE_FADE_S, "it fades even when scene changes cut");
+        assert_eq!(live.take_fade(0.0), 0.0, "once");
+        assert!(
+            !live.idle_step(60.0, &show, &quiet),
+            "nothing more happens while it stays quiet"
+        );
+
+        // The music is back: so is what was playing, at once.
+        assert!(live.idle_step(61.0, &show, &playing));
+        assert!(!live.idle);
+        assert_eq!(stack(&live, &show), own);
+        assert_eq!(live.take_fade(0.5), IDLE_FADE_S);
+
+        // A gap in the music shorter than the wait changes nothing.
+        assert!(!live.idle_step(62.0, &show, &quiet));
+        assert!(!live.idle_step(70.0, &show, &playing));
+        assert!(!live.idle_step(71.0, &show, &quiet));
+        assert!(
+            !live.idle_step(80.0, &show, &quiet),
+            "nine seconds since it stopped again"
+        );
+
+        // Choosing a scene by hand ends the waiting, and the wait starts over.
+        assert!(live.idle_step(82.0, &show, &quiet));
+        live.scene_changed();
+        assert!(!live.idle);
+        assert!(!live.idle_step(83.0, &show, &quiet));
+        assert!(live.idle_step(93.5, &show, &quiet));
+
+        // With no scene chosen for silence, or one that is gone, nothing happens.
+        let mut live = Live::default();
+        show.live.idle.scene = None;
+        assert!(!live.idle_step(0.0, &show, &quiet) && !live.idle_step(1000.0, &show, &quiet));
+        show.live.idle.scene = Some(9999);
+        assert!(!live.idle_step(2000.0, &show, &quiet));
+        assert_eq!(stack(&live, &show), own);
+        // Switching it off while waiting ends the waiting.
+        show.live.idle.scene = Some(b);
+        live.idle_step(3000.0, &show, &quiet);
+        assert!(live.idle_step(3011.0, &show, &quiet));
+        show.live.idle.scene = None;
+        assert!(live.idle_step(3012.0, &show, &quiet));
+        assert!(!live.idle);
     }
 
     #[test]

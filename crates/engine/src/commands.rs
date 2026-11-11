@@ -7,7 +7,7 @@ use darkrgb_core::layout::MAX_PIXELS;
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::show::{Blend, FADERS, FRAME_RATES, LINK_STRENGTH, MAX_LINKS, linkable, mend_links};
 use darkrgb_core::{
-    Action, Band, FlashSettings, KeyMode, Kind, Launch, Layer, Link, Only, Rgb, Shape, Show, Sound, Source,
+    Action, Band, FlashSettings, KeyMode, Kind, Launch, Layer, Link, Mood, Only, Rgb, Shape, Show, Sound, Source,
 };
 use serde::Deserialize;
 
@@ -298,6 +298,18 @@ pub enum Command {
         id: u32,
         auto: bool,
     },
+    /// Says which parts of a song autopilot should use a scene for.
+    SetSceneMood {
+        id: u32,
+        mood: Mood,
+    },
+    /// The scene to change to when the music stops, and how long to wait.
+    /// No scene means stay on whatever is playing.
+    SetIdle {
+        scene: Option<u32>,
+        #[serde(default)]
+        after: Option<f32>,
+    },
     SetOutput {
         frame_rate: Option<u32>,
     },
@@ -535,6 +547,15 @@ const CLUB_KEYS: [(Action, &str, &str); 5] = [
     (Action::Freeze, "KeyZ", "z"),
 ];
 
+/// Chooses the scene the lights wait in when the music stops, unless one
+/// is chosen already.
+fn wait_in(show: &mut Show, scene: &str, after: f32) {
+    if show.live.idle.scene.is_none() {
+        show.live.idle.scene = show.scenes.iter().find(|s| s.name == scene).map(|s| s.id);
+        show.live.idle.after = after;
+    }
+}
+
 /// Sets a show up for the people it is for: its starter scenes, how its
 /// scenes change, its pads, and how it treats flashing. Meant for a show
 /// that has just been started; on one that is already in use it only adds
@@ -551,11 +572,13 @@ pub(crate) fn set_up(show: &mut Show, kind: Kind) -> Result<(), String> {
         Kind::Room => {
             show.live.auto.every_bars = 8;
             show.live.fade = 1.0;
+            wait_in(show, "Calm", 30.0);
         }
         Kind::Display => {
             // Unhurried: long scenes and slow changes, for people walking past.
             show.live.auto.every_bars = 16;
             show.live.fade = 2.0;
+            wait_in(show, "Warm glow", 20.0);
         }
         Kind::Club => {
             show.live.auto.every_bars = 8;
@@ -1349,6 +1372,29 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 .find(|s| s.id == *id)
                 .ok_or("that scene no longer exists")?
                 .auto = *auto;
+            Ok(())
+        }
+
+        Command::SetSceneMood { id, mood } => {
+            show.scenes
+                .iter_mut()
+                .find(|s| s.id == *id)
+                .ok_or("that scene no longer exists")?
+                .mood = *mood;
+            Ok(())
+        }
+
+        Command::SetIdle { scene, after } => {
+            let after = after.map(|a| finite(a, "The wait")).transpose()?;
+            if let Some(id) = scene
+                && !show.scenes.iter().any(|s| s.id == *id)
+            {
+                return Err("that scene no longer exists".into());
+            }
+            show.live.idle.scene = *scene;
+            if let Some(after) = after {
+                show.live.idle.after = after.clamp(3.0, 600.0);
+            }
             Ok(())
         }
 
@@ -2478,7 +2524,7 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 46 {
+            let command = match r.next() % 48 {
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {
@@ -2606,6 +2652,14 @@ mod tests {
                 44 => Command::RemoveLink {
                     layer,
                     param: ["opacity", "speed", "floor"][r.next() as usize % 3].into(),
+                },
+                46 => Command::SetSceneMood {
+                    id: scene,
+                    mood: [Mood::Any, Mood::Calm, Mood::Big][r.next() as usize % 3],
+                },
+                47 => Command::SetIdle {
+                    scene: r.maybe(|_| scene),
+                    after: r.maybe(Awkward::number),
                 },
                 45 => Command::SetFader {
                     n: r.next() as u8 % 6,
@@ -2995,6 +3049,10 @@ mod tests {
         );
     }
 
+    fn calm_id(show: &Show) -> u32 {
+        show.scenes.iter().find(|s| s.name == "Calm").unwrap().id
+    }
+
     #[test]
     fn a_show_begins_set_up_for_the_people_it_is_for() {
         let begin = |kind, demo| {
@@ -3040,6 +3098,44 @@ mod tests {
         )
         .unwrap();
         assert_eq!(show, before);
+
+        // When the music stops, a room waits in its calm scene.
+        let calm = show.scenes.iter().find(|s| s.name == "Calm").unwrap();
+        assert_eq!(show.live.idle.scene, Some(calm.id));
+        assert_eq!(calm.mood, Mood::Calm);
+        assert_eq!(show.scenes.iter().find(|s| s.name == "Pulse").unwrap().mood, Mood::Big);
+        // Which a command can change, or switch off; a scene that is gone is refused.
+        let fire = show.scenes.iter().find(|s| s.name == "Fire").unwrap().id;
+        let idle = |show: &mut Show, scene, after| apply(show, &Command::SetIdle { scene, after });
+        idle(&mut show, Some(fire), Some(1.0)).unwrap();
+        assert_eq!((show.live.idle.scene, show.live.idle.after), (Some(fire), 3.0));
+        assert!(idle(&mut show, Some(9999), None).is_err());
+        assert!(idle(&mut show, Some(fire), Some(f32::NAN)).is_err());
+        // Deleting the scene the lights wait in switches the waiting off.
+        apply(&mut show, &Command::DeleteScene { id: fire }).unwrap();
+        assert_eq!(show.live.idle.scene, None);
+        idle(&mut show, None, Some(45.0)).unwrap();
+        assert_eq!(show.live.idle.after, 45.0);
+        let calm = calm_id(&show);
+        apply(
+            &mut show,
+            &Command::SetSceneMood {
+                id: calm,
+                mood: Mood::Any,
+            },
+        )
+        .unwrap();
+        assert_eq!(show.scenes.iter().find(|s| s.name == "Calm").unwrap().mood, Mood::Any);
+        assert!(
+            apply(
+                &mut show,
+                &Command::SetSceneMood {
+                    id: 9999,
+                    mood: Mood::Big
+                }
+            )
+            .is_err()
+        );
 
         // A light show for passers-by: slower, and no demo lights unless asked.
         let show = begin(Kind::Display, false);

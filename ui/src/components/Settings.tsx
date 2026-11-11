@@ -310,6 +310,11 @@ export function actionName(action: Action, show: Show, effectName: (id: string) 
   }
 }
 
+const setIdleAfter = perFrame((after: number) => {
+  const scene = engine.show.get()?.live.idle.scene ?? null;
+  engine.quiet({ type: "set_idle", scene, after });
+});
+
 function LivePage({ show }: { show: Show }) {
   const full = useFull();
   const hello = useHello();
@@ -361,6 +366,43 @@ function LivePage({ show }: { show: Show }) {
         Tap in time with the music to set the tempo by hand when it is not being found, or is found wrong. The
         first tap counts as the first beat of four.
       </p>
+
+      {show.scenes.length > 0 && (
+        <>
+          <h3>When the music stops</h3>
+          <label className="field inline">
+            <span>
+              Change to
+              <span className="hint block">And come back to what was playing when the music does.</span>
+            </span>
+            <select
+              aria-label="The scene to change to when the music stops"
+              value={show.live.idle.scene ?? ""}
+              onChange={(e) =>
+                engine.send({ type: "set_idle", scene: e.target.value === "" ? null : Number(e.target.value) })
+              }
+            >
+              <option value="">Stay on what is playing</option>
+              {show.scenes.map((scene) => (
+                <option key={scene.id} value={scene.id}>
+                  {scene.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {show.live.idle.scene !== null && (full || show.live.idle.after !== 20) && (
+            <Slider
+              label="After this much silence"
+              min={3}
+              max={120}
+              step={1}
+              value={show.live.idle.after}
+              format={(v) => `${Math.round(v)} s`}
+              onChange={setIdleAfter}
+            />
+          )}
+        </>
+      )}
 
       <h3>Autopilot</h3>
       <Row

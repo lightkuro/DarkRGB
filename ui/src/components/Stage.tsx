@@ -28,6 +28,7 @@ import {
   takeFirstKind,
   useFirstKind,
   useFull,
+  useLive,
   useSelection,
   useShow,
   useStatus,
@@ -148,6 +149,7 @@ export function Stage() {
   // A show nobody has touched yet is asked who it is for. The answer is
   // applied when its first lights arrive, by whichever way they are added.
   const full = useFull();
+  const liveState = useLive();
   const kind = useFirstKind();
   const fresh = Boolean(show && show.kind === "custom" && show.scenes.length === 0 && show.layers.length <= 1);
   const hadLights = useRef(true);
@@ -561,6 +563,12 @@ export function Stage() {
 
       {show?.master.blackout && fixtures.length > 0 && (
         <p className="stage-banner">Blackout is on. The lights are off.</p>
+      )}
+      {show && liveState.idle && !show.master.blackout && fixtures.length > 0 && (
+        <p className="stage-banner quiet">
+          No music. Showing {show.scenes.find((s) => s.id === show.live.idle.scene)?.name ?? "the waiting scene"}{" "}
+          until it starts again.
+        </p>
       )}
 
       {/* One row along the bottom. When it gets too narrow for both, the

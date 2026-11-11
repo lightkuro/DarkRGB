@@ -10,6 +10,7 @@ import {
   useHello,
   useLive,
   useShow,
+  type Mood,
   type Scene,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
@@ -59,6 +60,12 @@ function SaveScene() {
 }
 
 /** Rename, key, update and delete for one scene. */
+const MOODS: { id: Mood; name: string; hint: string }[] = [
+  { id: "any", name: "Any part", hint: "Autopilot may change to it at any time" },
+  { id: "calm", name: "Quiet parts", hint: "Passed over while the song is at its biggest" },
+  { id: "big", name: "Big parts", hint: "Passed over in breakdowns and quiet stretches" },
+];
+
 function SceneMenu({
   scene,
   left,
@@ -88,6 +95,28 @@ function SceneMenu({
           onChange={(auto) => engine.send({ type: "set_scene_auto", id: scene.id, auto })}
         />
       </div>
+      {scene.auto && (
+        <div className="field">
+          <span className="field-head">
+            <span>Autopilot uses it for</span>
+          </span>
+          <div className="segmented" role="radiogroup" aria-label={`The parts of a song ${scene.name} suits`}>
+            {MOODS.map((mood) => (
+              <button
+                key={mood.id}
+                type="button"
+                role="radio"
+                aria-checked={scene.mood === mood.id}
+                className={scene.mood === mood.id ? "selected" : ""}
+                title={mood.hint}
+                onClick={() => engine.send({ type: "set_scene_mood", id: scene.id, mood: mood.id })}
+              >
+                {mood.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="layer-footer">
         <button
           type="button"
