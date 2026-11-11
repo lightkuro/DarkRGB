@@ -119,6 +119,7 @@ impl Renderer {
                 time,
                 dt,
                 audio: heard,
+                beats: heard.beat_count as f64 + heard.beat_phase.clamp(0.0, 1.0) as f64,
                 aspect: state.aspect,
                 flat: state.flat,
             };
@@ -172,6 +173,12 @@ impl Renderer {
     /// The last rendered frame.
     pub fn frame(&self) -> &[Rgb] {
         &self.frame
+    }
+
+    /// The last rendered frame, for whatever is applied to the finished
+    /// picture, such as the flash limit.
+    pub fn frame_mut(&mut self) -> &mut [Rgb] {
+        &mut self.frame
     }
 
     /// Mixes another frame into the last rendered one: `amount` 0 keeps

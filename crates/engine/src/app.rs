@@ -40,6 +40,8 @@ pub struct RenderStats {
     pub frame_ms: f32,
     /// Frames that finished after their deadline.
     pub late_frames: u64,
+    /// True when the flash limit held the picture back in the last second.
+    pub flash_limited: bool,
     pub devices: HashMap<u32, DeviceStats>,
 }
 

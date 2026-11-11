@@ -2,9 +2,9 @@
 // dragging. The LEDs are drawn with WebGL; outlines and handles sit on top
 // in SVG so they stay crisp at any zoom.
 
-import { ArrowLeftRight, Maximize, RotateCw, Sparkles } from "lucide-react";
+import { ArrowLeftRight, Maximize, RotateCw, ShieldCheck, Sparkles, ZapOff } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { engine, perFrame, useShow, useStatus, type Fixture } from "../engine";
+import { engine, perFrame, settingsPage, useShow, useStatus, type Fixture } from "../engine";
 import { StageRenderer, type View } from "../stageGl";
 import { AddByAddress, FoundDevices } from "./DevicePanel";
 
@@ -399,6 +399,29 @@ export function Stage() {
 
       {fixtures.length > 0 && (
         <p className="stage-stats">
+          {show && show.output.flash_limit === 0 ? (
+            <button
+              type="button"
+              className="stage-flag off"
+              title="Fast flashing is not being softened. Click for the setting."
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => settingsPage.set("lights")}
+            >
+              <ZapOff size={12} /> Flash limit off
+            </button>
+          ) : (
+            status?.render.flash_limited && (
+              <button
+                type="button"
+                className="stage-flag"
+                title="Something is flashing faster than the limit allows, so it is being softened. Click for the setting."
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => settingsPage.set("lights")}
+              >
+                <ShieldCheck size={12} /> Flash limit is softening this
+              </button>
+            )
+          )}
           {pixels.toLocaleString()} LEDs
           {status ? ` · ${Math.round(status.render.fps)} frames per second` : ""}
         </p>

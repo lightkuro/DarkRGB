@@ -174,6 +174,8 @@ pub enum Command {
     },
     SetOutput {
         frame_rate: Option<u32>,
+        /// Most flashes a second; 0 switches the limit off.
+        flash_limit: Option<f32>,
     },
     RenameScene {
         id: u32,
@@ -782,12 +784,20 @@ pub fn apply(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
-        Command::SetOutput { frame_rate } => {
+        Command::SetOutput {
+            frame_rate,
+            flash_limit,
+        } => {
+            let flash_limit = flash_limit.map(|l| finite(l, "The flash limit")).transpose()?;
             if let Some(rate) = frame_rate {
                 if !FRAME_RATES.contains(rate) {
                     return Err(format!("the frame rate can be one of {FRAME_RATES:?}"));
                 }
                 show.output.frame_rate = *rate;
+            }
+            if let Some(limit) = flash_limit {
+                // Zero is off. Anything else is a whole number of flashes.
+                show.output.flash_limit = if limit < 1.0 { 0.0 } else { limit.round().min(30.0) };
             }
             Ok(())
         }
@@ -1540,10 +1550,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!((show.live.launch, show.live.fade), (Launch::Bar, 0.0));
-        assert!(apply(&mut show, &Command::SetOutput { frame_rate: Some(1000) }).is_err());
-        assert!(apply(&mut show, &Command::SetOutput { frame_rate: Some(0) }).is_err());
-        apply(&mut show, &Command::SetOutput { frame_rate: Some(40) }).unwrap();
-        assert_eq!(show.output.frame_rate, 40);
+        let output = |show: &mut Show, frame_rate, flash_limit| {
+            apply(
+                show,
+                &Command::SetOutput {
+                    frame_rate,
+                    flash_limit,
+                },
+            )
+        };
+        assert!(output(&mut show, Some(1000), None).is_err());
+        assert!(output(&mut show, Some(0), None).is_err());
+        output(&mut show, Some(40), None).unwrap();
+        output(&mut show, Some(120), None).unwrap();
+        assert_eq!(show.output.frame_rate, 120);
+        // The flash limit: three by default, zero is off, never a fraction or absurd.
+        assert_eq!(show.output.flash_limit, 3.0);
+        output(&mut show, None, Some(0.4)).unwrap();
+        assert_eq!(show.output.flash_limit, 0.0);
+        output(&mut show, None, Some(4.4)).unwrap();
+        assert_eq!(show.output.flash_limit, 4.0);
+        output(&mut show, None, Some(1e9)).unwrap();
+        assert_eq!(show.output.flash_limit, 30.0);
+        assert!(output(&mut show, None, Some(f32::NAN)).is_err());
+        assert_eq!((show.output.frame_rate, show.output.flash_limit), (120, 30.0));
         // Commands that need the running app are refused here.
         assert!(apply(&mut show, &Command::Tap).is_err());
         assert!(apply(&mut show, &Command::Trigger { binding: 1, down: true }).is_err());
@@ -1733,7 +1763,8 @@ mod tests {
                     fade: r.maybe(Awkward::number),
                 },
                 33 => Command::SetOutput {
-                    frame_rate: r.maybe(|r| [0, 30, 40, 60, 61, u32::MAX][r.next() as usize % 6]),
+                    frame_rate: r.maybe(|r| [0, 30, 40, 60, 61, 120, u32::MAX][r.next() as usize % 7]),
+                    flash_limit: r.maybe(Awkward::number),
                 },
                 34 => Command::RenameScene {
                     id: scene,

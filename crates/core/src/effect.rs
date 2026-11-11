@@ -18,6 +18,9 @@ pub struct FrameCtx {
     /// Seconds since the previous frame.
     pub dt: f32,
     pub audio: AudioFeatures,
+    /// Position in the music, counted in beats: whole beats plus how far
+    /// into the current one. Only steady while `audio.bpm` is above zero.
+    pub beats: f64,
     /// Width divided by height of the area being drawn on. Lets radial
     /// effects draw circles instead of ellipses.
     pub aspect: f32,

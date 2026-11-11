@@ -291,7 +291,7 @@ async fn a_client_can_drive_the_show_over_the_websocket() {
         .unwrap();
 
     let hello = next_json(&mut ws, "hello").await;
-    assert_eq!(hello["frame_rates"], serde_json::json!([30, 40, 60]));
+    assert_eq!(hello["frame_rates"], serde_json::json!([30, 40, 60, 120]));
     let state = next_json(&mut ws, "state").await;
     assert_eq!(state["show"]["devices"], json!([]));
     assert_eq!(state["show"]["layers"][0]["effect"], "plasma");
@@ -659,7 +659,10 @@ fn the_frame_rate_can_be_lowered() {
     let (engine, sim) = engine_with_strip();
     engine
         .shared
-        .execute(&Command::SetOutput { frame_rate: Some(30) })
+        .execute(&Command::SetOutput {
+            frame_rate: Some(30),
+            flash_limit: None,
+        })
         .unwrap();
     wait_for("the stream to start", || sim.stats().frames > 5);
     std::thread::sleep(Duration::from_millis(200));
@@ -762,4 +765,91 @@ async fn a_show_file_can_be_imported_but_only_by_the_served_page() {
     let huge = "x".repeat(9 * 1024 * 1024);
     let (status, _) = post(port, Some(&own), &huge).await;
     assert!(status.contains("413"), "{status}");
+}
+
+#[test]
+fn a_hundred_and_twenty_frames_a_second_reach_the_device() {
+    let (engine, sim) = engine_with_strip();
+    engine
+        .shared
+        .execute(&Command::SetOutput {
+            frame_rate: Some(120),
+            flash_limit: None,
+        })
+        .unwrap();
+    wait_for("the stream to start", || sim.stats().frames > 5);
+    std::thread::sleep(Duration::from_millis(200));
+    sim.reset_stats();
+    std::thread::sleep(Duration::from_secs(2));
+    let stats = sim.stats();
+    assert!(stats.fps > 110.0 && stats.fps < 128.0, "{stats:?}");
+}
+
+/// Counts how often the device went from dark to lit, sampling it for
+/// `seconds`. A device shows what it last received, so this is what a
+/// person standing in front of it would see.
+fn flashes_seen(sim: &Sim, seconds: f32) -> usize {
+    let started = Instant::now();
+    let (mut count, mut was_lit) = (0, false);
+    while started.elapsed().as_secs_f32() < seconds {
+        let lit = sim.frame().first().is_some_and(|b| *b > 128);
+        if lit && !was_lit {
+            count += 1;
+        }
+        was_lit = lit;
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    count
+}
+
+#[test]
+fn a_strobe_is_limited_at_the_device_and_the_limit_can_be_switched_off() {
+    let (engine, sim) = engine_with_strip();
+    let shared = &engine.shared;
+    let layer = shared.show.lock().unwrap().layers[0].id;
+    shared
+        .execute(&Command::UpdateLayer {
+            id: layer,
+            effect: Some("strobe".into()),
+            opacity: None,
+            blend: None,
+            enabled: None,
+            targets: None,
+        })
+        .unwrap();
+    shared
+        .execute(&Command::SetParam {
+            layer,
+            param: "rate".into(),
+            value: ParamValue::Number(10.0),
+        })
+        .unwrap();
+    wait_for("frames", || sim.stats().frames > 30);
+
+    // Limited to three a second by default: about nine in three seconds.
+    let limited = flashes_seen(&sim, 3.0);
+    assert!(
+        (6..=10).contains(&limited),
+        "{limited} flashes in three seconds with the limit on"
+    );
+    wait_for("the limit to be reported", || {
+        engine.shared.stats.lock().unwrap().flash_limited
+    });
+
+    // One command switches it off, and the strobe runs at its own rate.
+    shared
+        .execute(&Command::SetOutput {
+            frame_rate: None,
+            flash_limit: Some(0.0),
+        })
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let free = flashes_seen(&sim, 3.0);
+    assert!(
+        (26..=32).contains(&free),
+        "{free} flashes in three seconds with the limit off"
+    );
+    wait_for("the report to clear", || {
+        !engine.shared.stats.lock().unwrap().flash_limited
+    });
 }

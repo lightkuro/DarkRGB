@@ -26,6 +26,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   advancedPref,
   engine,
+  flashNotice,
   perFrame,
   toggleFolded,
   useAdvanced,
@@ -530,6 +531,7 @@ function LayerBody({
           onPick={(id) => {
             setPicking(false);
             if (id !== layer.effect) engine.send({ type: "update_layer", id: layer.id, effect: id });
+            if (id === "strobe") flashNotice();
           }}
         />
         <button type="button" className="text-button" onClick={() => setPicking(false)}>
@@ -1026,6 +1028,7 @@ export function LayerPanel() {
             onPick={(effect) => {
               setAdding(null);
               engine.send({ type: "add_layer", effect, group: addingTo?.id ?? null });
+              if (effect === "strobe") flashNotice();
             }}
           />
           <button type="button" className="text-button" onClick={() => setAdding(null)}>

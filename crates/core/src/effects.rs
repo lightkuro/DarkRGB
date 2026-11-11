@@ -24,6 +24,7 @@ pub fn registry() -> &'static [EffectDef] {
             BeatPulse::def(),
             Ripple::def(),
             Sparkle::def(),
+            Strobe::def(),
             Plasma::def(),
             Flow::def(),
             Solid::def(),
@@ -299,6 +300,80 @@ impl Effect for BeatPulse {
     fn shade(&self, _x: f32, _y: f32, _ctx: &FrameCtx) -> Rgb {
         let level = self.floor + self.envelope * (1.0 - self.floor);
         self.palette.sample(self.hue).scale(level)
+    }
+}
+
+// ---------------------------------------------------------------- Strobe
+
+struct Strobe {
+    colour: Rgb,
+    rate: f32,
+    sync: usize,
+    on_time: f32,
+    /// Position in the flash cycle, 0..1.
+    phase: f32,
+    lit: bool,
+}
+
+impl Strobe {
+    /// Flashes per beat for each "In time with the music" choice.
+    const PER_BEAT: [f32; 4] = [0.0, 1.0, 2.0, 4.0];
+
+    fn def() -> EffectDef {
+        EffectDef {
+            info: EffectInfo {
+                id: "strobe",
+                name: "Strobe",
+                description: "Hard flashes at a steady rate, or in time with the music. The flash limit applies.",
+                category: HITS_AND_BEATS,
+                audio: true,
+                params: vec![
+                    ParamSpec::color("colour", "Colour", "#ffffff"),
+                    ParamSpec::float("rate", "Flashes per second", 1.0, 20.0, 6.0),
+                    ParamSpec::choice(
+                        "sync",
+                        "In time with the music",
+                        &["Off", "1 per beat", "2 per beat", "4 per beat"],
+                    ),
+                    ParamSpec::float("on_time", "Length of each flash", 0.05, 0.9, 0.3).advanced(),
+                ],
+            },
+            make: || {
+                Box::new(Strobe {
+                    colour: Rgb::WHITE,
+                    rate: 6.0,
+                    sync: 0,
+                    on_time: 0.3,
+                    phase: 0.0,
+                    lit: false,
+                })
+            },
+        }
+    }
+}
+
+impl Effect for Strobe {
+    fn configure(&mut self, p: &ParamReader) {
+        self.colour = p.color("colour");
+        self.rate = p.float("rate");
+        self.sync = p.choice("sync");
+        self.on_time = p.float("on_time");
+    }
+
+    fn update(&mut self, ctx: &FrameCtx) {
+        let per_beat = Self::PER_BEAT[self.sync.min(3)];
+        if per_beat > 0.0 && ctx.audio.bpm > 0.0 {
+            // Locked to the beat: a flash starts exactly on it.
+            self.phase = (ctx.beats * per_beat as f64).fract() as f32;
+        } else {
+            // With no tempo to lock to, the steady rate stands in.
+            self.phase = (self.phase + ctx.dt * self.rate).fract();
+        }
+        self.lit = self.phase < self.on_time;
+    }
+
+    fn shade(&self, _x: f32, _y: f32, _ctx: &FrameCtx) -> Rgb {
+        if self.lit { self.colour } else { Rgb::BLACK }
     }
 }
 
@@ -731,6 +806,7 @@ mod tests {
             time,
             dt: 1.0 / 60.0,
             audio,
+            beats: audio.beat_count as f64 + audio.beat_phase as f64,
             aspect: if flat { 1.0 } else { 2.0 },
             flat,
         }
@@ -877,5 +953,45 @@ mod tests {
         let far = fx.shade(0.95, 0.5, &c);
         assert!(near.r + near.g + near.b > 0.5);
         assert!(far.r + far.g + far.b < 0.01);
+    }
+    #[test]
+    fn strobe_flashes_at_its_rate_or_on_the_beat() {
+        use crate::params::ParamValue;
+        let def = find("strobe").unwrap();
+        // Counts dark-to-lit changes over `seconds` of frames.
+        let flashes = |params: &Params, audio_at: &dyn Fn(f64) -> AudioFeatures, seconds: f64| {
+            let mut fx = (def.make)();
+            fx.configure(&ParamReader::new(&def.info.params, params));
+            let (mut count, mut was_lit) = (0, false);
+            for frame in 0..(seconds * 60.0) as usize {
+                let c = ctx(frame as f64 / 60.0, audio_at(frame as f64 / 60.0), true);
+                fx.update(&c);
+                let lit = fx.shade(0.5, 0.5, &c).r > 0.5;
+                if lit && !was_lit {
+                    count += 1;
+                }
+                was_lit = lit;
+            }
+            count
+        };
+        let silent = |_: f64| AudioFeatures::default();
+        // Six a second by default.
+        let free = flashes(&Params::new(), &silent, 5.0);
+        assert!((29..=31).contains(&free), "{free} flashes in five seconds");
+
+        // Two per beat at 120 beats a minute is four a second, whatever the rate says.
+        let mut synced = Params::new();
+        synced.insert("sync".into(), ParamValue::Text("2 per beat".into()));
+        let music = |t: f64| AudioFeatures {
+            bpm: 120.0,
+            beat_count: (t * 2.0) as u32,
+            beat_phase: (t * 2.0).fract() as f32,
+            ..AudioFeatures::default()
+        };
+        let on_beat = flashes(&synced, &music, 5.0);
+        assert!((19..=21).contains(&on_beat), "{on_beat} flashes in five seconds");
+        // With no tempo found, it falls back to the steady rate.
+        let fallback = flashes(&synced, &silent, 5.0);
+        assert!((29..=31).contains(&fallback), "{fallback}");
     }
 }

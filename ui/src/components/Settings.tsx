@@ -97,6 +97,15 @@ function Sound({ show }: { show: Show }) {
   );
 }
 
+/**
+ * How many times a second a string of LEDs can be refreshed. The common
+ * kinds (WS2812 and relatives) take about 30 millionths of a second per
+ * LED, plus a pause between frames, whatever is driving them.
+ */
+function ceiling(leds: number): number {
+  return Math.floor(1 / (leds * 30e-6 + 300e-6));
+}
+
 function Lights({ show }: { show: Show }) {
   const hello = useHello();
   const status = useStatus();
@@ -104,6 +113,9 @@ function Lights({ show }: { show: Show }) {
     (sum, f) => sum + (f.shape.type === "strip" ? f.shape.count : f.shape.cols * f.shape.rows),
     0,
   );
+  const limited = show.output.flash_limit > 0;
+  // Real lights that cannot refresh as often as the chosen frame rate.
+  const slow = show.devices.filter((d) => d.kind === "wled" && ceiling(d.pixel_count) < show.output.frame_rate);
   return (
     <>
       <Slider
@@ -138,8 +150,52 @@ function Lights({ show }: { show: Show }) {
         </div>
       </div>
       <p className="hint">
-        60 is the smoothest. If lights on WiFi stutter or lag behind, try 40 or 30: fewer frames are easier for a
-        busy network and for the devices.
+        60 suits most setups. If lights on WiFi stutter or lag behind, try 40 or 30: fewer frames are easier for a
+        busy network and for the devices. 120 only helps short strips on a fast connection, because the LEDs
+        themselves take time to refresh.
+      </p>
+      {slow.length > 0 && (
+        <p className="callout note">
+          At {show.output.frame_rate} a second these cannot keep up and will skip frames:{" "}
+          {slow.map((d) => `${d.name} (${d.pixel_count} LEDs, about ${ceiling(d.pixel_count)} a second)`).join(", ")}.
+        </p>
+      )}
+
+      <h3>Flashing</h3>
+      <Row
+        title="Flash limit"
+        hint={
+          limited
+            ? `No more than ${show.output.flash_limit} flashes of the whole picture in a second. Faster flashing is softened, on the lights and on this screen.`
+            : "Off. Strobes and fast flashes run at full speed."
+        }
+      >
+        <Switch
+          checked={limited}
+          label="Limit flashing"
+          onChange={(on) => engine.send({ type: "set_output", flash_limit: on ? 3 : 0 })}
+        />
+      </Row>
+      {limited && (
+        <div className="segmented" role="radiogroup" aria-label="Flashes allowed in a second">
+          {[3, 4].map((n) => (
+            <button
+              key={n}
+              type="button"
+              role="radio"
+              aria-checked={show.output.flash_limit === n}
+              className={show.output.flash_limit === n ? "selected" : ""}
+              onClick={() => engine.send({ type: "set_output", flash_limit: n })}
+            >
+              {n} a second{n === 3 ? " (recommended)" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="hint">
+        Flashing faster than about three times a second can trigger seizures in people with photosensitive
+        epilepsy. Three is the limit used for web pages and four for broadcast. Leave this on when anyone you do
+        not know will see the lights.
       </p>
       {status && (
         <p className="hint">

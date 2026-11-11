@@ -10,6 +10,7 @@ pub mod effects;
 pub mod layout;
 pub mod params;
 pub mod render;
+pub mod safety;
 pub mod show;
 
 pub use audio::{AudioFeatures, BANDS, Band};

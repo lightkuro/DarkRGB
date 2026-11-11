@@ -218,18 +218,34 @@ pub struct LiveSettings {
     pub fade: f32,
 }
 
-/// Frame rates the engine can run at.
-pub const FRAME_RATES: [u32; 3] = [30, 40, 60];
+/// Frame rates the engine can run at. 120 only helps short strips: the
+/// common LED types take about 30 microseconds per LED to refresh.
+pub const FRAME_RATES: [u32; 4] = [30, 40, 60, 120];
+
+/// Flashes a second allowed by default: the accepted threshold for
+/// photosensitive epilepsy.
+pub const DEFAULT_FLASH_LIMIT: f32 = 3.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OutputSettings {
     /// Frames rendered and sent each second.
     pub frame_rate: u32,
+    /// Most flashes of the whole picture allowed in a second. Zero
+    /// switches the limit off. See `safety.rs`.
+    #[serde(default = "default_flash_limit")]
+    pub flash_limit: f32,
+}
+
+fn default_flash_limit() -> f32 {
+    DEFAULT_FLASH_LIMIT
 }
 
 impl Default for OutputSettings {
     fn default() -> Self {
-        Self { frame_rate: 60 }
+        Self {
+            frame_rate: 60,
+            flash_limit: DEFAULT_FLASH_LIMIT,
+        }
     }
 }
 
@@ -801,6 +817,7 @@ impl Show {
             self.audio.sensitivity,
             self.audio.delay_ms,
             self.live.fade,
+            self.output.flash_limit,
         ];
         if numbers.iter().any(|n| !n.is_finite()) {
             return Err("a master setting is not a number".into());

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use darkrgb_core::safety::FlashGuard;
 use darkrgb_core::{AudioFeatures, Renderer, Show};
 use darkrgb_output::Outputs;
 
@@ -78,6 +79,8 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
     };
     let mut fade: Option<Fade> = None;
     let mut delay = Delay::default();
+    let mut guard = FlashGuard::default();
+    let mut window_limited = false;
     let mut last_beat = 0u32;
     let mut last_now = 0.0f64;
     let mut needs_sync = true;
@@ -183,6 +186,8 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
                 renderer.mix_in(leaving.from.frame(), 1.0 - eased);
             }
         }
+        // Last of all, so nothing can get around it: the flash limit.
+        window_limited |= guard.apply(renderer.frame_mut(), now, show.output.flash_limit);
         outputs.send(&show, &renderer);
 
         let preview_every = (show.output.frame_rate / PREVIEW_RATE).max(1) as u64;
@@ -202,6 +207,7 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
             stats.fps = window_frames as f32 / window.as_secs_f32();
             stats.frame_ms = window_busy.as_secs_f32() * 1000.0 / window_frames as f32;
             stats.late_frames = late_frames;
+            stats.flash_limited = std::mem::take(&mut window_limited);
             stats.devices = outputs.stats().clone();
             window_start = frame_start;
             window_frames = 0;

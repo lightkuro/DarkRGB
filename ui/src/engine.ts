@@ -184,7 +184,11 @@ export interface Show {
   master: { brightness: number; blackout: boolean; limit: number };
   audio: { source: string; sensitivity: number; delay_ms: number };
   live: { launch: Launch; fade: number };
-  output: { frame_rate: number };
+  output: {
+    frame_rate: number;
+    /** Most flashes of the whole picture in a second; 0 means no limit. */
+    flash_limit: number;
+  };
 }
 
 /** What is happening live, beyond what is saved in the show. */
@@ -214,7 +218,14 @@ export interface Discovered {
 }
 
 export interface Status {
-  render: { fps: number; frame_ms: number; late_frames: number; devices: Record<string, DeviceStats> };
+  render: {
+    fps: number;
+    frame_ms: number;
+    late_frames: number;
+    /** The flash limit held the picture back in the last second. */
+    flash_limited: boolean;
+    devices: Record<string, DeviceStats>;
+  };
   audio: {
     state: "starting" | "running" | "error";
     source: string;
@@ -291,7 +302,7 @@ export type Command =
   | { type: "hit" }
   | { type: "auto_tempo" }
   | { type: "set_live"; launch?: Launch; fade?: number }
-  | { type: "set_output"; frame_rate?: number }
+  | { type: "set_output"; frame_rate?: number; flash_limit?: number }
   | { type: "rename_scene"; id: number; name: string }
   | { type: "new_show"; keep_lights: boolean }
   | { type: "export_show" }
@@ -506,7 +517,9 @@ class Engine {
     text = text.charAt(0).toUpperCase() + text.slice(1);
     const id = this.nextToast++;
     this.toasts.set([...this.toasts.get().slice(-3), { id, kind, text }]);
-    setTimeout(() => this.dismissToast(id), kind === "error" ? 8000 : 6000);
+    // Long messages stay long enough to be read.
+    const reading = Math.min(20000, 3500 + text.length * 55);
+    setTimeout(() => this.dismissToast(id), kind === "error" ? Math.max(8000, reading) : reading);
   }
 
   dismissToast(id: number): void {
@@ -563,6 +576,23 @@ export const useFolded = () => useSyncExternalStore(foldedPref.subscribe, folded
 export function toggleFolded(id: number): void {
   const folded = foldedPref.get();
   foldedPref.set(folded.includes(id) ? folded.filter((f) => f !== id) : [...folded, id]);
+}
+
+/** Whether the note about flashing lights has been shown on this device. */
+export const flashNoticePref = new Pref<boolean>("darkrgb.flashNotice", false);
+
+/**
+ * Says once, the first time something that flashes is added, what the
+ * flash limit is and where its switch lives.
+ */
+export function flashNotice(): void {
+  if (flashNoticePref.get()) return;
+  flashNoticePref.set(true);
+  engine.toast(
+    "info",
+    "Flashing lights can trigger seizures in people with photosensitive epilepsy. Anything faster than " +
+      "3 flashes a second is softened. The switch for this is in Settings, under Lights.",
+  );
 }
 
 /** Which page of the settings window is open, if it is open at all. */
