@@ -2284,13 +2284,26 @@ input.number {
   white-space: nowrap;
 }
 
-.stage-tools {
+.stage-foot {
   position: absolute;
   left: 12px;
+  right: 14px;
   bottom: 12px;
   display: flex;
+  /* The tools stay on the bottom line; what does not fit goes above. */
+  flex-wrap: wrap-reverse;
+  align-items: center;
+  gap: 8px 12px;
+  /* Drags between the parts still reach the stage. */
+  pointer-events: none;
+}
+
+.stage-tools {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   cursor: default;
+  pointer-events: auto;
 }
 
 .tool-group {
@@ -2337,9 +2350,8 @@ input.number {
 }
 
 .stage-stats {
-  position: absolute;
-  right: 14px;
-  bottom: 14px;
+  margin-left: auto;
+  white-space: nowrap;
   color: var(--faint);
   font-size: 12px;
   font-variant-numeric: tabular-nums;

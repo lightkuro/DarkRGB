@@ -1,6 +1,34 @@
 # What's new
 
-## 0.3.0 (in development)
+## 0.4.0 (in development)
+
+Live mode you can set up as you play, lights that follow the shape of the song, and a place for your shows.
+
+- Flash limit: hard flashes faster than three a second are softened into a swell, on the lights and in the
+  preview alike. One switch in Settings or the Live view turns it off, and a strict level is there for more
+  care.
+- Pads in the Live view can be set up without leaving it: Customize, click a pad, press a key. A pad no
+  longer needs a key, so a touch screen can have pads of its own.
+- "Fire it": a third thing a key can do. Each press sets off the effect's reaction as if a beat had hit, music
+  or not. An effect can also be told to react only when fired.
+- Hold a scene's key to show that scene only while it is held. New keys: next scene, previous scene, freeze
+  the picture.
+- Ready-made pads: a white flash, a strobe or a colour pulse in one click. They live in a pinned folder that
+  stays put when the scene changes.
+- Speed and sound sensitivity as faders in the Live view.
+- Pick lights on the stage: click, Shift and click, drag a box, double-click for a whole group. Several lights
+  move and turn together, and an angle can be typed.
+- The lights follow the shape of the song: quiet parts are dimmer and calmer, drops hit harder. "Follow the
+  song's energy" in Settings sets how much.
+- Autopilot changes scene every few bars, and at once when the song changes. A scene can be told to sit out.
+- Seven starter scenes in one click. "Try it with demo lights" adds them and starts autopilot.
+- Five new effects: Strobe, Sweep, Chase, Fire and Meteors. Strobe and Chase can lock to the tempo.
+- "Each light on its own": an effect drawn once per light instead of once across all of them.
+- Shows: the show's name opens a list of your shows. Open, start new, copy, rename, delete (to a trash
+  folder), or bring one in from a file. Nothing is replaced when you start or open another.
+- 120 frames a second, with a note on what each of your lights can keep up with.
+
+## 0.3.0
 
 Playing the lights from the keyboard, and keeping a growing show tidy.
 

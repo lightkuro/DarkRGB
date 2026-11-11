@@ -1,6 +1,6 @@
 # Roadmap
 
-Written on 2026-11-10. Order: audio-reactive first, then live control, then the timeline, then yard-scale
+Written on 2026-11-10, last updated 2026-11-11 for version 0.4.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
 features. The design targets room/desk setups (a few WLED devices, up to a few thousand pixels) and house/yard
 shows (many controllers, 5k to 50k pixels). See [architecture.md](architecture.md) for the design.
 
@@ -18,6 +18,8 @@ The plan rests on a few assumptions. Each has a check; `darkrgb-cli` runs the fi
 | The app window on Windows | It opens, shows the UI and closes cleanly | 0.2.0 built in CI. **Not run by anyone yet.** |
 | Preview speed in the Linux app window | 10,000 points at 30 fps or better in WebKitGTK | The window works and draws the preview under a virtual display with software rendering. Speed on a real graphics card is **not measured.** |
 | Key handling | Key down and up arrive reliably in the app window, several keys held | **Passed on Linux** in the app window (WebKitGTK under a virtual display): a held key, a second key pressed while it was held, taps and number keys all arrived. Windows not run. |
+| 120 frames a second | A real strip visibly smoother at 120 than at 60, with no dropped packets | The engine holds 120 with time to spare (0.05 ms of work a frame for the demo lights). **Not run on hardware.** The LEDs set the ceiling: about 110 a second for 300 WS2812 LEDs on one output, 33 for 1,000. |
+| Song energy and sections | On real music, quiet parts read low, and drops are caught within a second or two without false alarms | Passed in unit tests on synthetic songs (steady; breakdown then drop; quiet intro then drop; small volume changes) and on one synthetic song played through the real audio path, where both drops and the breakdown were heard within 2 seconds. **Not tried on real music.** |
 
 If the preview is too slow in the Linux window, `darkrgb-cli` (browser) is the fallback today, and Electron on
 Linux the longer-term one.
@@ -31,14 +33,23 @@ Built:
   network's prefix filled in; scans a network on request.
 - Demo lights and virtual lights that exist only in the preview.
 - Fixtures placed on a 2D canvas by dragging, with rotate, resize and reverse.
-- Ten effects in layers with four blend modes, each on all lights or chosen ones. Layers collapse, reorder by
-  dragging, and can be renamed and duplicated.
+- Fifteen effects in layers with four blend modes, each on all lights or chosen ones, drawn across them or
+  once per light. Layers collapse, reorder by dragging, and can be renamed and duplicated.
+- The song's shape: how big this part of the song is against the last 45 seconds, and when it moves to a new
+  section. Quiet parts are dimmed and slowed by an amount the user sets.
+- Seven starter scenes, added in one click, placed on strips and matrices as suits each.
+- Lights picked on the stage one or several at a time (click, Shift and click, box, whole group), moved and
+  turned together, with a typed angle.
+- A flash limit on the final picture, on by default, with a strict level and a one-click off switch.
+- 120 frames a second as a choice, with each light's own ceiling shown next to it.
 - Each layer hears everything, bass, mids, highs or a custom range, with its own sensitivity, and its
   brightness can follow the sound.
 - Folders for effects (switch, dim, fold, drag in and out) and groups of lights (an effect can play on a
   group; a group dims or switches as one).
-- A settings window: brightness ceiling, frames per second, a delay for late speakers, keys, the show file.
-- Save a copy of the show, open a show file, start a new show keeping the lights.
+- A settings window: brightness ceiling, frames per second, the flash limit, a delay for late speakers, how
+  much to follow the song's energy, autopilot, keys.
+- A library of shows: list, open, new (keeping the lights or not), copy, rename, delete to a trash folder,
+  bring in from a file, save a copy.
 - Simple by default: parameters are marked basic or advanced, and an Advanced switch reveals the rest.
 - Live preview from the same frames the lights get.
 - Zero-setup audio on Linux and Windows.
@@ -48,10 +59,13 @@ Built:
 Left before this stage is done:
 
 - Run the hardware checks above and fix what they find.
-- Tune the effects and the audio levelling against real music and real LEDs. So far they have only met
-  synthetic test songs. `cargo run --release -p darkrgb-audio --example spread` prints how much each audio feature
+- Tune the effects, the audio levelling, the song-energy tracking and the drop detection against real music
+  and real LEDs. So far they have only met synthetic test songs. `cargo run --release -p darkrgb-audio --example spread` prints how much each audio feature
   moves, which is the number to watch.
-- Link any slider to the sound, the beat or a slow wave ("modulators"). Today only brightness can follow sound.
+- Link any slider to the sound, the beat, the song's energy or a slow wave ("modulators"). Today only
+  brightness can follow sound. Decided for the next round.
+- Saved patterns: an effect with its settings, or a whole look, kept for reuse in any show. Decided for the
+  next round, with the slider links.
 - Custom light shapes (a drawn line, a ring, a list of points) for virtual and real lights.
 - Turn a virtual light into a real one by pointing it at a device, keeping its place and effects.
 - Installers and a signed Windows build. Today the download is a zip of two programs.
@@ -66,24 +80,32 @@ minutes.
 
 Built:
 
-- Keys tied to scenes, effects, folders of effects, groups of lights, blackout, tap tempo and a hand-fired
-  beat. Assigned by pressing the key ("learn"). A switch key either flips on each press or acts only while
-  held. The first ten scenes take the number keys by themselves.
-- A Live view: the stage and a pad for every scene and key, usable by mouse and touch.
+- Pads tied to scenes, effects, folders of effects, groups of lights, blackout, tap tempo, a hand-fired beat,
+  next scene, previous scene and freeze. A pad may have a key, assigned by pressing it ("learn"), or none.
+- Three things a press can do: switch on each press, act only while held, or fire the effect's reaction as if
+  a beat had hit. A scene's key can show the scene only while held. An effect can be set to ignore the music
+  and react only when fired.
+- A Live view: the stage and every pad, usable by mouse and touch. Pads are set up in place: key, behaviour,
+  order, removal, and adding a pad for anything that has none.
+- Ready-made pads (white flash, strobe, colour pulse) in a pinned folder that scene changes leave alone.
+- Faders for the speed of everything and for sound sensitivity.
 - Tap tempo, which replaces the tempo found in the music until told to follow the music again.
 - Scene changes at once, on the next beat or on every fourth beat, with an optional fade.
+- Autopilot: the next scene every 2, 4, 8 or 16 bars and at once on a change of section, in order or
+  shuffled. A scene can be left out. Pressing a scene restarts the count.
 - A key held by a window that closes or loses focus is let go.
 - Master dimmer, blackout, palettes, layers with blend modes (from stage 1).
 
 Left:
 
 - MIDI controllers, with the same "learn" as keys. The engine will listen for MIDI itself, so it works in the
-  app window on Linux, where the web view has no MIDI.
-- A grid of clips: today a key switches an effect that is already in the stack. Clips that start from their
-  beginning when launched, and one-shot clips that end by themselves, are not built.
-- Holding a key for a scene (show it while held, return on release).
-- Knobs and faders: a key can switch things but nothing continuous can be mapped yet.
-- A strobe limit and a photosensitivity warning before flashing is this easy to do on real lights.
+  app window on Linux, where the web view has no MIDI. Waiting until someone has a controller to test with.
+- A grid of clips: today a pad switches or fires an effect that is already in the stack. Clips that start from
+  their beginning when launched, and one-shot clips that end by themselves, are not built.
+- Knobs: the two faders are fixed. Nothing else continuous can be mapped yet.
+- Pad pages (banks), and an XY pad to bend two settings at once.
+- Autopilot that picks calm scenes for quiet sections and wild ones for drops.
+- A scene to fall back to when the music stops.
 - Seeing which key does what on one printable page.
 
 Done when a full song can be performed from the keyboard without touching the mouse.
@@ -126,15 +148,17 @@ Done when a three-minute show can be recorded live, cleaned up in the editor and
 | Name | Decided 2026-11-10: darkRGB | The first name, OpenLightShow, clashed with an existing Python app of the same name and kind ([digidigital/openlightshow](https://github.com/digidigital/openlightshow), on PyPI as `openlightshow`). For darkRGB no GitHub repo, user or organisation of that name was found, `darkrgb` was free on crates.io, npm and PyPI, and web searches found no product called that. This is not a trademark search. Names ending in "RGB" usually mean PC keyboard and fan lighting, so some people will assume that first. |
 | Linux shell | Tauri (WebKitGTK) or Electron | Tauri is built and works. Electron only if the preview proves too slow on real hardware. |
 | Phone remote | Password or pairing code for `--lan` | Needed before recommending `--lan`. Today anyone on the network can control the lights. The Live view's pads already work by touch. |
-| Where settings live | In the show file, or per computer | Today the brightness ceiling, frame rate and speaker delay are saved in the show. When there is more than one show, the ones that describe the room and the computer should move out of it. |
+| Where settings live | Decided 2026-11-11: per computer | The flash limit, frame rate, sound source, sensitivity, speaker delay, energy setting and brightness ceiling describe the room and the computer. They are still written into each show file, but opening, starting or importing a show keeps the ones in use, so a show file never changes them. |
+| Flash limit default | Decided 2026-11-11: on, "hard flashes" level | Counts a flash when the average brightness of the whole picture jumps by a quarter of full or more, and allows three a second. The stricter level counts a jump of a tenth, the threshold used for screens; at that level it softened most beat-driven looks, so it is offered as a choice and is not the default. One switch turns the limit off. |
 | Windows code signing | Sign or ship unsigned | Unsigned installers trigger SmartScreen warnings; certificates cost money. Ship unsigned until there are users. |
 
 ## Things to keep in mind
 
 - **Scope:** this is three products in one. Each milestone must be usable on its own, and the effect list stays
   short until the engine is solid.
-- **Safety:** limit strobe rate and show a photosensitivity warning. Cap brightness or power per device so a
-  mistake cannot overload a power supply.
+- **Safety:** the flash limit and a one-time note about photosensitivity are built. The limit looks at the
+  whole picture, so one small light flashing fast among many steady ones is not held back. Still to do: cap
+  brightness or power per device so a mistake cannot overload a power supply.
 - **Network exposure:** the engine listens on localhost only by default. The first run on Windows triggers a
   firewall prompt for device discovery; explain it in the app.
 - **Latency:** show the measured audio-to-light delay and give a per-device offset.

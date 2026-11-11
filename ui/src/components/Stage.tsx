@@ -535,96 +535,100 @@ export function Stage() {
         <p className="stage-banner">Blackout is on. The lights are off.</p>
       )}
 
-      <div className="stage-tools" onPointerDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-        {chosen.length > 0 && (
-          <div className="tool-group">
-            <span className="tool-label">{single ? single.name : `${chosen.length} lights`}</span>
-            <button type="button" className="tool" title="Turn a quarter turn" onClick={turnQuarter}>
-              <RotateCw size={15} /> Turn
-            </button>
-            {single && <AngleField fixture={single} />}
-            {single?.shape.type === "strip" && (
+      {/* One row along the bottom. When it gets too narrow for both, the
+          numbers move up a line; nothing covers anything else. */}
+      <div className="stage-foot">
+        <div className="stage-tools" onPointerDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+          {chosen.length > 0 && (
+            <div className="tool-group">
+              <span className="tool-label">{single ? single.name : `${chosen.length} lights`}</span>
+              <button type="button" className="tool" title="Turn a quarter turn" onClick={turnQuarter}>
+                <RotateCw size={15} /> Turn
+              </button>
+              {single && <AngleField fixture={single} />}
+              {single?.shape.type === "strip" && (
+                <button
+                  type="button"
+                  className={`tool ${single.shape.reverse ? "active" : ""}`}
+                  title="Swap which end the strip starts from"
+                  aria-pressed={single.shape.reverse}
+                  onClick={() =>
+                    engine.send({
+                      type: "update_fixture",
+                      id: single.id,
+                      reverse: single.shape.type === "strip" ? !single.shape.reverse : false,
+                    })
+                  }
+                >
+                  <ArrowLeftRight size={15} /> Reverse
+                </button>
+              )}
               <button
                 type="button"
-                className={`tool ${single.shape.reverse ? "active" : ""}`}
-                title="Swap which end the strip starts from"
-                aria-pressed={single.shape.reverse}
-                onClick={() =>
-                  engine.send({
-                    type: "update_fixture",
-                    id: single.id,
-                    reverse: single.shape.type === "strip" ? !single.shape.reverse : false,
-                  })
-                }
+                className="tool"
+                title="Make a group of what is picked. Effects can play on a group, and it dims as one."
+                onClick={groupPicked}
               >
-                <ArrowLeftRight size={15} /> Reverse
+                <FolderPlus size={15} /> Group
               </button>
-            )}
+            </div>
+          )}
+          {fixtures.length > 1 && (
+            <button
+              type="button"
+              className={`tool ${boxTool ? "active" : ""}`}
+              aria-pressed={boxTool}
+              title="Pick several lights by dragging a box around them. Shift and drag does the same."
+              onClick={() => setBoxTool(!boxTool)}
+            >
+              <BoxSelect size={15} /> Select
+            </button>
+          )}
+          {fixtures.length > 0 && (
             <button
               type="button"
               className="tool"
-              title="Make a group of what is picked. Effects can play on a group, and it dims as one."
-              onClick={groupPicked}
+              title="Show all lights"
+              onClick={() => {
+                userView.current = false;
+                setView(fitView(shown, size.width, size.height));
+              }}
             >
-              <FolderPlus size={15} /> Group
+              <Maximize size={15} /> Fit
             </button>
-          </div>
-        )}
-        {fixtures.length > 1 && (
-          <button
-            type="button"
-            className={`tool ${boxTool ? "active" : ""}`}
-            aria-pressed={boxTool}
-            title="Pick several lights by dragging a box around them. Shift and drag does the same."
-            onClick={() => setBoxTool(!boxTool)}
-          >
-            <BoxSelect size={15} /> Select
-          </button>
-        )}
-        {fixtures.length > 0 && (
-          <button
-            type="button"
-            className="tool"
-            title="Show all lights"
-            onClick={() => {
-              userView.current = false;
-              setView(fitView(shown, size.width, size.height));
-            }}
-          >
-            <Maximize size={15} /> Fit
-          </button>
-        )}
-      </div>
+          )}
+        </div>
 
-      {fixtures.length > 0 && (
-        <p className="stage-stats">
-          {show && show.output.flash_limit === 0 ? (
-            <button
-              type="button"
-              className="stage-flag off"
-              title="Fast flashing is not being softened. Click for the setting."
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => settingsPage.set("lights")}
-            >
-              <ZapOff size={12} /> Flash limit off
-            </button>
-          ) : (
-            status?.render.flash_limited && (
+        {fixtures.length > 0 && (
+          <p className="stage-stats">
+            {show && show.output.flash_limit === 0 ? (
               <button
                 type="button"
-                className="stage-flag"
-                title="Something is flashing faster than the limit allows, so it is being softened. Click for the setting."
+                className="stage-flag off"
+                title="Fast flashing is not being softened. Click for the setting."
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => settingsPage.set("lights")}
               >
-                <ShieldCheck size={12} /> Flash limit is softening this
+                <ZapOff size={12} /> Flash limit off
               </button>
-            )
-          )}
-          {pixels.toLocaleString()} LEDs
-          {status ? ` · ${Math.round(status.render.fps)} frames per second` : ""}
-        </p>
-      )}
+            ) : (
+              status?.render.flash_limited && (
+                <button
+                  type="button"
+                  className="stage-flag"
+                  title="Something is flashing faster than the limit allows, so it is being softened. Click for the setting."
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => settingsPage.set("lights")}
+                >
+                  <ShieldCheck size={12} /> Flash limit is softening this
+                </button>
+              )
+            )}
+            {pixels.toLocaleString()} LEDs
+            {status ? ` · ${Math.round(status.render.fps)} frames per second` : ""}
+          </p>
+        )}
+      </div>
     </section>
   );
 }

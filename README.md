@@ -10,41 +10,58 @@ between them:
 It targets ESP32 controllers running [WLED](https://kno.wled.ge/) first, then generic sACN and Art-Net pixel
 controllers.
 
-![darkRGB: lights in a group, effects in a folder, keys on scenes and effects](docs/images/main.png)
+![darkRGB: two strips picked on the stage, starter scenes with number keys, a pinned folder of live effects](docs/images/main.png)
 
 ## Status
 
-Version 0.3.0, in development. Audio-reactive mode works end to end. Live mode has its first working cut:
-keys, pads, tap tempo and scene changes on the beat. MIDI and the timeline are not started.
+Version 0.4.0, in development. Audio-reactive mode works end to end and now follows the shape of a song, not
+only its loudness. Live mode is playable from the keyboard or a touch screen. MIDI and the timeline are not
+started.
 
 | | Linux | Windows |
 |---|---|---|
-| Automated tests | pass | pass as of 0.2.0; 0.3.0 not yet built there |
+| Automated tests | pass | passed as of 0.2.0; nothing since has been built there |
 | System audio with no setup | works (PulseAudio and PipeWire, tested with virtual speakers) | works (checked on one Windows PC) |
-| The app window | works, keys included (tested under a virtual display) | builds as of 0.2.0; not yet run by anyone |
+| The app window | works, keys included (tested under a virtual display) | built as of 0.2.0; not yet run by anyone |
 | Real WLED hardware | not yet tried | not yet tried |
 
-The effects have only met synthetic test songs so far, so expect them to need tuning against real music. See
-[docs/roadmap.md](docs/roadmap.md) for the details.
+The effects, the song-energy tracking and the drop detection have only met synthetic test songs so far, so
+expect them to need tuning against real music. See [docs/roadmap.md](docs/roadmap.md) for the details.
+
+**Flashing lights.** Fast flashing can trigger seizures in people with photosensitive epilepsy. darkRGB softens
+hard flashes that come faster than three a second, on the lights and in the preview. The limit is on by
+default and one switch turns it off; with it off and other people in the room, that risk is yours to manage.
 
 What works today:
 
 - Opens as one window. Finds WLED devices on the network, adds them by address, or scans the network for them.
 - Demo lights and virtual lights that exist only on screen, for trying effects and planning layouts without
-  hardware.
+  hardware. One click on first run gives demo lights, seven starter scenes and autopilot.
 - Captures system audio with no setup and analyses it: loudness, 32 frequency bands, hits in bass, mids and
-  highs, tempo and beats.
-- Ten effects in layers. Each can play on all lights, chosen ones or a group, and react to everything, bass,
-  mids, highs or a frequency range you pick.
+  highs, tempo and beats, how big this part of the song is, and when the song moves to a new section.
+- Fifteen effects in layers. Each can play on all lights, chosen ones or a group, drawn across them or once
+  per light, and react to everything, bass, mids, highs or a frequency range you pick.
+- Quiet parts of a song are dimmer and calmer and drops hit harder; a setting says how much.
 - Folders for effects and groups for lights, each switched or dimmed as one.
-- A live preview where strips and matrices are arranged by dragging.
-- Scenes, master brightness and blackout. The show saves itself; copies can be saved and opened.
-- Keys for scenes, effects, folders, groups, blackout, tap tempo and a hand-fired beat. Number keys switch
-  scenes with no setup.
-- A Live view with pads for all of it, usable by touch.
+- A live preview where strips and matrices are arranged by dragging. Pick one light or several, move and turn
+  them together, or type an angle.
+- Scenes, master brightness and blackout. Autopilot changes scene every few bars and when the song changes.
+- Pads and keys for scenes, effects, folders, groups, blackout, tap tempo, a hand-fired beat, next and previous
+  scene, and freeze. A key can switch its thing, act only while held, or fire the effect's reaction.
+- A Live view with all the pads, set up in place and usable by touch, with faders for speed and sensitivity.
+- A flash limit that softens fast hard flashes, on by default.
+- A list of your shows: open, new, copy, rename, delete. Every change saves itself.
 - Simple by default; an Advanced switch and a settings window hold the rest.
 
-![The Live view while a key is held to flash white](docs/images/live.png)
+![The Live view while the white flash pad is held](docs/images/live.png)
+
+Setting up the pads in the Live view, the list of shows, and the seven starter scenes (three moments of each):
+
+![Customizing a pad: its key, what a press does, its place](docs/images/live-customize.png)
+
+![The list of shows](docs/images/library.png)
+
+![The starter scenes](docs/images/looks.png)
 
 ## Try it
 
