@@ -671,11 +671,7 @@ fn the_frame_rate_can_be_lowered() {
     let (engine, sim) = engine_with_strip();
     engine
         .shared
-        .execute(&Command::SetOutput {
-            frame_rate: Some(30),
-            flash_limit: None,
-            flash_strict: None,
-        })
+        .execute(&Command::SetOutput { frame_rate: Some(30) })
         .unwrap();
     wait_for("the stream to start", || sim.stats().frames > 5);
     std::thread::sleep(Duration::from_millis(200));
@@ -800,11 +796,7 @@ fn a_hundred_and_twenty_frames_a_second_reach_the_device() {
     let (engine, sim) = engine_with_strip();
     engine
         .shared
-        .execute(&Command::SetOutput {
-            frame_rate: Some(120),
-            flash_limit: None,
-            flash_strict: None,
-        })
+        .execute(&Command::SetOutput { frame_rate: Some(120) })
         .unwrap();
     wait_for("the stream to start", || sim.stats().frames > 5);
     std::thread::sleep(Duration::from_millis(200));
@@ -832,7 +824,7 @@ fn flashes_seen(sim: &Sim, seconds: f32) -> usize {
 }
 
 #[test]
-fn a_strobe_is_limited_at_the_device_and_the_limit_can_be_switched_off() {
+fn a_strobe_keeps_to_the_limit_by_itself_and_runs_free_with_it_off() {
     let (engine, sim) = engine_with_strip();
     let shared = &engine.shared;
     let layer = shared.show.lock().unwrap().layers[0].id;
@@ -856,22 +848,24 @@ fn a_strobe_is_limited_at_the_device_and_the_limit_can_be_switched_off() {
         .unwrap();
     wait_for("frames", || sim.stats().frames > 30);
 
-    // Limited to three a second by default: about nine in three seconds.
+    // With the limit on, the strobe slows itself to just under three a
+    // second: about eight in three seconds, all of them whole.
+    std::thread::sleep(Duration::from_millis(1200));
     let limited = flashes_seen(&sim, 3.0);
     assert!(
-        (6..=10).contains(&limited),
+        (6..=9).contains(&limited),
         "{limited} flashes in three seconds with the limit on"
     );
-    wait_for("the limit to be reported", || {
-        engine.shared.stats.lock().unwrap().flash_limited
-    });
+    // The limit has nothing left to soften.
+    std::thread::sleep(Duration::from_millis(1100));
+    assert!(!engine.shared.stats.lock().unwrap().flash_limited);
 
     // One command switches it off, and the strobe runs at its own rate.
     shared
-        .execute(&Command::SetOutput {
-            frame_rate: None,
-            flash_limit: Some(0.0),
-            flash_strict: None,
+        .execute(&Command::SetFlash {
+            limit: Some(0.0),
+            strict: None,
+            decided: None,
         })
         .unwrap();
     std::thread::sleep(Duration::from_millis(300));
@@ -880,9 +874,85 @@ fn a_strobe_is_limited_at_the_device_and_the_limit_can_be_switched_off() {
         (26..=32).contains(&free),
         "{free} flashes in three seconds with the limit off"
     );
-    wait_for("the report to clear", || {
-        !engine.shared.stats.lock().unwrap().flash_limited
+    assert!(
+        shared.show.lock().unwrap().flash.decided,
+        "switching it off is a choice"
+    );
+}
+
+#[test]
+fn flashing_that_no_effect_announced_is_still_limited_at_the_device() {
+    // A white layer switched on and off by hand, ten times a second: no
+    // effect here says "I flash", so only the limit on the finished
+    // picture can catch it.
+    let (engine, sim) = engine_with_strip();
+    let shared = engine.shared.clone();
+    let layer = shared.show.lock().unwrap().layers[0].id;
+    shared
+        .execute(&Command::UpdateLayer {
+            id: layer,
+            effect: Some("solid".into()),
+            opacity: None,
+            blend: None,
+            enabled: None,
+            targets: None,
+            each: None,
+        })
+        .unwrap();
+    shared
+        .execute(&Command::SetParam {
+            layer,
+            param: "colour".into(),
+            value: ParamValue::Text("#ffffff".into()),
+        })
+        .unwrap();
+    wait_for("frames", || sim.stats().frames > 30);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let flicker = {
+        let (shared, stop) = (shared.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let mut on = false;
+            while !stop.load(Ordering::Relaxed) {
+                on = !on;
+                let _ = shared.execute(&Command::UpdateLayer {
+                    id: layer,
+                    effect: None,
+                    opacity: None,
+                    blend: None,
+                    enabled: Some(on),
+                    targets: None,
+                    each: None,
+                });
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        })
+    };
+    let limited = flashes_seen(&sim, 3.0);
+    assert!(
+        (5..=10).contains(&limited),
+        "{limited} flashes in three seconds with the limit on"
+    );
+    wait_for("the limit to be reported", || {
+        engine.shared.stats.lock().unwrap().flash_limited
     });
+
+    // With the limit off, all ten a second get through.
+    shared
+        .execute(&Command::SetFlash {
+            limit: Some(0.0),
+            strict: None,
+            decided: None,
+        })
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let free = flashes_seen(&sim, 3.0);
+    stop.store(true, Ordering::Relaxed);
+    flicker.join().unwrap();
+    assert!(
+        (24..=32).contains(&free),
+        "{free} flashes in three seconds with the limit off"
+    );
 }
 
 #[test]

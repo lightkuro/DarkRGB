@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use crate::color::{Palette, Rgb, palette};
 use crate::effect::{
-    AMBIENT, Effect, EffectDef, EffectInfo, FOLLOWS_SOUND, FrameCtx, HITS_AND_BEATS, HitWatch, hash2, noise2,
+    AMBIENT, Effect, EffectDef, EffectInfo, FOLLOWS_SOUND, FlashUse, FrameCtx, HITS_AND_BEATS, HitWatch, hash2, noise2,
     smoothstep,
 };
 use crate::params::{ParamReader, ParamSpec};
@@ -61,6 +61,7 @@ impl Plasma {
                 description: "Slow drifting colour that brightens and speeds up with the music.",
                 category: AMBIENT,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("speed", "Speed", 0.0, 2.0, 0.5),
@@ -128,6 +129,7 @@ impl Spectrum {
                 description: "Bass on one side, treble on the other. Bars on a matrix, brightness on a strip.",
                 category: FOLLOWS_SOUND,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "rainbow"),
                     ParamSpec::bool("mirror", "Mirror from centre", false).advanced(),
@@ -182,6 +184,7 @@ impl Energy {
                 description: "Three colours grow from the centre: one each for bass, mids and treble.",
                 category: FOLLOWS_SOUND,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::color("low", "Bass colour", "#ff2a2a"),
                     ParamSpec::color("mid", "Mid colour", "#22ff66"),
@@ -246,6 +249,7 @@ impl BeatPulse {
                 description: "Flashes a new colour on every beat, then fades.",
                 category: HITS_AND_BEATS,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "candy"),
                     ParamSpec::float("decay", "Fade time (s)", 0.05, 1.5, 0.35),
@@ -340,6 +344,7 @@ impl Sweep {
                 description: "Each beat sends a bar of light across the lights.",
                 category: HITS_AND_BEATS,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("time", "Crossing time (s)", 0.1, 2.0, 0.45),
@@ -460,6 +465,7 @@ impl Chase {
                 description: "Blocks of colour that step along in time with the beat.",
                 category: HITS_AND_BEATS,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "candy"),
                     ParamSpec::float("blocks", "Blocks", 1.0, 12.0, 4.0),
@@ -557,6 +563,7 @@ impl Fire {
                 description: "Flames that leap with the bass. Along a strip, a bed of embers that flares.",
                 category: FOLLOWS_SOUND,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "fire"),
                     ParamSpec::float("height", "Height", 0.2, 1.0, 0.6),
@@ -649,6 +656,7 @@ impl Meteors {
                 description: "Streaks with fading tails, set off by hits. They fall on a matrix and run along a strip.",
                 category: HITS_AND_BEATS,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "ice"),
                     ParamSpec::float("speed", "Speed", 0.2, 3.0, 1.1),
@@ -759,9 +767,10 @@ impl Strobe {
             info: EffectInfo {
                 id: "strobe",
                 name: "Strobe",
-                description: "Hard flashes at a steady rate, or in time with the music. The flash limit applies.",
+                description: "Hard flashes at a steady rate, or in time with the music.",
                 category: HITS_AND_BEATS,
                 audio: true,
+                flash: FlashUse::Capped,
                 params: vec![
                     ParamSpec::color("colour", "Colour", "#ffffff"),
                     ParamSpec::float("rate", "Flashes per second", 1.0, 20.0, 6.0),
@@ -796,13 +805,19 @@ impl Effect for Strobe {
     }
 
     fn update(&mut self, ctx: &FrameCtx) {
-        let per_beat = Self::PER_BEAT[self.sync.min(3)];
+        let mut per_beat = Self::PER_BEAT[self.sync.min(3)];
         if per_beat > 0.0 && ctx.audio.bpm > 0.0 {
+            // Under a flash limit, flash on every second or fourth beat
+            // rather than faster than allowed: still in time, still crisp.
+            let beats_a_second = ctx.audio.bpm / 60.0;
+            while per_beat * beats_a_second > ctx.flash_cap && per_beat > 1.0 / 16.0 {
+                per_beat /= 2.0;
+            }
             // Locked to the beat: a flash starts exactly on it.
             self.phase = (ctx.beats * per_beat as f64).fract() as f32;
         } else {
             // With no tempo to lock to, the steady rate stands in.
-            self.phase = (self.phase + ctx.dt * self.rate).fract();
+            self.phase = (self.phase + ctx.dt * self.rate.min(ctx.flash_cap)).fract();
         }
         self.lit = self.phase < self.on_time;
     }
@@ -837,6 +852,7 @@ impl Scroll {
                 description: "The sound's colour is fed in at one point and travels along the lights.",
                 category: FOLLOWS_SOUND,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::color("low", "Bass colour", "#ff3d2e"),
                     ParamSpec::color("mid", "Mid colour", "#2eff8a"),
@@ -932,6 +948,7 @@ impl Ripple {
                 description: "Each beat sends a ring of colour out from the centre.",
                 category: HITS_AND_BEATS,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "ocean"),
                     ParamSpec::float("speed", "Speed", 0.2, 3.0, 1.0),
@@ -1028,6 +1045,7 @@ impl Sparkle {
                 description: "Random twinkles. More of them when the sound is busy.",
                 category: HITS_AND_BEATS,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::color("colour", "Colour", "#ffffff"),
                     ParamSpec::float("density", "Amount", 0.0, 1.0, 0.25),
@@ -1096,6 +1114,7 @@ impl Meter {
                 description: "A bar that grows with loudness, with a marker that hangs at the peak.",
                 category: FOLLOWS_SOUND,
                 audio: true,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "fire"),
                     ParamSpec::bool("hold", "Peak marker", true).advanced(),
@@ -1157,6 +1176,7 @@ impl Flow {
                 description: "A gradient that slides across the lights. Does not react to sound.",
                 category: AMBIENT,
                 audio: false,
+                flash: FlashUse::None,
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "rainbow"),
                     ParamSpec::float("speed", "Speed", -2.0, 2.0, 0.2),
@@ -1213,6 +1233,7 @@ impl Solid {
                 description: "One colour everywhere.",
                 category: AMBIENT,
                 audio: false,
+                flash: FlashUse::None,
                 params: vec![ParamSpec::color("colour", "Colour", "#ff7a18")],
             },
             make: || Box::new(Solid { colour: Rgb::WHITE }),
@@ -1244,6 +1265,7 @@ mod tests {
             beats: audio.beat_count as f64 + audio.beat_phase as f64,
             aspect: if flat { 1.0 } else { 2.0 },
             flat,
+            flash_cap: f32::INFINITY,
         }
     }
 
@@ -1394,13 +1416,16 @@ mod tests {
     fn strobe_flashes_at_its_rate_or_on_the_beat() {
         use crate::params::ParamValue;
         let def = find("strobe").unwrap();
+        // The most flashes a second the show allows; none to begin with.
+        let cap = std::cell::Cell::new(f32::INFINITY);
         // Counts dark-to-lit changes over `seconds` of frames.
         let flashes = |params: &Params, audio_at: &dyn Fn(f64) -> AudioFeatures, seconds: f64| {
             let mut fx = (def.make)();
             fx.configure(&ParamReader::new(&def.info.params, params));
             let (mut count, mut was_lit) = (0, false);
             for frame in 0..(seconds * 60.0) as usize {
-                let c = ctx(frame as f64 / 60.0, audio_at(frame as f64 / 60.0), true);
+                let mut c = ctx(frame as f64 / 60.0, audio_at(frame as f64 / 60.0), true);
+                c.flash_cap = cap.get();
                 fx.update(&c);
                 let lit = fx.shade(0.5, 0.5, &c).r > 0.5;
                 if lit && !was_lit {
@@ -1429,6 +1454,24 @@ mod tests {
         // With no tempo found, it falls back to the steady rate.
         let fallback = flashes(&synced, &silent, 5.0);
         assert!((29..=31).contains(&fallback), "{fallback}");
+
+        // Under a flash limit of three a second (a cap of 2.7) the strobe
+        // slows itself: evenly spaced, never over the limit.
+        cap.set(2.7);
+        let capped = flashes(&Params::new(), &silent, 10.0);
+        assert!(
+            (26..=28).contains(&capped),
+            "{capped} flashes in ten seconds under the cap"
+        );
+        // In time with the music it drops to one per beat (two a second),
+        // not to something out of time.
+        let capped_on_beat = flashes(&synced, &music, 5.0);
+        assert!((9..=11).contains(&capped_on_beat), "{capped_on_beat}");
+        // A slow strobe is not changed by the cap.
+        let mut slow = Params::new();
+        slow.insert("rate".into(), ParamValue::Number(2.0));
+        let untouched = flashes(&slow, &silent, 5.0);
+        assert!((9..=11).contains(&untouched), "{untouched}");
     }
     /// The brightest pixel along a strip, and where it is.
     fn peak_along(fx: &dyn Effect, c: &FrameCtx) -> (f32, f32) {

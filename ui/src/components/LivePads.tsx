@@ -25,7 +25,6 @@ import {
 import { useCallback, useState, type ReactNode } from "react";
 import {
   engine,
-  flashNotice,
   perFrame,
   sameAction,
   settingsPage,
@@ -275,7 +274,6 @@ function AddPad({ show, hello, onAdded }: { show: Show; hello: Hello; onAdded: (
   const quick = (kind: "flash" | "strobe" | "pulse") => {
     setOpen(null);
     engine.send({ type: "add_quick_pad", kind });
-    if (kind !== "pulse") flashNotice();
   };
   return (
     <div className="add-pad" ref={ref}>
@@ -362,7 +360,7 @@ export function LivePads() {
     (BUILT_IN.some((a) => sameAction(a, selected)) ||
       (selected.type === "scene" && show.scenes.some((s) => s.id === selected.id)) ||
       pads.some((b) => sameAction(b.action, selected)));
-  const limited = show.output.flash_limit > 0;
+  const limited = show.flash.limit > 0;
 
   return (
     <section className={`pads ${customizing ? "customizing" : ""}`} aria-label="Live pads">
@@ -420,7 +418,7 @@ export function LivePads() {
             <Switch
               checked={limited}
               label="Limit flashing"
-              onChange={(on) => engine.send({ type: "set_output", flash_limit: on ? 3 : 0 })}
+              onChange={(on) => engine.send({ type: "set_flash", limit: on ? 3 : 0 })}
             />
           </div>
           {show.live.speed !== 1 && (

@@ -28,8 +28,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   advancedPref,
   engine,
-  flashNotice,
   perFrame,
+  settingsPage,
   toggleFolded,
   useAdvanced,
   useFolded,
@@ -582,7 +582,6 @@ function LayerBody({
           onPick={(id) => {
             setPicking(false);
             if (id !== layer.effect) engine.send({ type: "update_layer", id: layer.id, effect: id });
-            if (id === "strobe") flashNotice();
           }}
         />
         <button type="button" className="text-button" onClick={() => setPicking(false)}>
@@ -602,6 +601,16 @@ function LayerBody({
         <span className="effect-choice-change">Change</span>
       </button>
       {!effect && <p className="callout error">This effect is not available in this version.</p>}
+      {effect && effect.flash !== "none" && show.flash.limit > 0 && (
+        <p className="callout note flash-note">
+          {effect.flash === "needed"
+            ? "This effect only works flashing fast, so it is off while this show's flash limit is on."
+            : `This show's flash limit holds it to ${show.flash.limit} flashes a second.`}{" "}
+          <button type="button" className="text-button" onClick={() => settingsPage.set("lights")}>
+            Flash limit…
+          </button>
+        </p>
+      )}
 
       {basic.map((spec) => (
         <ParamControl key={spec.id} layer={layer} spec={spec} />
@@ -722,6 +731,8 @@ function LayerBody({
 /** What a collapsed row says about its layer, beyond the name. */
 function summary(layer: Layer, show: Show, hello: Hello): string[] {
   const parts: string[] = [];
+  const flash = hello.effects.find((e) => e.id === layer.effect)?.flash;
+  if (flash === "needed" && show.flash.limit > 0) parts.push("off: flash limit");
   if (layer.sound.manual) parts.push("when fired");
   else if (layer.sound.band.type !== "all") parts.push(bandName(layer.sound.band, hello));
   if (layer.targets.length === 1) {
@@ -1100,7 +1111,6 @@ export function LayerPanel() {
             onPick={(effect) => {
               setAdding(null);
               engine.send({ type: "add_layer", effect, group: addingTo?.id ?? null });
-              if (effect === "strobe") flashNotice();
             }}
           />
           <button type="button" className="text-button" onClick={() => setAdding(null)}>

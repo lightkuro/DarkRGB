@@ -247,11 +247,19 @@ pub enum Command {
     },
     SetOutput {
         frame_rate: Option<u32>,
+    },
+    /// How this show treats fast flashing.
+    SetFlash {
         /// Most flashes a second; 0 switches the limit off.
-        flash_limit: Option<f32>,
+        #[serde(default)]
+        limit: Option<f32>,
         /// Count small changes as flashes too, as guidance for screens does.
         #[serde(default)]
-        flash_strict: Option<bool>,
+        strict: Option<bool>,
+        /// Whether the maker of the show has been asked and has chosen.
+        /// Left out, any change counts as a choice.
+        #[serde(default)]
+        decided: Option<bool>,
     },
     RenameScene {
         id: u32,
@@ -1077,25 +1085,27 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
-        Command::SetOutput {
-            frame_rate,
-            flash_limit,
-            flash_strict,
-        } => {
-            let flash_limit = flash_limit.map(|l| finite(l, "The flash limit")).transpose()?;
+        Command::SetOutput { frame_rate } => {
             if let Some(rate) = frame_rate {
                 if !FRAME_RATES.contains(rate) {
                     return Err(format!("the frame rate can be one of {FRAME_RATES:?}"));
                 }
                 show.output.frame_rate = *rate;
             }
-            if let Some(limit) = flash_limit {
+            Ok(())
+        }
+
+        Command::SetFlash { limit, strict, decided } => {
+            let limit = limit.map(|l| finite(l, "The flash limit")).transpose()?;
+            if let Some(limit) = limit {
                 // Zero is off. Anything else is a whole number of flashes.
-                show.output.flash_limit = if limit < 1.0 { 0.0 } else { limit.round().min(30.0) };
+                show.flash.limit = if limit < 1.0 { 0.0 } else { limit.round().min(30.0) };
             }
-            if let Some(strict) = flash_strict {
-                show.output.flash_strict = *strict;
+            if let Some(strict) = strict {
+                show.flash.strict = *strict;
             }
+            // Touching the setting is a choice, unless the command says otherwise.
+            show.flash.decided = decided.unwrap_or(true);
             Ok(())
         }
 
@@ -1992,31 +2002,36 @@ mod tests {
             (show.live.launch, show.live.fade, show.live.speed),
             (Launch::Bar, 0.0, 4.0)
         );
-        let output = |show: &mut Show, frame_rate, flash_limit| {
-            apply(
-                show,
-                &Command::SetOutput {
-                    frame_rate,
-                    flash_limit,
-                    flash_strict: None,
-                },
-            )
-        };
-        assert!(output(&mut show, Some(1000), None).is_err());
-        assert!(output(&mut show, Some(0), None).is_err());
-        output(&mut show, Some(40), None).unwrap();
-        output(&mut show, Some(120), None).unwrap();
+        let output = |show: &mut Show, frame_rate| apply(show, &Command::SetOutput { frame_rate });
+        assert!(output(&mut show, Some(1000)).is_err());
+        assert!(output(&mut show, Some(0)).is_err());
+        output(&mut show, Some(40)).unwrap();
+        output(&mut show, Some(120)).unwrap();
         assert_eq!(show.output.frame_rate, 120);
-        // The flash limit: three by default, zero is off, never a fraction or absurd.
-        assert_eq!(show.output.flash_limit, 3.0);
-        output(&mut show, None, Some(0.4)).unwrap();
-        assert_eq!(show.output.flash_limit, 0.0);
-        output(&mut show, None, Some(4.4)).unwrap();
-        assert_eq!(show.output.flash_limit, 4.0);
-        output(&mut show, None, Some(1e9)).unwrap();
-        assert_eq!(show.output.flash_limit, 30.0);
-        assert!(output(&mut show, None, Some(f32::NAN)).is_err());
-        assert_eq!((show.output.frame_rate, show.output.flash_limit), (120, 30.0));
+        // The flash limit: on at three and not yet chosen to begin with;
+        // zero is off; never a fraction or absurd.
+        let flash =
+            |show: &mut Show, limit, strict, decided| apply(show, &Command::SetFlash { limit, strict, decided });
+        assert_eq!((show.flash.limit, show.flash.decided), (3.0, false));
+        assert!(show.flash.on() && show.flash.cap() < 3.0);
+        flash(&mut show, Some(0.4), None, None).unwrap();
+        assert_eq!(
+            (show.flash.limit, show.flash.decided),
+            (0.0, true),
+            "a change is a choice"
+        );
+        assert!(!show.flash.on() && show.flash.cap().is_infinite());
+        flash(&mut show, Some(4.4), None, None).unwrap();
+        assert_eq!(show.flash.limit, 4.0);
+        flash(&mut show, Some(1e9), None, None).unwrap();
+        assert_eq!(show.flash.limit, 30.0);
+        assert!(flash(&mut show, Some(f32::NAN), None, None).is_err());
+        flash(&mut show, None, Some(true), Some(false)).unwrap();
+        assert_eq!(
+            (show.flash.limit, show.flash.strict, show.flash.decided),
+            (30.0, true, false)
+        );
+        assert_eq!(show.output.frame_rate, 120);
         // Commands that need the running app are refused here.
         assert!(apply(&mut show, &Command::Tap).is_err());
         assert!(apply(&mut show, &Command::Trigger { binding: 1, down: true }).is_err());
@@ -2136,7 +2151,7 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 42 {
+            let command = match r.next() % 43 {
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {
@@ -2243,8 +2258,11 @@ mod tests {
                 41 => Command::StartDemo,
                 33 => Command::SetOutput {
                     frame_rate: r.maybe(|r| [0, 30, 40, 60, 61, 120, u32::MAX][r.next() as usize % 7]),
-                    flash_limit: r.maybe(Awkward::number),
-                    flash_strict: r.maybe(Awkward::flag),
+                },
+                42 => Command::SetFlash {
+                    limit: r.maybe(Awkward::number),
+                    strict: r.maybe(Awkward::flag),
+                    decided: r.maybe(Awkward::flag),
                 },
                 34 => Command::RenameScene {
                     id: scene,

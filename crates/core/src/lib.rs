@@ -16,8 +16,11 @@ pub mod show;
 
 pub use audio::{AudioFeatures, BANDS, Band};
 pub use color::{Palette, Rgb};
-pub use effect::{Effect, EffectInfo, FrameCtx};
+pub use effect::{Effect, EffectInfo, FlashUse, FrameCtx};
 pub use layout::{Device, DeviceKind, Fixture, Shape};
 pub use params::{ParamKind, ParamSpec, ParamValue, Params};
 pub use render::{Cues, LayerHit, Renderer};
-pub use show::{Action, Autopilot, Binding, Blend, KeyMode, Launch, Layer, LayerGroup, LightGroup, Scene, Show, Sound};
+pub use show::{
+    Action, Autopilot, Binding, Blend, FlashSettings, KeyMode, Launch, Layer, LayerGroup, LightGroup, Scene, Show,
+    Sound,
+};

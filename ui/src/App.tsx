@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect } from "react";
 import { DevicePanel } from "./components/DevicePanel";
+import { FlashPrompt } from "./components/FlashPrompt";
 import { LayerPanel } from "./components/LayerPanel";
 import { Library } from "./components/Library";
 import { LivePads } from "./components/LivePads";
@@ -62,6 +63,7 @@ export function App() {
       {view === "edit" && <ScenesBar />}
       <Settings />
       <Library />
+      <FlashPrompt />
       <Toasts />
       {!connected && (
         <div className="offline" role="alert">

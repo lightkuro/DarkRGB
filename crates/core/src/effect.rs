@@ -27,6 +27,10 @@ pub struct FrameCtx {
     /// True when the targets form a line (a single strip, say), so there is
     /// no second dimension to draw bars or rings in.
     pub flat: bool,
+    /// The most flashes a second this effect may make by itself while the
+    /// show's flash limit is on. Infinite when there is no limit. Only
+    /// effects whose job is to flash need to look at it.
+    pub flash_cap: f32,
 }
 
 impl FrameCtx {
@@ -67,7 +71,26 @@ pub struct EffectInfo {
     pub category: &'static str,
     /// True when the effect does something with sound.
     pub audio: bool,
+    /// What the effect has to do with fast flashing.
+    pub flash: FlashUse,
     pub params: Vec<ParamSpec>,
+}
+
+/// How an effect relates to the show's flash limit. The limit softens
+/// whatever flashes too fast, whichever effect made it; this says what an
+/// effect does about that itself, so nothing has to be designed around
+/// the limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlashUse {
+    /// Does not set out to flash.
+    #[default]
+    None,
+    /// Flashes on purpose, and slows itself to the limit while it is on,
+    /// so its flashes stay crisp and evenly spaced.
+    Capped,
+    /// Only makes sense flashing fast. Switched off while the limit is on.
+    Needed,
 }
 
 /// Picker groups, in the order they are shown.

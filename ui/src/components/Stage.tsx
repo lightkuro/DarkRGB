@@ -601,7 +601,7 @@ export function Stage() {
 
         {fixtures.length > 0 && (
           <p className="stage-stats">
-            {show && show.output.flash_limit === 0 ? (
+            {show && show.flash.limit === 0 ? (
               <button
                 type="button"
                 className="stage-flag off"

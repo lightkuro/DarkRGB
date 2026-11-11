@@ -980,11 +980,12 @@ mod tests {
             .lock()
             .unwrap()
             .add_device(Device::wled("d", "127.0.0.1", 4048, 10), None);
-        // A setting that belongs to the computer, not to a show.
-        run(Command::SetOutput {
-            frame_rate: None,
-            flash_limit: Some(0.0),
-            flash_strict: None,
+        // A setting that belongs to the computer, and one that belongs to the show.
+        run(Command::SetOutput { frame_rate: Some(40) }).unwrap();
+        run(Command::SetFlash {
+            limit: Some(0.0),
+            strict: None,
+            decided: None,
         })
         .unwrap();
 
@@ -999,7 +1000,12 @@ mod tests {
         {
             let show = shared.show.lock().unwrap();
             assert_eq!((show.name.as_str(), show.devices.len()), ("Second", 0));
-            assert_eq!(show.output.flash_limit, 0.0, "this computer's settings came along");
+            assert_eq!(show.output.frame_rate, 40, "this computer's settings came along");
+            assert_eq!(
+                (show.flash.limit, show.flash.decided),
+                (3.0, false),
+                "the flash choice belongs to each show"
+            );
         }
         let (first, _) = load_show(&library.path_of("First.json").unwrap());
         assert_eq!(first.devices.len(), 1);
@@ -1020,12 +1026,7 @@ mod tests {
         shared.show.lock().unwrap().name = "Second".into();
 
         // Opening the first brings its lights back and keeps the computer's settings.
-        run(Command::SetOutput {
-            frame_rate: Some(30),
-            flash_limit: None,
-            flash_strict: None,
-        })
-        .unwrap();
+        run(Command::SetOutput { frame_rate: Some(30) }).unwrap();
         run(Command::OpenShow {
             file: "First.json".into(),
         })
@@ -1034,6 +1035,7 @@ mod tests {
             let show = shared.show.lock().unwrap();
             assert_eq!((show.name.as_str(), show.devices.len()), ("First", 1));
             assert_eq!(show.output.frame_rate, 30);
+            assert_eq!(show.flash.limit, 0.0, "and the first show's own flash choice is back");
         }
         assert_eq!(
             library.start().file_name().unwrap(),

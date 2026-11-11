@@ -126,7 +126,7 @@ function Lights({ show }: { show: Show }) {
     (sum, f) => sum + (f.shape.type === "strip" ? f.shape.count : f.shape.cols * f.shape.rows),
     0,
   );
-  const limited = show.output.flash_limit > 0;
+  const limited = show.flash.limit > 0;
   // Real lights that cannot refresh as often as the chosen frame rate.
   const slow = show.devices.filter((d) => d.kind === "wled" && ceiling(d.pixel_count) < show.output.frame_rate);
   return (
@@ -180,7 +180,7 @@ function Lights({ show }: { show: Show }) {
         hint={
           !limited
             ? "Off. Strobes and fast flashes run at full speed."
-            : show.output.flash_strict
+            : show.flash.strict
               ? "Strict: any change of a tenth of full brightness counts, at most three a second."
               : "At most three hard flashes a second. Faster ones are softened, on the lights and on this screen."
         }
@@ -188,7 +188,7 @@ function Lights({ show }: { show: Show }) {
         <Switch
           checked={limited}
           label="Limit flashing"
-          onChange={(on) => engine.send({ type: "set_output", flash_limit: on ? 3 : 0 })}
+          onChange={(on) => engine.send({ type: "set_flash", limit: on ? 3 : 0 })}
         />
       </Row>
       {limited && (
@@ -196,18 +196,18 @@ function Lights({ show }: { show: Show }) {
           <button
             type="button"
             role="radio"
-            aria-checked={!show.output.flash_strict}
-            className={show.output.flash_strict ? "" : "selected"}
-            onClick={() => engine.send({ type: "set_output", flash_strict: false })}
+            aria-checked={!show.flash.strict}
+            className={show.flash.strict ? "" : "selected"}
+            onClick={() => engine.send({ type: "set_flash", strict: false })}
           >
             Hard flashes
           </button>
           <button
             type="button"
             role="radio"
-            aria-checked={show.output.flash_strict}
-            className={show.output.flash_strict ? "selected" : ""}
-            onClick={() => engine.send({ type: "set_output", flash_strict: true })}
+            aria-checked={show.flash.strict}
+            className={show.flash.strict ? "selected" : ""}
+            onClick={() => engine.send({ type: "set_flash", strict: true })}
           >
             Strict
           </button>
@@ -217,7 +217,8 @@ function Lights({ show }: { show: Show }) {
         Flashing faster than about three times a second can trigger seizures in people with photosensitive
         epilepsy. "Hard flashes" stops strobes and anything that changes the whole picture by a quarter of full
         brightness or more. "Strict" is the limit used for screens, a tenth; it also flattens most effects that
-        follow fast music. Leave a limit on when anyone you do not know will see the lights.
+        follow fast music. This choice is kept with the show, so a club night and a display on the lawn can each
+        have their own. Leave a limit on when anyone you do not know will see the lights.
       </p>
       {status && (
         <p className="hint">

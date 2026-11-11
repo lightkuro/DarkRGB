@@ -28,6 +28,12 @@ export interface EffectInfo {
   /** The group it is listed under in the picker. */
   category: string;
   audio: boolean;
+  /**
+   * What it has to do with fast flashing. "capped": it flashes on purpose
+   * and slows itself to the show's flash limit. "needed": it only makes
+   * sense flashing fast, and is off while the limit is on.
+   */
+  flash: "none" | "capped" | "needed";
   params: ParamSpec[];
 }
 
@@ -215,10 +221,15 @@ export interface Show {
   };
   output: {
     frame_rate: number;
+  };
+  /** How this show treats fast flashing. */
+  flash: {
     /** Most flashes of the whole picture in a second; 0 means no limit. */
-    flash_limit: number;
+    limit: number;
     /** Count small changes as flashes too, as guidance for screens does. */
-    flash_strict: boolean;
+    strict: boolean;
+    /** False until whoever makes the show has chosen. */
+    decided: boolean;
   };
 }
 
@@ -380,7 +391,8 @@ export type Command =
       shuffle?: boolean;
       on_drops?: boolean;
     }
-  | { type: "set_output"; frame_rate?: number; flash_limit?: number; flash_strict?: boolean }
+  | { type: "set_output"; frame_rate?: number }
+  | { type: "set_flash"; limit?: number; strict?: boolean; decided?: boolean }
   | { type: "rename_scene"; id: number; name: string }
   | { type: "new_show"; name?: string; keep_lights: boolean }
   | { type: "open_show"; file: string }
@@ -672,23 +684,6 @@ export const useFolded = () => useSyncExternalStore(foldedPref.subscribe, folded
 export function toggleFolded(id: number): void {
   const folded = foldedPref.get();
   foldedPref.set(folded.includes(id) ? folded.filter((f) => f !== id) : [...folded, id]);
-}
-
-/** Whether the note about flashing lights has been shown on this device. */
-export const flashNoticePref = new Pref<boolean>("darkrgb.flashNotice", false);
-
-/**
- * Says once, the first time something that flashes is added, what the
- * flash limit is and where its switch lives.
- */
-export function flashNotice(): void {
-  if (flashNoticePref.get()) return;
-  flashNoticePref.set(true);
-  engine.toast(
-    "info",
-    "Flashing lights can trigger seizures in people with photosensitive epilepsy. Hard flashes faster than " +
-      "3 a second are softened. The switch for this is in Settings, under Lights.",
-  );
 }
 
 /**

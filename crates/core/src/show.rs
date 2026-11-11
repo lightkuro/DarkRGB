@@ -329,24 +329,62 @@ pub const DEFAULT_FLASH_LIMIT: f32 = 3.0;
 pub struct OutputSettings {
     /// Frames rendered and sent each second.
     pub frame_rate: u32,
+}
+
+impl Default for OutputSettings {
+    fn default() -> Self {
+        Self { frame_rate: 60 }
+    }
+}
+
+/// How a show treats fast flashing. It belongs to the show and not to the
+/// computer, because the answer depends on who will see the lights: a club
+/// night and a display on the front lawn want different things.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FlashSettings {
     /// Most flashes of the whole picture allowed in a second. Zero
     /// switches the limit off. See `safety.rs`.
     #[serde(default = "default_flash_limit")]
-    pub flash_limit: f32,
+    pub limit: f32,
     /// Count any change of a tenth of full brightness as a flash, as the
     /// guidance for screens does, instead of only hard flashes.
     #[serde(default)]
-    pub flash_strict: bool,
+    pub strict: bool,
+    /// False until whoever makes the show has chosen. Until then the limit
+    /// is on, and the UI asks the first time something flashes fast.
+    #[serde(default)]
+    pub decided: bool,
 }
 
-impl OutputSettings {
+impl FlashSettings {
+    /// With the limit switched off, for shows whose makers want strobes.
+    pub fn off() -> Self {
+        Self {
+            limit: 0.0,
+            strict: false,
+            decided: true,
+        }
+    }
+
+    pub fn on(&self) -> bool {
+        self.limit > 0.0
+    }
+
     /// The share of full brightness that counts as a flash.
-    pub fn flash_share(&self) -> f32 {
-        if self.flash_strict {
+    pub fn share(&self) -> f32 {
+        if self.strict {
             crate::safety::STRICT
         } else {
             crate::safety::STANDARD
         }
+    }
+
+    /// Flashes a second an effect may make by itself and still be let
+    /// through whole: a little under the limit, so that a steady strobe
+    /// never lands a fourth flash inside one second by a frame's jitter.
+    /// Infinite when there is no limit.
+    pub fn cap(&self) -> f32 {
+        if self.on() { self.limit * 0.9 } else { f32::INFINITY }
     }
 }
 
@@ -354,12 +392,12 @@ fn default_flash_limit() -> f32 {
     DEFAULT_FLASH_LIMIT
 }
 
-impl Default for OutputSettings {
+impl Default for FlashSettings {
     fn default() -> Self {
         Self {
-            frame_rate: 60,
-            flash_limit: DEFAULT_FLASH_LIMIT,
-            flash_strict: false,
+            limit: DEFAULT_FLASH_LIMIT,
+            strict: false,
+            decided: false,
         }
     }
 }
@@ -426,6 +464,8 @@ pub struct Show {
     pub live: LiveSettings,
     #[serde(default)]
     pub output: OutputSettings,
+    #[serde(default)]
+    pub flash: FlashSettings,
     /// Next id to hand out. Ids are never reused.
     #[serde(default = "first_id")]
     pub next_id: u32,
@@ -483,6 +523,7 @@ impl Default for Show {
             audio: AudioSettings::default(),
             live: LiveSettings::default(),
             output: OutputSettings::default(),
+            flash: FlashSettings::default(),
             next_id: 1,
         };
         show.add_layer(effects::DEFAULT_EFFECT);
@@ -1055,7 +1096,7 @@ impl Show {
             self.audio.dynamics,
             self.live.fade,
             self.live.speed,
-            self.output.flash_limit,
+            self.flash.limit,
         ];
         if numbers.iter().any(|n| !n.is_finite()) {
             return Err("a master setting is not a number".into());

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::audio::AudioFeatures;
 use crate::color::{OutputCurve, Rgb};
-use crate::effect::{Effect, FrameCtx};
+use crate::effect::{Effect, FlashUse, FrameCtx};
 use crate::effects;
 use crate::layout::{Fixture, Shape};
 use crate::params::ParamReader;
@@ -136,6 +136,11 @@ impl Renderer {
             let (Some(state), Some(def)) = (self.layers.get_mut(&layer.id), effects::find(&layer.effect)) else {
                 continue;
             };
+            // An effect that only makes sense flashing fast sits out while
+            // the show's flash limit is on.
+            if def.info.flash == FlashUse::Needed && show.flash.on() {
+                continue;
+            }
             // Each layer hears its own part of the sound, or none of it.
             let mut heard = if layer.sound.manual {
                 audio.silenced()
@@ -172,6 +177,7 @@ impl Renderer {
                 beats: heard.beat_count as f64 + heard.beat_phase.clamp(0.0, 1.0) as f64,
                 aspect: first.aspect,
                 flat: first.flat,
+                flash_cap: show.flash.cap(),
             };
             state
                 .effect
