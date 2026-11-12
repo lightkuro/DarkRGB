@@ -3,7 +3,7 @@ import { defineConfig } from "vite";
 
 // During development the UI runs on Vite's server and talks to an engine
 // started separately:
-//   cargo run -p ols-engine -- --no-open --dev-origin http://localhost:5173
+//   cargo run -p darkrgb-engine -- --no-open --dev-origin http://localhost:5173
 export default defineConfig({
   plugins: [react()],
   base: "./",

@@ -1,11 +1,17 @@
 import { X } from "lucide-react";
 import { useEffect } from "react";
 import { DevicePanel } from "./components/DevicePanel";
+import { FlashPrompt } from "./components/FlashPrompt";
 import { LayerPanel } from "./components/LayerPanel";
+import { Library } from "./components/Library";
+import { LivePads } from "./components/LivePads";
 import { ScenesBar } from "./components/ScenesBar";
+import { Settings } from "./components/Settings";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
-import { engine, useConnected, useShow, useStatus, useToasts } from "./engine";
+import { engine, useConnected, useNeedsCode, useShow, useStatus, useToasts, useView } from "./engine";
+import { PairScreen } from "./components/PairScreen";
+import { startKeys } from "./keys";
 
 function Toasts() {
   const toasts = useToasts();
@@ -25,9 +31,12 @@ function Toasts() {
 
 export function App() {
   const connected = useConnected();
+  const needsCode = useNeedsCode();
   const show = useShow();
   const status = useStatus();
+  const view = useView();
   useEffect(() => engine.connect(), []);
+  useEffect(() => startKeys(), []);
 
   return (
     <div className="app">
@@ -40,21 +49,33 @@ export function App() {
           </button>
         </div>
       )}
-      <main className="workspace">
-        <DevicePanel />
-        <Stage />
-        <LayerPanel />
-      </main>
-      <ScenesBar />
+      {view === "live" ? (
+        <main className="workspace live">
+          <Stage />
+          <LivePads />
+        </main>
+      ) : (
+        <main className="workspace">
+          <DevicePanel />
+          <Stage />
+          <LayerPanel />
+        </main>
+      )}
+      {/* In the live view the scenes are pads, so the bar would repeat them. */}
+      {view === "edit" && <ScenesBar />}
+      <Settings />
+      <Library />
+      <FlashPrompt />
       <Toasts />
-      {!connected && (
+      {needsCode && <PairScreen />}
+      {!connected && !needsCode && (
         <div className="offline" role="alert">
           <div>
             <h1>{show ? "Lost the connection to the engine" : "Connecting to the engine…"}</h1>
             <p>
               {show
                 ? "The lights keep whatever they last showed until it is back. Trying again every second."
-                : "If this stays here, the OpenLightShow program is not running."}
+                : "If this stays here, the darkRGB program is not running."}
             </p>
           </div>
         </div>

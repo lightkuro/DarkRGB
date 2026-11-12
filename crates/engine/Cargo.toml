@@ -1,0 +1,37 @@
+[package]
+name = "darkrgb-engine"
+description = "darkRGB engine and UI server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "darkrgb-cli"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+axum = { version = "0.8.9", features = ["ws"] }
+clap = { version = "4.6.7", features = ["derive"] }
+dirs = "7.0.0"
+env_logger = "0.11.11"
+futures-util = "0.3.34"
+log = "0.4.35"
+mime_guess = "2.0.5"
+darkrgb-audio = { path = "../audio" }
+darkrgb-core = { path = "../core" }
+darkrgb-output = { path = "../output" }
+open = "5.4.5"
+rust-embed = { version = "8.13.0", features = ["interpolate-folder-path"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+spin_sleep = "1.3.3"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
+midir = "0.11.1"
+getrandom = "0.3.4"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+darkrgb-sim = { path = "../sim" }
+tokio-tungstenite = "0.30.0"

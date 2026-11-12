@@ -13,6 +13,8 @@ interface SliderProps {
   format?: (value: number) => string;
   /** Hide the label and value, for sliders inside a row that names them. */
   bare?: boolean;
+  /** Something small to sit beside the value, such as a button. */
+  extra?: ReactNode;
 }
 
 /**
@@ -20,7 +22,7 @@ interface SliderProps {
  * handle follows the pointer exactly instead of waiting for the engine to
  * echo each change back.
  */
-export function Slider({ value, min, max, step = 0.01, label, onChange, format, bare }: SliderProps) {
+export function Slider({ value, min, max, step = 0.01, label, onChange, format, bare, extra }: SliderProps) {
   // The value the user last set, shown until the engine reports it back.
   // Dropping it the moment the pointer or key is released would snap the
   // handle to the engine's older value for a frame, and rapid key presses
@@ -56,6 +58,21 @@ export function Slider({ value, min, max, step = 0.01, label, onChange, format, 
     />
   );
   if (bare) return input;
+  if (extra) {
+    // Not a label: a button inside one would be part of the slider's name.
+    return (
+      <div className="field">
+        <span className="field-head">
+          <span>{label}</span>
+          <span className="field-extra">
+            {extra}
+            <output>{text}</output>
+          </span>
+        </span>
+        {input}
+      </div>
+    );
+  }
   return (
     <label className="field">
       <span className="field-head">
@@ -71,10 +88,12 @@ export function Switch({
   checked,
   onChange,
   label,
+  disabled,
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: string;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -83,6 +102,7 @@ export function Switch({
       aria-checked={checked}
       aria-label={label}
       title={label}
+      disabled={disabled}
       className={`switch ${checked ? "on" : ""}`}
       onClick={() => onChange(!checked)}
     >
@@ -174,4 +194,58 @@ export function useDismiss(open: boolean, close: () => void) {
     };
   }, [open, close]);
   return ref;
+}
+
+/**
+ * A text field for a name. It is saved when the field loses focus or
+ * Enter is pressed, and Escape puts the old name back.
+ */
+export function NameField({
+  value,
+  onCommit,
+  label = "Name",
+  placeholder,
+  autoSelect,
+  allowEmpty,
+}: {
+  value: string;
+  onCommit: (name: string) => void;
+  label?: string;
+  placeholder?: string;
+  /** Select the text when the field appears, ready to be typed over. */
+  autoSelect?: boolean;
+  allowEmpty?: boolean;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (autoSelect) inputRef.current?.select();
+    // Only when the field first appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const commit = () => {
+    const next = draft?.trim();
+    if (next !== undefined && next !== value && (next || allowEmpty)) onCommit(next);
+    setDraft(null);
+  };
+  return (
+    <label className="field">
+      <span className="field-head">
+        <span>{label}</span>
+      </span>
+      <input
+        ref={inputRef}
+        type="text"
+        maxLength={80}
+        placeholder={placeholder}
+        value={draft ?? value}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          if (e.key === "Escape") setDraft(null);
+        }}
+      />
+    </label>
+  );
 }

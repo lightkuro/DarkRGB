@@ -1,0 +1,29 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "nsis"],
+    "publisher": "darkRGB",
+    "copyright": "darkRGB contributors. Free software under the GNU GPL, version 3 or later.",
+    "license": "GPL-3.0-or-later",
+    "licenseFile": "../../LICENSE",
+    "homepage": "https://github.com/lightkuro/DarkRGB",
+    "category": "Music",
+    "shortDescription": "Light shows for LED strips and matrices, driven by music or played live",
+    "longDescription": "darkRGB makes LED strips and matrices follow the music your computer is playing, lets you play them live from a keyboard, a touch screen or a MIDI controller, and runs unattended shows. It sends to WLED devices and to sACN and Art-Net pixel controllers.",
+    "resources": {
+      "../../LICENSE": "LICENSE",
+      "../../THIRD-PARTY-LICENSES.txt": "THIRD-PARTY-LICENSES.txt"
+    },
+    "linux": {
+      "deb": {
+        "section": "sound",
+        "depends": ["libasound2"]
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

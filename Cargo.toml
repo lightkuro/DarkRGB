@@ -1,12 +1,16 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# The desktop app needs GTK and WebKit development files on Linux. Leaving
+# it out of the defaults lets `cargo build` and `cargo test` work without
+# them; build it with `-p darkrgb-desktop`.
+default-members = ["crates/core", "crates/audio", "crates/output", "crates/engine", "crates/sim"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.6.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/lightkuro/OpenLightShow"
+repository = "https://github.com/lightkuro/DarkRGB"
 
 [profile.release]
 opt-level = 3

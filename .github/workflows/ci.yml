@@ -1,15 +1,18 @@
 name: CI
 
-# Changes that only touch documentation do not start a build.
+# Builds start only when asked for: Actions tab, "CI", "Run workflow", pick
+# the branch. Nothing runs on a push, so build minutes are spent on purpose.
+# The Release workflow runs this same build before it drafts a release.
 on:
-  push:
-    branches: [main, "claude/**"]
-    paths-ignore: ["**.md", "docs/**", "LICENSE"]
-  pull_request:
-    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        description: The build is for a release.
+        type: boolean
+        default: false
 
-# A newer push to the same branch replaces the run in progress.
+# Starting a build for a branch replaces one still running for it.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -17,15 +20,34 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Shown in the app next to the version, and used in the download's name,
+  # so a bug report can say exactly which build it came from.
+  # A release build counts in its own series, so it is marked with an "r".
+  DARKRGB_BUILD: ${{ inputs.release && format('r{0}', github.run_number) || github.run_number }}
+
 jobs:
   build:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+            exe: ""
+            python: python3
+            # A package for Debian and Ubuntu, and one file that runs on
+            # most Linux systems without installing.
+            bundles: deb,appimage
+          - os: windows-latest
+            platform: windows-x64
+            exe: ".exe"
+            python: python
+            # A setup program.
+            bundles: nsis
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +61,14 @@ jobs:
           npm install --global pnpm@10
           pnpm install --frozen-lockfile
           pnpm build
+
+      # The app window needs GTK and WebKit to build on Linux, MIDI needs
+      # the sound library's headers, and the AppImage needs patchelf.
+      - name: Install Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev libasound2-dev patchelf
 
       # The version comes from rust-toolchain.toml.
       - name: Install Rust
@@ -59,24 +89,53 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets -- -D warnings
 
-      # Tests run on the release build, so the programs that are attached
-      # below are the ones that were tested, and everything compiles once.
+      # Tests run on the release build, so the programs attached below are
+      # built from what was tested, and most of it compiles once.
       - name: Test
         run: cargo test --workspace --release
 
-      - name: Build release programs
-        run: cargo build --release -p ols-engine -p ols-sim
+      - name: Build the command-line program
+        run: cargo build --release -p darkrgb-engine
+
+      # The licences of the libraries inside the programs ask that their
+      # notices travel with every copy. The list is made from what this
+      # build actually contains, and goes into the installers below.
+      - name: List third-party licences
+        run: ${{ matrix.python }} tools/third_party.py THIRD-PARTY-LICENSES.txt
+
+      # Builds the app itself, then wraps it as installers. The version of
+      # the bundler matches the Tauri library in Cargo.lock.
+      - name: Build the app and its installers
+        working-directory: crates/desktop
+        run: npx --yes @tauri-apps/cli@2.12.4 build --config tauri.bundle.conf.json --bundles ${{ matrix.bundles }}
+
+      - name: Read the version
+        id: version
+        shell: bash
+        run: echo "version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
 
       - name: Collect programs
         shell: bash
         run: |
           mkdir dist
-          cp target/release/openlightshow${{ runner.os == 'Windows' && '.exe' || '' }} dist/
-          cp target/release/ols-sim${{ runner.os == 'Windows' && '.exe' || '' }} dist/
-          cp LICENSE CHANGELOG.md dist/
+          cp target/release/darkrgb${{ matrix.exe }} dist/
+          cp target/release/darkrgb-cli${{ matrix.exe }} dist/
+          cp LICENSE THIRD-PARTY-LICENSES.txt CHANGELOG.md dist/
+          mkdir installers
+          find target/release/bundle -maxdepth 2 -type f \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*-setup.exe' \) -exec cp {} installers/ \;
+          ls -l dist installers
+          # A build with no installer is a failed build.
+          test -n "$(ls installers)"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: openlightshow-${{ runner.os }}
+          name: darkRGB-${{ steps.version.outputs.version }}-build${{ github.run_number }}-${{ matrix.platform }}
           path: dist/
-          retention-days: 30
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darkRGB-${{ steps.version.outputs.version }}-build${{ github.run_number }}-${{ matrix.platform }}-installers
+          path: installers/
+          retention-days: 7

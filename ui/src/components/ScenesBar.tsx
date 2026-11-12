@@ -1,10 +1,20 @@
-// Scenes along the bottom, and the version with its patch notes.
+// Scenes along the bottom: saved looks, one click (or one key) each.
 
-import { Plus, X } from "lucide-react";
+import { Bookmark, ChevronUp, Plus, RefreshCw, Shuffle, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import changelog from "../../../CHANGELOG.md?raw";
-import { engine, useHello, useShow } from "../engine";
-import { useDismiss } from "./ui";
+import {
+  engine,
+  settingsPage,
+  useCurrentScene,
+  useLibrary,
+  useHello,
+  useLive,
+  useShow,
+  type Mood,
+  type Scene,
+} from "../engine";
+import { KeyAssign, Keycap } from "./Keys";
+import { ConfirmButton, NameField, Switch, useDismiss } from "./ui";
 
 function SaveScene() {
   const [name, setName] = useState<string | null>(null);
@@ -49,90 +59,207 @@ function SaveScene() {
   );
 }
 
-/** Renders the few Markdown features the changelog uses. */
-function Notes({ text }: { text: string }) {
-  const blocks: React.ReactNode[] = [];
-  let items: string[] = [];
-  const flush = () => {
-    if (items.length) blocks.push(<ul key={blocks.length}>{items.map((i, k) => <li key={k}>{i}</li>)}</ul>);
-    items = [];
-  };
-  for (const line of text.split("\n")) {
-    if (line.startsWith("- ")) {
-      items.push(line.slice(2));
-      continue;
-    }
-    flush();
-    if (line.startsWith("## ")) blocks.push(<h3 key={blocks.length}>{line.slice(3)}</h3>);
-    else if (line.trim() && !line.startsWith("# ")) blocks.push(<p key={blocks.length}>{line}</p>);
-  }
-  flush();
-  return <>{blocks}</>;
-}
+/** Rename, key, update and delete for one scene. */
+const MOODS: { id: Mood; name: string; hint: string }[] = [
+  { id: "any", name: "Any part", hint: "Autopilot may change to it at any time" },
+  { id: "calm", name: "Quiet parts", hint: "Passed over while the song is at its biggest" },
+  { id: "big", name: "Big parts", hint: "Passed over in breakdowns and quiet stretches" },
+];
 
-function Version() {
-  const hello = useHello();
-  const [open, setOpen] = useState(false);
-  const close = useCallback(() => setOpen(false), []);
-  const ref = useDismiss(open, close);
-  if (!hello) return null;
+function SceneMenu({
+  scene,
+  left,
+  close,
+  playing,
+}: {
+  scene: Scene;
+  left: number;
+  close: () => void;
+  /** This scene is what is playing, unchanged. */
+  playing: boolean;
+}) {
+  const ref = useDismiss(true, close);
+  const library = useLibrary();
   return (
-    <div className="version" ref={ref}>
-      {open && (
-        <div className="popover notes" role="dialog" aria-label="What's new">
-          <div className="notes-body">
-            <Notes text={changelog} />
+    <div className="popover scene-menu" role="dialog" aria-label={`Options for ${scene.name}`} ref={ref} style={{ left }}>
+      <NameField
+        value={scene.name}
+        onCommit={(name) => engine.send({ type: "rename_scene", id: scene.id, name })}
+      />
+      <KeyAssign action={{ type: "scene", id: scene.id }} />
+      <div className="field inline">
+        <span>Autopilot may pick it</span>
+        <Switch
+          checked={scene.auto}
+          label={`Autopilot may pick ${scene.name}`}
+          onChange={(auto) => engine.send({ type: "set_scene_auto", id: scene.id, auto })}
+        />
+      </div>
+      {scene.auto && (
+        <div className="field">
+          <span className="field-head">
+            <span>Autopilot uses it for</span>
+          </span>
+          <div className="segmented" role="radiogroup" aria-label={`The parts of a song ${scene.name} suits`}>
+            {MOODS.map((mood) => (
+              <button
+                key={mood.id}
+                type="button"
+                role="radio"
+                aria-checked={scene.mood === mood.id}
+                className={scene.mood === mood.id ? "selected" : ""}
+                title={mood.hint}
+                onClick={() => engine.send({ type: "set_scene_mood", id: scene.id, mood: mood.id })}
+              >
+                {mood.name}
+              </button>
+            ))}
           </div>
-          <p className="hint">Free software under the GNU GPL, version 3 or later.</p>
         </div>
       )}
-      <button type="button" className="text-button" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {open ? "Close" : `Version ${hello.version}`}
-      </button>
+      <div className="layer-footer">
+        <button
+          type="button"
+          className="text-button"
+          title="Replace this scene with the effects that are playing now"
+          onClick={() => {
+            engine.send({ type: "save_scene", name: scene.name });
+            close();
+          }}
+        >
+          <RefreshCw size={13} /> Update with what is playing
+        </button>
+        {library.available && playing && (
+          <button
+            type="button"
+            className="text-button"
+            title="Keep this look to use in any show. It is listed when you add an effect, and under the show's name."
+            onClick={() => {
+              engine.send({ type: "save_look", name: scene.name });
+              close();
+            }}
+          >
+            <Bookmark size={13} /> Keep for any show
+          </button>
+        )}
+        <span className="spacer" />
+        <ConfirmButton
+          label={`Delete ${scene.name}`}
+          confirmLabel="Delete?"
+          onConfirm={() => {
+            engine.send({ type: "delete_scene", id: scene.id });
+            close();
+          }}
+        >
+          <Trash2 size={15} />
+        </ConfirmButton>
+      </div>
     </div>
   );
 }
 
 export function ScenesBar() {
   const show = useShow();
-  const [armed, setArmed] = useState<number | null>(null);
-  useEffect(() => {
-    if (armed === null) return;
-    const timer = setTimeout(() => setArmed(null), 3000);
-    return () => clearTimeout(timer);
-  }, [armed]);
+  const hello = useHello();
+  const live = useLive();
+  const current = useCurrentScene();
+  const [menu, setMenu] = useState<{ id: number; left: number } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
   if (!show) return <footer className="scenes" />;
+  const menuScene = menu ? show.scenes.find((s) => s.id === menu.id) : undefined;
+  const auto = show.live.auto;
+  const ownLooks = hello?.kinds.find((k) => k.id === show.kind)?.looks ?? [];
+  const missingLooks = ownLooks.filter((look) => !show.scenes.some((s) => s.name === look));
   return (
     <footer className="scenes">
       <span className="scenes-label">Scenes</span>
+      {show.scenes.length > 1 && (
+        <button
+          type="button"
+          className={`chip autopilot ${auto.enabled ? "selected" : ""}`}
+          aria-pressed={auto.enabled}
+          title={
+            auto.enabled
+              ? `Autopilot is on: a new scene every ${auto.every_bars} bars${auto.on_drops ? ", and when the song changes" : ""}. Click to switch it off.`
+              : "Autopilot: change scene by itself, in time with the music"
+          }
+          onClick={() => engine.send({ type: "set_live", auto: !auto.enabled })}
+        >
+          <Shuffle size={13} /> Autopilot
+        </button>
+      )}
       <div className="scene-list">
-        {show.scenes.map((scene) => (
-          <span key={scene.id} className="scene">
-            <button
-              type="button"
-              className="chip"
-              title={`Switch to ${scene.name}`}
-              onClick={() => engine.send({ type: "recall_scene", id: scene.id })}
+        {show.scenes.map((scene) => {
+          const binding = show.bindings.find((b) => b.action.type === "scene" && b.action.id === scene.id);
+          const waiting = live.pending_scene === scene.id;
+          return (
+            <span
+              key={scene.id}
+              className={`scene ${current === scene.id ? "current" : ""} ${waiting ? "waiting" : ""} ${
+                scene.auto ? "" : "skipped"
+              }`}
             >
-              {scene.name}
-            </button>
-            <button
-              type="button"
-              className={`scene-delete ${armed === scene.id ? "armed" : ""}`}
-              aria-label={armed === scene.id ? `Really delete ${scene.name}` : `Delete ${scene.name}`}
-              title={armed === scene.id ? "Click again to delete" : "Delete this scene"}
-              onClick={() => {
-                if (armed === scene.id) engine.send({ type: "delete_scene", id: scene.id });
-                setArmed(armed === scene.id ? null : scene.id);
-              }}
-            >
-              {armed === scene.id ? "Delete?" : <X size={12} />}
-            </button>
-          </span>
-        ))}
+              <button
+                type="button"
+                className="chip"
+                title={waiting ? `${scene.name} starts on the beat` : `Switch to ${scene.name}`}
+                aria-pressed={current === scene.id}
+                onClick={() => engine.send({ type: "recall_scene", id: scene.id })}
+              >
+                {binding && <Keycap binding={binding} />}
+                {scene.name}
+              </button>
+              <button
+                type="button"
+                className="scene-more"
+                aria-label={`Options for ${scene.name}`}
+                aria-expanded={menu?.id === scene.id}
+                title="Rename, key, update or delete"
+                // Stop the click that opens the menu from also closing it.
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const left = Math.max(8, Math.min(rect.left - 120, window.innerWidth - 300));
+                  setMenu(menu?.id === scene.id ? null : { id: scene.id, left });
+                }}
+              >
+                <ChevronUp size={12} />
+              </button>
+            </span>
+          );
+        })}
         <SaveScene />
+        {show.scenes.length === 0 && missingLooks.length > 0 && show.fixtures.length > 0 && (
+          <button
+            type="button"
+            className="chip add"
+            title="Ready-made scenes to start from. They are yours to change or delete."
+            onClick={() => engine.send({ type: "add_looks" })}
+          >
+            <Sparkles size={14} /> Add starter scenes
+          </button>
+        )}
       </div>
-      <Version />
+      {menu && menuScene && (
+        <SceneMenu
+          key={menu.id}
+          scene={menuScene}
+          left={menu.left}
+          close={closeMenu}
+          playing={current === menuScene.id}
+        />
+      )}
+      {hello && (
+        <button
+          type="button"
+          className="text-button version"
+          title="What's new, and about darkRGB"
+          onClick={() => settingsPage.set("about")}
+        >
+          Version {hello.version}
+          {hello.build ? ` (build ${hello.build})` : ""}
+        </button>
+      )}
     </footer>
   );
 }
