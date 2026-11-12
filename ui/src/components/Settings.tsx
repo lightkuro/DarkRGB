@@ -150,6 +150,20 @@ function ceiling(leds: number): number {
   return Math.floor(1 / (leds * 30e-6 + 300e-6));
 }
 
+/** Minutes after midnight as a time of day, 17:05. */
+export function clock(minute: number): string {
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${two(Math.floor(minute / 60) % 24)}:${two(minute % 60)}`;
+}
+
+/** A time of day, as a time field gives it, in minutes after midnight. */
+function minutes(text: string): number | null {
+  const match = /^(\d{1,2}):(\d{2})/.exec(text);
+  if (!match) return null;
+  const value = Number(match[1]) * 60 + Number(match[2]);
+  return value < 1440 ? value : null;
+}
+
 function Lights({ show }: { show: Show }) {
   const full = useFull();
   const hello = useHello();
@@ -208,6 +222,48 @@ function Lights({ show }: { show: Show }) {
             </p>
           )}
         </>
+      )}
+
+      <h3>Hours</h3>
+      <Row
+        title="Keep hours"
+        hint={
+          show.schedule.enabled
+            ? `On at ${clock(show.schedule.on)}, off at ${clock(show.schedule.off)}, every day, by this computer's clock.`
+            : "The lights come on and go off at set times every day. For a display that should not shine all night."
+        }
+      >
+        <Switch
+          checked={show.schedule.enabled}
+          label="Keep hours"
+          onChange={(enabled) => engine.send({ type: "set_schedule", enabled })}
+        />
+      </Row>
+      {show.schedule.enabled && (
+        <div className="hours">
+          <label className="field inline">
+            <span>On at</span>
+            <input
+              type="time"
+              value={clock(show.schedule.on)}
+              onChange={(e) => {
+                const on = minutes(e.target.value);
+                if (on !== null) engine.send({ type: "set_schedule", on });
+              }}
+            />
+          </label>
+          <label className="field inline">
+            <span>Off at</span>
+            <input
+              type="time"
+              value={clock(show.schedule.off)}
+              onChange={(e) => {
+                const off = minutes(e.target.value);
+                if (off !== null) engine.send({ type: "set_schedule", off });
+              }}
+            />
+          </label>
+        </div>
       )}
 
       <h3>Flashing</h3>

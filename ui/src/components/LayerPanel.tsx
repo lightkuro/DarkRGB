@@ -385,6 +385,21 @@ function ParamControl({ layer, spec, full }: { layer: Layer; spec: ParamSpec; fu
       );
     case "palette":
       return <PalettePicker label={spec.label} value={String(value)} onChange={set} />;
+    case "words":
+      return (
+        <label className="field">
+          <span className="field-head">
+            <span>{spec.label}</span>
+          </span>
+          <input
+            type="text"
+            maxLength={spec.max ?? 60}
+            value={String(value)}
+            // Each letter shows on the lights as it is typed.
+            onChange={(e) => engine.quiet({ type: "set_param", layer: layer.id, param: spec.id, value: e.target.value })}
+          />
+        </label>
+      );
   }
 }
 

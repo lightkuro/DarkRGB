@@ -1005,6 +1005,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "clap",
  "darkrgb-audio",
  "darkrgb-core",

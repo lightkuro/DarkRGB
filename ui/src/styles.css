@@ -2545,6 +2545,22 @@ input.number {
   white-space: nowrap;
 }
 
+.hours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+}
+
+.hours input[type="time"] {
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  color-scheme: dark;
+}
+
 /* A note that is not a warning. */
 .stage-banner.quiet {
   background: var(--raised-2);

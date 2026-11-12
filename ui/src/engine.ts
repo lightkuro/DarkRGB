@@ -13,7 +13,7 @@ export interface ParamSpec {
   label: string;
   /** Hidden until the user switches advanced settings on. */
   advanced: boolean;
-  kind: "float" | "color" | "bool" | "choice" | "palette";
+  kind: "float" | "color" | "bool" | "choice" | "palette" | "words";
   min?: number;
   max?: number;
   step?: number;
@@ -289,6 +289,8 @@ export interface Show {
   output: {
     frame_rate: number;
   };
+  /** The hours the lights keep each day, in minutes after midnight. */
+  schedule: { enabled: boolean; on: number; off: number };
   /** How this show treats fast flashing. */
   flash: {
     /** Most flashes of the whole picture in a second; 0 means no limit. */
@@ -312,6 +314,8 @@ export interface Live {
   frozen: boolean;
   /** The music has stopped and the scene chosen for that is showing. */
   idle: boolean;
+  /** The show's schedule has the lights off at this time of day. */
+  asleep: boolean;
 }
 
 export interface DeviceStats {
@@ -534,6 +538,7 @@ export type Command =
   | { type: "add_colour_pad"; name: string; value: string }
   | { type: "set_pad_page"; id: number; page: number }
   | { type: "set_page"; page: number }
+  | { type: "set_schedule"; enabled?: boolean; on?: number; off?: number }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "midi_learn"; target: LearnTarget | null }
@@ -602,7 +607,7 @@ class Engine {
   readonly hello = new Store<Hello | null>(null);
   readonly show = new Store<Show | null>(null);
   readonly status = new Store<Status | null>(null);
-  readonly live = new Store<Live>({ held: [], pending_scene: null, tapped_bpm: 0, frozen: false, idle: false });
+  readonly live = new Store<Live>({ held: [], pending_scene: null, tapped_bpm: 0, frozen: false, idle: false, asleep: false });
   readonly library = new Store<Library>({
     available: false,
     current: null,

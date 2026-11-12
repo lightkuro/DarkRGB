@@ -392,6 +392,15 @@ pub enum Command {
     SetPage {
         page: u8,
     },
+    /// The hours the lights keep each day, in minutes after midnight.
+    SetSchedule {
+        #[serde(default)]
+        enabled: Option<bool>,
+        #[serde(default)]
+        on: Option<u16>,
+        #[serde(default)]
+        off: Option<u16>,
+    },
     /// Takes back the last change to the show. Handled by the app.
     Undo,
     /// Puts back what `Undo` took back. Handled by the app.
@@ -714,6 +723,10 @@ fn checked_param(effect: &str, param: &str, value: &ParamValue) -> Result<ParamV
         (ParamKind::Palette, ParamValue::Text(v)) if color::palettes().iter().any(|p| p.id == v) => {
             Ok(ParamValue::Text(v.clone()))
         }
+        // Words: what was typed, without control characters, cut to length.
+        (ParamKind::Words { max }, ParamValue::Text(v)) => Ok(ParamValue::Text(
+            v.chars().filter(|c| !c.is_control()).take(*max).collect(),
+        )),
         // The user's own colours, written out. Stored tidied.
         (ParamKind::Palette, ParamValue::Text(v)) => color::parse_custom(v)
             .map(|own| ParamValue::Text(color::write_custom(&own)))
@@ -1633,6 +1646,22 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if midi.is_some() && show.bindings.iter().any(|b| taken(b) && b.midi == midi) {
                 show.bindings[at].midi = None;
+            }
+            Ok(())
+        }
+
+        Command::SetSchedule { enabled, on, off } => {
+            if on.is_some_and(|m| m >= 1440) || off.is_some_and(|m| m >= 1440) {
+                return Err("that is not a time of day".into());
+            }
+            if let Some(enabled) = enabled {
+                show.schedule.enabled = *enabled;
+            }
+            if let Some(on) = on {
+                show.schedule.on = *on;
+            }
+            if let Some(off) = off {
+                show.schedule.off = *off;
             }
             Ok(())
         }
@@ -2690,7 +2719,7 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 54 {
+            let command = match r.next() % 55 {
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {
@@ -2834,6 +2863,11 @@ mod tests {
                 52 => Command::SetPadPage {
                     id: binding,
                     page: r.next() as u8 % 6,
+                },
+                54 => Command::SetSchedule {
+                    enabled: r.maybe(Awkward::flag),
+                    on: r.maybe(|r| r.next() as u16 % 2000),
+                    off: r.maybe(|r| r.next() as u16 % 2000),
                 },
                 53 => Command::SetPage {
                     page: r.next() as u8 % 6,

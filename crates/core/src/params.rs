@@ -20,11 +20,21 @@ pub type Params = BTreeMap<String, ParamValue>;
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ParamKind {
-    Float { min: f32, max: f32, step: f32 },
+    Float {
+        min: f32,
+        max: f32,
+        step: f32,
+    },
     Color,
     Bool,
-    Choice { options: Vec<&'static str> },
+    Choice {
+        options: Vec<&'static str>,
+    },
     Palette,
+    /// A line of words, at most `max` characters.
+    Words {
+        max: usize,
+    },
 }
 
 /// Describes one parameter so the UI can build a control for it.
@@ -86,6 +96,16 @@ impl ParamSpec {
                 options: options.to_vec(),
             },
             default: ParamValue::Text(options[0].to_string()),
+            advanced: false,
+        }
+    }
+
+    pub fn words(id: &'static str, label: &'static str, default: &'static str, max: usize) -> Self {
+        Self {
+            id,
+            label,
+            kind: ParamKind::Words { max },
+            default: ParamValue::Text(default.to_string()),
             advanced: false,
         }
     }
@@ -172,6 +192,11 @@ impl<'a> ParamReader<'a> {
             ParamKind::Choice { options } => options.iter().position(|o| *o == chosen).unwrap_or(0),
             _ => 0,
         }
+    }
+
+    /// A line of words, as typed.
+    pub fn words(&self, id: &str) -> &'a str {
+        self.text(id)
     }
 
     /// The chosen palette: a built-in one, or the user's own colours.

@@ -6,6 +6,7 @@ use crate::color::{Pal, Palette, Rgb, palette};
 use crate::effect::{
     AMBIENT, Effect, EffectDef, EffectInfo, FlashUse, FrameCtx, HITS_AND_BEATS, HitWatch, hash2, smoothstep,
 };
+use crate::font;
 use crate::params::{ParamReader, ParamSpec};
 
 /// The effects defined here, in the order the picker shows them within
@@ -15,7 +16,7 @@ pub(crate) fn hits_and_beats() -> Vec<EffectDef> {
 }
 
 pub(crate) fn ambient() -> Vec<EffectDef> {
-    vec![Stripes::def(), Twinkle::def(), Snow::def()]
+    vec![Stripes::def(), Twinkle::def(), Snow::def(), Words::def()]
 }
 
 /// One of a palette's own colours, by number, wrapping round. Stripes and
@@ -445,6 +446,115 @@ impl Effect for Lightning {
     }
 }
 
+// ----------------------------------------------------------------- Words
+
+struct Words {
+    text: Vec<char>,
+    colour: Rgb,
+    speed: f32,
+    height: f32,
+    /// How far the words have travelled, in dots.
+    travelled: f32,
+}
+
+impl Words {
+    /// Dots from the start of one character to the start of the next.
+    const PITCH: usize = font::WIDTH + 1;
+
+    fn def() -> EffectDef {
+        EffectDef {
+            info: EffectInfo {
+                id: "words",
+                name: "Words",
+                description: "A line of text across a matrix, still or scrolling.",
+                category: AMBIENT,
+                audio: false,
+                flash: FlashUse::None,
+                params: vec![
+                    ParamSpec::words("text", "Words", "darkRGB", 60),
+                    ParamSpec::color("colour", "Colour", "#ffffff"),
+                    ParamSpec::float("speed", "Scroll speed", 0.0, 12.0, 4.0),
+                    ParamSpec::float("height", "Height", 0.3, 1.0, 1.0).advanced(),
+                ],
+            },
+            make: || {
+                Box::new(Words {
+                    text: "darkRGB".chars().collect(),
+                    colour: Rgb::WHITE,
+                    speed: 4.0,
+                    height: 1.0,
+                    travelled: 0.0,
+                })
+            },
+        }
+    }
+
+    /// Whether the dot at this column of the whole line and this row is lit.
+    fn dot(&self, column: i64, row: usize) -> bool {
+        if column < 0 {
+            return false;
+        }
+        let (index, within) = (column as usize / Self::PITCH, column as usize % Self::PITCH);
+        self.text.get(index).is_some_and(|c| font::lit(*c, within, row))
+    }
+}
+
+impl Effect for Words {
+    fn configure(&mut self, p: &ParamReader) {
+        let text = p.words("text");
+        // Compared first: this runs every frame and the words seldom change.
+        if !self.text.iter().copied().eq(text.chars()) {
+            self.text = text.chars().collect();
+            self.travelled = 0.0;
+        }
+        self.colour = p.color("colour");
+        self.speed = p.float("speed");
+        self.height = p.float("height");
+    }
+
+    fn update(&mut self, ctx: &FrameCtx) {
+        // In characters a second.
+        self.travelled += ctx.dt * self.speed * Self::PITCH as f32;
+    }
+
+    fn shade(&self, x: f32, y: f32, ctx: &FrameCtx) -> Rgb {
+        if self.text.is_empty() {
+            return Rgb::BLACK;
+        }
+        let long = (self.text.len() * Self::PITCH) as f32;
+        // The font's seven rows fill the chosen share of the height, in
+        // the middle. A strip has one row of lights, so it shows whether
+        // each column of the words has any dot in it.
+        let (row, wide) = if ctx.flat {
+            (None, long.min(60.0))
+        } else {
+            let top = (1.0 - self.height) / 2.0;
+            let row = (y - top) / self.height * font::HEIGHT as f32;
+            if !(0.0..font::HEIGHT as f32).contains(&row) {
+                return Rgb::BLACK;
+            }
+            // Dots are square: as many columns as the shape has room for.
+            (
+                Some(row as usize),
+                font::HEIGHT as f32 / self.height * ctx.aspect.max(0.1),
+            )
+        };
+        let column = if self.speed > 0.0 {
+            // In from the right, out at the left, then round again.
+            let lap = long + wide;
+            (x * wide + self.travelled % lap - wide).floor() as i64
+        } else {
+            // Still: in the middle when it fits, from the start when not.
+            (x * wide - ((wide - long + 1.0) / 2.0).max(0.0)).floor() as i64
+        };
+        let lit = match row {
+            Some(row) => self.dot(column, row),
+            None => (0..font::HEIGHT).any(|row| self.dot(column, row)),
+        };
+        if lit { self.colour } else { Rgb::BLACK }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,6 +722,66 @@ mod tests {
             fx.update(&quiet);
         }
         assert_ne!(fx.shade(0.2, 0.5, &quiet), first);
+    }
+
+    #[test]
+    fn words_are_drawn_in_dots_and_scroll() {
+        // A matrix exactly one character wide and high: 6 by 7 dots.
+        let mut c = ctx(0.0, AudioFeatures::default(), false);
+        c.aspect = 6.0 / 7.0;
+        let still = with(&[
+            ("text", ParamValue::Text("T".into())),
+            ("speed", ParamValue::Number(0.0)),
+        ]);
+        let fx = make("words", &still);
+        let picture: Vec<String> = (0..7)
+            .map(|row| {
+                (0..6)
+                    .map(|col| {
+                        let lit = brightness(fx.shade((col as f32 + 0.5) / 6.0, (row as f32 + 0.5) / 7.0, &c)) > 0.0;
+                        if lit { '#' } else { '.' }
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            picture,
+            ["#####.", "..#...", "..#...", "..#...", "..#...", "..#...", "..#..."],
+            "a T, with the gap that follows every character"
+        );
+
+        // Scrolling: it starts off the right-hand edge and comes across.
+        let moving = with(&[("text", ParamValue::Text("HI".into()))]);
+        let mut fx = make("words", &moving);
+        let lit = |fx: &dyn Effect| {
+            (0..42)
+                .filter(|i| brightness(fx.shade((i % 6) as f32 / 6.0 + 0.08, (i / 6) as f32 / 7.0 + 0.07, &c)) > 0.0)
+                .count()
+        };
+        assert_eq!(lit(fx.as_ref()), 0, "nothing has arrived yet");
+        let mut seen = 0;
+        for _ in 0..240 {
+            fx.update(&c);
+            seen = seen.max(lit(fx.as_ref()));
+        }
+        assert!(seen >= 10, "the letters came past: {seen} dots at most");
+        // Empty words are dark, and characters outside the font are question marks.
+        let fx = make("words", &with(&[("text", ParamValue::Text("".into()))]));
+        assert_eq!(fx.shade(0.5, 0.5, &c), Rgb::BLACK);
+        let fx = make(
+            "words",
+            &with(&[
+                ("text", ParamValue::Text("é".into())),
+                ("speed", ParamValue::Number(0.0)),
+            ]),
+        );
+        assert!(
+            (0..42).any(|i| brightness(fx.shade((i % 6) as f32 / 6.0 + 0.08, (i / 6) as f32 / 7.0 + 0.07, &c)) > 0.0)
+        );
+        // On a strip, columns with dots light up.
+        let strip = ctx(0.0, AudioFeatures::default(), true);
+        let fx = make("words", &still);
+        assert!((0..60).any(|i| brightness(fx.shade(i as f32 / 60.0, 0.5, &strip)) > 0.0));
     }
 
     #[test]

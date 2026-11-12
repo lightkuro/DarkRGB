@@ -37,6 +37,7 @@ import {
 import { StageRenderer, type View } from "../stageGl";
 import { AddByAddress, AngleField, FoundDevices } from "./DevicePanel";
 import { KindCards } from "./KindCards";
+import { clock } from "./Settings";
 
 type Drag =
   | { kind: "pan"; startX: number; startY: number; view: View; moved: boolean }
@@ -564,7 +565,12 @@ export function Stage() {
       {show?.master.blackout && fixtures.length > 0 && (
         <p className="stage-banner">Blackout is on. The lights are off.</p>
       )}
-      {show && liveState.idle && !show.master.blackout && fixtures.length > 0 && (
+      {show && liveState.asleep && !show.master.blackout && fixtures.length > 0 && (
+        <p className="stage-banner quiet">
+          Off by the show's hours. The lights come on at {clock(show.schedule.on)}.
+        </p>
+      )}
+      {show && liveState.idle && !liveState.asleep && !show.master.blackout && fixtures.length > 0 && (
         <p className="stage-banner quiet">
           No music. Showing {show.scenes.find((s) => s.id === show.live.idle.scene)?.name ?? "the waiting scene"}{" "}
           until it starts again.

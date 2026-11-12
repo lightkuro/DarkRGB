@@ -166,7 +166,13 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
             let mut live = shared.live.lock().unwrap();
             let clocked = live.clocked(now, heard);
             // The music stopping, or starting again.
-            let idle_changed = live.idle_step(now, &base, &clocked);
+            let mut idle_changed = live.idle_step(now, &base, &clocked);
+            // The show's hours, looked at once a second.
+            if frame_index.is_multiple_of(60) {
+                use chrono::Timelike;
+                let clock = chrono::Local::now();
+                idle_changed |= live.schedule_step((clock.hour() * 60 + clock.minute()) as u16, &base);
+            }
             let beat = clocked.beat_count != last_beat;
             last_beat = clocked.beat_count;
             // A scene the user asked for comes first; autopilot only has

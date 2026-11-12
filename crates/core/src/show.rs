@@ -606,6 +606,57 @@ impl Default for OutputSettings {
     }
 }
 
+/// Hours the lights keep, every day: on at one time, off at another. For
+/// a display that should not shine all night. Outside the hours the
+/// lights are dark and the show itself is left as it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Schedule {
+    #[serde(default)]
+    pub enabled: bool,
+    /// When the lights come on, in minutes after midnight.
+    #[serde(default = "default_on")]
+    pub on: u16,
+    /// When they go off. Earlier than `on` means past midnight.
+    #[serde(default = "default_off")]
+    pub off: u16,
+}
+
+fn default_on() -> u16 {
+    17 * 60
+}
+
+fn default_off() -> u16 {
+    23 * 60
+}
+
+impl Default for Schedule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            on: default_on(),
+            off: default_off(),
+        }
+    }
+}
+
+impl Schedule {
+    /// Whether the lights should be on at this time of day, given in
+    /// minutes after midnight. Always, when there is no schedule; never,
+    /// when on and off are the same time.
+    pub fn lit_at(&self, minute: u16) -> bool {
+        if !self.enabled {
+            return true;
+        }
+        let minute = minute % 1440;
+        if self.on <= self.off {
+            (self.on..self.off).contains(&minute)
+        } else {
+            // Through midnight.
+            minute >= self.on || minute < self.off
+        }
+    }
+}
+
 /// How a show treats fast flashing. It belongs to the show and not to the
 /// computer, because the answer depends on who will see the lights: a club
 /// night and a display on the front lawn want different things.
@@ -737,6 +788,8 @@ pub struct Show {
     pub output: OutputSettings,
     #[serde(default)]
     pub flash: FlashSettings,
+    #[serde(default)]
+    pub schedule: Schedule,
     /// Next id to hand out. Ids are never reused.
     #[serde(default = "first_id")]
     pub next_id: u32,
@@ -842,6 +895,7 @@ impl Default for Show {
             live: LiveSettings::default(),
             output: OutputSettings::default(),
             flash: FlashSettings::default(),
+            schedule: Schedule::default(),
             next_id: 1,
         };
         show.add_layer(effects::DEFAULT_EFFECT);
@@ -1384,6 +1438,8 @@ impl Show {
             self.output.frame_rate = OutputSettings::default().frame_rate;
         }
         self.live.auto.every_bars = self.live.auto.every_bars.clamp(1, 64);
+        self.schedule.on %= 1440;
+        self.schedule.off %= 1440;
         if self
             .live
             .idle
@@ -2052,5 +2108,25 @@ mod tests {
         let again = show.clone();
         show.repair();
         assert_eq!(show, again);
+    }
+
+    #[test]
+    fn a_schedule_keeps_hours_including_through_midnight() {
+        let at = |h: u16, m: u16| h * 60 + m;
+        let mut hours = Schedule::default();
+        assert!(hours.lit_at(at(3, 0)), "no schedule: always on");
+        hours.enabled = true;
+        // Five in the afternoon until eleven at night.
+        assert!(!hours.lit_at(at(16, 59)) && hours.lit_at(at(17, 0)));
+        assert!(hours.lit_at(at(22, 59)) && !hours.lit_at(at(23, 0)));
+        assert!(!hours.lit_at(at(3, 0)));
+        // Six in the evening until one in the morning.
+        hours.on = at(18, 0);
+        hours.off = at(1, 0);
+        assert!(hours.lit_at(at(23, 30)) && hours.lit_at(at(0, 59)) && hours.lit_at(at(18, 0)));
+        assert!(!hours.lit_at(at(1, 0)) && !hours.lit_at(at(12, 0)) && !hours.lit_at(at(17, 59)));
+        // The same time for both is never on, which is at least not a surprise.
+        hours.off = hours.on;
+        assert!(!hours.lit_at(at(18, 0)) && !hours.lit_at(at(6, 0)));
     }
 }

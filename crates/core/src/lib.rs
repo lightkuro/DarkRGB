@@ -7,6 +7,7 @@ pub mod audio;
 pub mod color;
 pub mod effect;
 pub mod effects;
+pub mod font;
 pub mod layout;
 pub mod looks;
 mod more_effects;
@@ -23,5 +24,5 @@ pub use params::{ParamKind, ParamSpec, ParamValue, Params};
 pub use render::{Cues, LayerHit, Renderer};
 pub use show::{
     Action, Autopilot, Binding, Blend, FlashSettings, Idle, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, LayerGroup,
-    LightGroup, Link, MidiNote, Mood, Only, Scene, Show, Sound, Source, Swatch,
+    LightGroup, Link, MidiNote, Mood, Only, Scene, Schedule, Show, Sound, Source, Swatch,
 };

@@ -121,6 +121,8 @@ pub struct LiveStatus {
     pub frozen: bool,
     /// The music has stopped and the scene chosen for that is showing.
     pub idle: bool,
+    /// The show's schedule has the lights off at this time of day.
+    pub asleep: bool,
 }
 
 #[derive(Debug, Default)]
@@ -154,6 +156,8 @@ pub struct Live {
     /// The last change of scene was into or out of silence, which always
     /// fades.
     idle_fade: bool,
+    /// The show's schedule has the lights off at this time of day.
+    pub asleep: bool,
 }
 
 impl Live {
@@ -166,6 +170,7 @@ impl Live {
             tapped_bpm: self.tempo.bpm(),
             frozen: self.frozen,
             idle: self.idle,
+            asleep: self.asleep,
         }
     }
 
@@ -233,6 +238,14 @@ impl Live {
         // Autopilot counts afresh when the music is back.
         self.auto = None;
         true
+    }
+
+    /// Checks the show's hours against the time of day, given in minutes
+    /// after midnight. Returns true when the lights have just gone off or
+    /// come on because of it.
+    pub fn schedule_step(&mut self, minute: u16, show: &Show) -> bool {
+        let asleep = !show.schedule.lit_at(minute);
+        std::mem::replace(&mut self.asleep, asleep) != asleep
     }
 
     /// How long the change of scene just made should fade for, given the
@@ -421,6 +434,11 @@ impl Live {
                 .and_then(|id| show.scenes.iter().find(|s| s.id == id))
         {
             (out.layers, out.layer_groups) = show.scene_stack(scene);
+        }
+        // Outside the show's hours the lights are dark. The show's own
+        // blackout switch is not touched.
+        if self.asleep {
+            out.master.blackout = true;
         }
         let held = |b: &&darkrgb_core::Binding| b.mode == KeyMode::Hold && self.is_held(b.id);
         // A held scene first, so that keys held with it act on its effects.
@@ -955,6 +973,29 @@ mod tests {
         show.live.idle.scene = None;
         assert!(live.idle_step(3012.0, &show, &quiet));
         assert!(!live.idle);
+    }
+
+    #[test]
+    fn outside_its_hours_a_show_is_dark_without_being_changed() {
+        let mut show = Show::default();
+        let mut live = Live::default();
+        assert!(!live.schedule_step(3 * 60, &show), "no schedule, nothing happens");
+        show.schedule.enabled = true;
+        assert!(
+            live.schedule_step(3 * 60, &show),
+            "three at night is outside five to eleven"
+        );
+        assert!(live.asleep && live.status().asleep);
+        assert!(live.overlay(&show).master.blackout);
+        assert!(!show.master.blackout, "the show's own switch is as it was");
+        assert!(!live.schedule_step(4 * 60, &show), "still outside: no change to report");
+        assert!(live.schedule_step(18 * 60, &show));
+        assert!(!live.overlay(&show).master.blackout);
+        // Switching the schedule off wakes the lights whatever the time.
+        live.schedule_step(3 * 60, &show);
+        show.schedule.enabled = false;
+        assert!(live.schedule_step(3 * 60, &show));
+        assert!(!live.asleep);
     }
 
     #[test]

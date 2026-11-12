@@ -514,6 +514,7 @@ mod tests {
                         (ParamKind::Color, Value::Text(t)) => crate::color::Rgb::from_hex(t).is_some(),
                         (ParamKind::Choice { options }, Value::Text(t)) => options.contains(t),
                         (ParamKind::Bool, Value::Bool(_)) => true,
+                        (ParamKind::Words { max }, Value::Text(t)) => t.chars().count() <= *max,
                         _ => false,
                     };
                     assert!(ok, "{}: {} = {value:?} is not valid for {}", look.name, id, part.effect);
