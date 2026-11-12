@@ -1,0 +1,89 @@
+name: Release
+
+# Drafts a release on GitHub from the branch it is started on: Actions tab,
+# "Release", "Run workflow". It runs the same build and tests as CI, then
+# attaches the installers and the plain programs to a draft release named
+# after the version in Cargo.toml. Nothing is public until the draft is
+# looked over and published by hand on the Releases page.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/ci.yml
+    with:
+      release: true
+
+  draft:
+    name: Draft the release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # To create the draft and attach files to it. Nothing else here can write.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Gather the files
+        id: files
+        run: |
+          version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          mkdir release
+          # Installers go up as they are.
+          cp artifacts/*-installers/* release/
+          # The plain programs, for running without installing.
+          for platform in linux-x64 windows-x64; do
+            name="darkRGB-$version-$platform-portable"
+            mv artifacts/*-"$platform" "$name"
+            if [ "$platform" = "windows-x64" ]; then
+              zip -qr "release/$name.zip" "$name"
+            else
+              # Downloads lose the mark that makes a program runnable.
+              chmod +x "$name/darkrgb" "$name/darkrgb-cli"
+              tar -czf "release/$name.tar.gz" "$name"
+            fi
+          done
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          ls -l release
+
+      # The notes are this version's section of the changelog.
+      - name: Write the notes
+        run: |
+          awk -v version="${{ steps.files.outputs.version }}" '
+            /^## / { printing = (index($0, "## " version) == 1); next }
+            printing { print }
+          ' CHANGELOG.md > notes.md
+          {
+            echo
+            echo "These builds are not signed. Windows may warn before running the setup program:"
+            echo "choose \"More info\", then \"Run anyway\". \`SHA256SUMS.txt\` lists what each file should hash to."
+            echo
+            echo "On Linux, the AppImage has to be made runnable after downloading: \`chmod +x darkRGB_*.AppImage\`."
+          } >> notes.md
+          cat notes.md
+
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.files.outputs.version }}"
+          state="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
+          if [ "$state" = "false" ]; then
+            echo "::error::$tag has already been published. Raise the version in Cargo.toml and ui/package.json first."
+            exit 1
+          fi
+          # An earlier draft of the same version is replaced.
+          if [ "$state" = "true" ]; then
+            gh release delete "$tag" --yes
+          fi
+          gh release create "$tag" release/* --draft --target "$GITHUB_SHA" \
+            --title "darkRGB ${{ steps.files.outputs.version }}" --notes-file notes.md

@@ -2,8 +2,15 @@ name: CI
 
 # Builds start only when asked for: Actions tab, "CI", "Run workflow", pick
 # the branch. Nothing runs on a push, so build minutes are spent on purpose.
+# The Release workflow runs this same build before it drafts a release.
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        description: The build is for a release.
+        type: boolean
+        default: false
 
 # Starting a build for a branch replaces one still running for it.
 concurrency:
@@ -16,7 +23,8 @@ permissions:
 env:
   # Shown in the app next to the version, and used in the download's name,
   # so a bug report can say exactly which build it came from.
-  DARKRGB_BUILD: ${{ github.run_number }}
+  # A release build counts in its own series, so it is marked with an "r".
+  DARKRGB_BUILD: ${{ inputs.release && format('r{0}', github.run_number) || github.run_number }}
 
 jobs:
   build:
@@ -30,9 +38,16 @@ jobs:
           - os: ubuntu-latest
             platform: linux-x64
             exe: ""
+            python: python3
+            # A package for Debian and Ubuntu, and one file that runs on
+            # most Linux systems without installing.
+            bundles: deb,appimage
           - os: windows-latest
             platform: windows-x64
             exe: ".exe"
+            python: python
+            # A setup program.
+            bundles: nsis
     steps:
       - uses: actions/checkout@v4
 
@@ -47,13 +62,13 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
-      # The app window needs GTK and WebKit to build on Linux, and MIDI
-      # needs the sound library's headers.
+      # The app window needs GTK and WebKit to build on Linux, MIDI needs
+      # the sound library's headers, and the AppImage needs patchelf.
       - name: Install Linux libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev libasound2-dev patchelf
 
       # The version comes from rust-toolchain.toml.
       - name: Install Rust
@@ -75,12 +90,24 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
 
       # Tests run on the release build, so the programs attached below are
-      # the ones that were tested, and everything compiles once.
+      # built from what was tested, and most of it compiles once.
       - name: Test
         run: cargo test --workspace --release
 
-      - name: Build release programs
-        run: cargo build --release -p darkrgb-desktop -p darkrgb-engine
+      - name: Build the command-line program
+        run: cargo build --release -p darkrgb-engine
+
+      # The licences of the libraries inside the programs ask that their
+      # notices travel with every copy. The list is made from what this
+      # build actually contains, and goes into the installers below.
+      - name: List third-party licences
+        run: ${{ matrix.python }} tools/third_party.py THIRD-PARTY-LICENSES.txt
+
+      # Builds the app itself, then wraps it as installers. The version of
+      # the bundler matches the Tauri library in Cargo.lock.
+      - name: Build the app and its installers
+        working-directory: crates/desktop
+        run: npx --yes @tauri-apps/cli@2.12.4 build --config tauri.bundle.conf.json --bundles ${{ matrix.bundles }}
 
       - name: Read the version
         id: version
@@ -93,11 +120,22 @@ jobs:
           mkdir dist
           cp target/release/darkrgb${{ matrix.exe }} dist/
           cp target/release/darkrgb-cli${{ matrix.exe }} dist/
-          cp LICENSE CHANGELOG.md dist/
+          cp LICENSE THIRD-PARTY-LICENSES.txt CHANGELOG.md dist/
+          mkdir installers
+          find target/release/bundle -maxdepth 2 -type f \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*-setup.exe' \) -exec cp {} installers/ \;
+          ls -l dist installers
+          # A build with no installer is a failed build.
+          test -n "$(ls installers)"
 
       - uses: actions/upload-artifact@v4
         with:
           name: darkRGB-${{ steps.version.outputs.version }}-build${{ github.run_number }}-${{ matrix.platform }}
           path: dist/
-          # Kept a week: stored downloads count against the account's 500 MB.
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darkRGB-${{ steps.version.outputs.version }}-build${{ github.run_number }}-${{ matrix.platform }}-installers
+          path: installers/
           retention-days: 7

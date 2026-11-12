@@ -723,8 +723,12 @@ function About() {
         {hello?.build ? ` (build ${hello.build})` : ""}
       </p>
       <p className="hint">
-        A light show controller for WLED devices. Free software under the GNU General Public License, version 3 or
-        later: you may use, study, share and change it.
+        A light show controller for WLED devices and for sACN and Art-Net pixel controllers. Free software under
+        the GNU General Public License, version 3 or later: you may use, study, share and change it.
+      </p>
+      <p className="hint">
+        It is built with other people's free software. Their licences are in the file THIRD-PARTY-LICENSES.txt
+        that comes with each download.
       </p>
       <h3>What's new</h3>
       <div className="notes-body">
