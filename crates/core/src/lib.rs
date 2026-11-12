@@ -12,6 +12,7 @@ pub mod layout;
 pub mod looks;
 mod more_effects;
 pub mod params;
+pub mod picture;
 pub mod render;
 pub mod safety;
 pub mod show;

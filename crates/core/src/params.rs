@@ -35,6 +35,10 @@ pub enum ParamKind {
     Words {
         max: usize,
     },
+    /// A small picture, at most `max` dots a side (see `picture.rs`).
+    Picture {
+        max: u32,
+    },
 }
 
 /// Describes one parameter so the UI can build a control for it.
@@ -106,6 +110,18 @@ impl ParamSpec {
             label,
             kind: ParamKind::Words { max },
             default: ParamValue::Text(default.to_string()),
+            advanced: false,
+        }
+    }
+
+    pub fn picture(id: &'static str, label: &'static str) -> Self {
+        Self {
+            id,
+            label,
+            kind: ParamKind::Picture {
+                max: crate::picture::MAX_SIDE,
+            },
+            default: ParamValue::Text(crate::picture::DEFAULT.to_string()),
             advanced: false,
         }
     }
@@ -196,6 +212,11 @@ impl<'a> ParamReader<'a> {
 
     /// A line of words, as typed.
     pub fn words(&self, id: &str) -> &'a str {
+        self.text(id)
+    }
+
+    /// A picture, as the setting holds it.
+    pub fn picture(&self, id: &str) -> &'a str {
         self.text(id)
     }
 

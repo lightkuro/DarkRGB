@@ -8,6 +8,7 @@ use crate::effect::{
 };
 use crate::font;
 use crate::params::{ParamReader, ParamSpec};
+use crate::picture::Picture;
 
 /// The effects defined here, in the order the picker shows them within
 /// their groups.
@@ -16,7 +17,7 @@ pub(crate) fn hits_and_beats() -> Vec<EffectDef> {
 }
 
 pub(crate) fn ambient() -> Vec<EffectDef> {
-    vec![Stripes::def(), Twinkle::def(), Snow::def(), Words::def()]
+    vec![Stripes::def(), Twinkle::def(), Snow::def(), Words::def(), Image::def()]
 }
 
 /// One of a palette's own colours, by number, wrapping round. Stripes and
@@ -555,6 +556,86 @@ impl Effect for Words {
     }
 }
 
+// --------------------------------------------------------------- Picture
+
+struct Image {
+    /// The setting the picture was read from, to see when it changes.
+    source: String,
+    picture: Option<Picture>,
+    /// Keep the picture's shape, with dark bars, rather than stretch it.
+    keep_shape: bool,
+}
+
+impl Image {
+    fn def() -> EffectDef {
+        EffectDef {
+            info: EffectInfo {
+                id: "picture",
+                name: "Picture",
+                description: "A small picture on a matrix: a logo, a sprite, a drawing.",
+                category: AMBIENT,
+                audio: false,
+                flash: FlashUse::None,
+                params: vec![
+                    ParamSpec::picture("picture", "Picture"),
+                    ParamSpec::choice("fit", "Fit", &["Stretch to fill", "Keep its shape"]),
+                ],
+            },
+            make: || {
+                Box::new(Image {
+                    source: String::new(),
+                    picture: None,
+                    keep_shape: false,
+                })
+            },
+        }
+    }
+}
+
+impl Effect for Image {
+    fn configure(&mut self, p: &ParamReader) {
+        let source = p.picture("picture");
+        // Compared first: this runs every frame and the picture seldom changes.
+        if self.source != source {
+            self.source = source.to_string();
+            self.picture = Picture::parse(source);
+        }
+        self.keep_shape = p.choice("fit") == 1;
+    }
+
+    fn update(&mut self, _ctx: &FrameCtx) {}
+
+    fn shade(&self, x: f32, y: f32, ctx: &FrameCtx) -> Rgb {
+        let Some(picture) = &self.picture else {
+            return Rgb::BLACK;
+        };
+        let (mut u, mut v) = (x, y);
+        if ctx.flat {
+            // A strip has one row of lights: it shows the picture's middle row.
+            v = 0.5;
+        } else if self.keep_shape {
+            // Wider than the lights: bars above and below. Taller: at the sides.
+            let (own, room) = (picture.width as f32 / picture.height as f32, ctx.aspect.max(0.01));
+            if own > room {
+                v = (y - 0.5) * (own / room) + 0.5;
+            } else {
+                u = (x - 0.5) * (room / own) + 0.5;
+            }
+        }
+        if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
+            // The last light of a row sits exactly on the edge.
+            if u == 1.0 || v == 1.0 {
+                u = u.min(0.999_99);
+                v = v.min(0.999_99);
+            } else {
+                return Rgb::BLACK;
+            }
+        }
+        let [r, g, b] = picture.dot((u * picture.width as f32) as u32, (v * picture.height as f32) as u32);
+        Rgb::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,6 +803,51 @@ mod tests {
             fx.update(&quiet);
         }
         assert_ne!(fx.shade(0.2, 0.5, &quiet), first);
+    }
+
+    #[test]
+    fn a_picture_fills_a_matrix_or_keeps_its_shape() {
+        // Two dots wide, one high: red on the left, blue on the right.
+        let two = Picture {
+            width: 2,
+            height: 1,
+            rgb: vec![255, 0, 0, 0, 0, 255],
+        };
+        let picture = ("picture", ParamValue::Text(two.write()));
+        let mut square = ctx(0.0, AudioFeatures::default(), false);
+        square.aspect = 1.0;
+        let red = Rgb::new(1.0, 0.0, 0.0);
+        let blue = Rgb::new(0.0, 0.0, 1.0);
+
+        // Stretched, it covers everything, edges included.
+        let fx = make("picture", &with(&[picture.clone()]));
+        assert_eq!(fx.shade(0.1, 0.05, &square), red);
+        assert_eq!(fx.shade(0.9, 0.95, &square), blue);
+        assert_eq!(fx.shade(0.0, 0.0, &square), red);
+        assert_eq!(fx.shade(1.0, 1.0, &square), blue, "the last light sits on the edge");
+
+        // Keeping its shape on a square, it is a band across the middle.
+        let fit = ("fit", ParamValue::Text("Keep its shape".into()));
+        let fx = make("picture", &with(&[picture.clone(), fit.clone()]));
+        assert_eq!(fx.shade(0.1, 0.5, &square), red);
+        assert_eq!(fx.shade(0.9, 0.5, &square), blue);
+        assert_eq!(fx.shade(0.5, 0.1, &square), Rgb::BLACK);
+        assert_eq!(fx.shade(0.5, 0.9, &square), Rgb::BLACK);
+        // On lights four times as wide as they are high, bars go at the sides.
+        let mut wide = square;
+        wide.aspect = 4.0;
+        assert_eq!(fx.shade(0.05, 0.5, &wide), Rgb::BLACK);
+        assert_eq!(fx.shade(0.4, 0.5, &wide), red);
+        assert_eq!(fx.shade(0.6, 0.5, &wide), blue);
+
+        // A strip shows the middle row, and nothing that is not a picture.
+        let strip = ctx(0.0, AudioFeatures::default(), true);
+        assert_eq!(fx.shade(0.2, 0.0, &strip), red);
+        let fx = make("picture", &with(&[("picture", ParamValue::Text("nonsense".into()))]));
+        assert_eq!(fx.shade(0.5, 0.5, &square), Rgb::BLACK);
+        // Fresh from the list, it is the heart.
+        let fx = make("picture", &with(&[]));
+        assert_eq!(fx.shade(0.2, 0.2, &square), Rgb::new(1.0, 40.0 / 255.0, 80.0 / 255.0));
     }
 
     #[test]

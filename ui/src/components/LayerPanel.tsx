@@ -59,6 +59,7 @@ import {
 import { KeyAssign, Keycap } from "./Keys";
 import { LinkedSlider, STRENGTH } from "./Links";
 import { ConfirmButton, IconButton, NameField, Slider, Switch, useDismiss } from "./ui";
+import { PictureField } from "./PictureField";
 
 const BLENDS: { id: Blend; name: string; hint: string }[] = [
   { id: "normal", name: "Replace", hint: "Covers the effects below" },
@@ -385,6 +386,8 @@ function ParamControl({ layer, spec, full }: { layer: Layer; spec: ParamSpec; fu
       );
     case "palette":
       return <PalettePicker label={spec.label} value={String(value)} onChange={set} />;
+    case "picture":
+      return <PictureField spec={spec} value={String(value)} layer={layer.id} />;
     case "words":
       return (
         <label className="field">

@@ -2982,6 +2982,23 @@ input.number {
   max-width: 420px;
 }
 
+.picture-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.picture-preview {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  background: #000;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  /* Each dot is one light: show them as squares, not a blur. */
+  image-rendering: pixelated;
+}
+
 .offline.pair form {
   display: grid;
   gap: 12px;

@@ -515,6 +515,7 @@ mod tests {
                         (ParamKind::Choice { options }, Value::Text(t)) => options.contains(t),
                         (ParamKind::Bool, Value::Bool(_)) => true,
                         (ParamKind::Words { max }, Value::Text(t)) => t.chars().count() <= *max,
+                        (ParamKind::Picture { .. }, Value::Text(t)) => crate::picture::Picture::parse(t).is_some(),
                         _ => false,
                     };
                     assert!(ok, "{}: {} = {value:?} is not valid for {}", look.name, id, part.effect);

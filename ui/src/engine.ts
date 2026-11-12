@@ -13,7 +13,7 @@ export interface ParamSpec {
   label: string;
   /** Hidden until the user switches advanced settings on. */
   advanced: boolean;
-  kind: "float" | "color" | "bool" | "choice" | "palette" | "words";
+  kind: "float" | "color" | "bool" | "choice" | "palette" | "words" | "picture";
   min?: number;
   max?: number;
   step?: number;

@@ -5,6 +5,7 @@ use darkrgb_core::color;
 use darkrgb_core::effects;
 use darkrgb_core::layout::MAX_PIXELS;
 use darkrgb_core::params::{ParamKind, ParamValue};
+use darkrgb_core::picture::{MAX_SIDE, Picture};
 use darkrgb_core::show::{Blend, FADERS, FRAME_RATES, LINK_STRENGTH, MAX_LINKS, PAGES, linkable, mend_links};
 use darkrgb_core::{
     Action, Band, Device, DeviceKind, FlashSettings, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, Link, MidiNote,
@@ -797,6 +798,10 @@ fn checked_param(effect: &str, param: &str, value: &ParamValue) -> Result<ParamV
         (ParamKind::Palette, ParamValue::Text(v)) if color::palettes().iter().any(|p| p.id == v) => {
             Ok(ParamValue::Text(v.clone()))
         }
+        // A picture, stored tidied. The size is checked before it is unpacked.
+        (ParamKind::Picture { .. }, ParamValue::Text(v)) => Picture::parse(v)
+            .map(|picture| ParamValue::Text(picture.write()))
+            .ok_or_else(|| format!("that is not a picture of at most {MAX_SIDE} by {MAX_SIDE} dots")),
         // Words: what was typed, without control characters, cut to length.
         (ParamKind::Words { max }, ParamValue::Text(v)) => Ok(ParamValue::Text(
             v.chars().filter(|c| !c.is_control()).take(*max).collect(),
@@ -1949,6 +1954,41 @@ mod tests {
 
     fn parse(json: &str) -> Command {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_picture_setting_takes_only_small_pictures() {
+        let mut show = Show::default();
+        let layer = show.add_layer("picture");
+        let set = |show: &mut Show, value: &str| {
+            apply(
+                show,
+                &Command::SetParam {
+                    layer,
+                    param: "picture".into(),
+                    value: ParamValue::Text(value.into()),
+                },
+            )
+        };
+        // Unpadded, as some browsers write it; stored the one way we write it.
+        set(&mut show, "2x1:/wAAAAD/").unwrap();
+        assert_eq!(
+            show.layer(layer).unwrap().params["picture"],
+            ParamValue::Text("2x1:/wAAAAD/".into())
+        );
+        let big = Picture {
+            width: MAX_SIDE,
+            height: MAX_SIDE,
+            rgb: vec![7; (MAX_SIDE * MAX_SIDE * 3) as usize],
+        };
+        set(&mut show, &big.write()).unwrap();
+        let before = show.clone();
+        for bad in ["", "a photo", "65x65:AAAA", "2x1:AAAA", "1x1:!!!!"] {
+            assert!(set(&mut show, bad).is_err(), "{bad:?}");
+        }
+        let huge = format!("64x64:{}", "A".repeat(40_000));
+        assert!(set(&mut show, &huge).is_err());
+        assert_eq!(show, before);
     }
 
     #[test]
