@@ -106,6 +106,16 @@ function onKeyDown(event: KeyboardEvent): void {
     }
     return;
   }
+  // Undo and redo, wherever the pointer is. A text field keeps its own.
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && !typing(event.target)) {
+    const redo = event.code === "KeyY" || (event.code === "KeyZ" && event.shiftKey);
+    if (redo || event.code === "KeyZ") {
+      event.preventDefault();
+      const able = engine.history.get();
+      if (redo ? able.redo : able.undo) engine.send({ type: redo ? "redo" : "undo" });
+      return;
+    }
+  }
   if (event.ctrlKey || event.metaKey || event.altKey || typing(event.target)) return;
   const bindings = engine.show.get()?.bindings.filter((b) => b.key === event.code) ?? [];
   if (bindings.length === 0) return;

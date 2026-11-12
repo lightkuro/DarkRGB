@@ -89,6 +89,80 @@ pub struct ScanStatus {
     pub found: usize,
 }
 
+/// Earlier and later states of the show, for undo and redo.
+#[derive(Default)]
+pub struct History {
+    undo: Vec<(Show, std::mem::Discriminant<Command>, Instant)>,
+    redo: Vec<Show>,
+}
+
+impl History {
+    /// How many steps back are kept.
+    const DEPTH: usize = 100;
+    /// A run of the same kind of change within this long is one step, so
+    /// dragging a slider is undone in one go and not a frame at a time.
+    const RUN: std::time::Duration = std::time::Duration::from_millis(900);
+
+    /// Notes the show as it was before a change of this kind.
+    pub fn remember(&mut self, before: Show, kind: std::mem::Discriminant<Command>) {
+        let now = Instant::now();
+        self.redo.clear();
+        if let Some((_, last_kind, at)) = self.undo.last_mut()
+            && *last_kind == kind
+            && now.duration_since(*at) < Self::RUN
+        {
+            // Still the same drag: keep the state from before it began.
+            *at = now;
+            return;
+        }
+        self.undo.push((before, kind, now));
+        if self.undo.len() > Self::DEPTH {
+            self.undo.remove(0);
+        }
+    }
+
+    /// Notes the show as it was before a change that no command made.
+    pub fn remember_other(&mut self, before: Show) {
+        self.redo.clear();
+        self.undo.push((
+            before,
+            std::mem::discriminant(&Command::Undo),
+            Instant::now() - Self::RUN,
+        ));
+        if self.undo.len() > Self::DEPTH {
+            self.undo.remove(0);
+        }
+    }
+
+    /// One step back or forward from `current`. `None` at either end.
+    fn step(&mut self, back: bool, current: Show) -> Option<Show> {
+        if back {
+            let (show, _, _) = self.undo.pop()?;
+            self.redo.push(current);
+            Some(show)
+        } else {
+            let show = self.redo.pop()?;
+            // Old enough that the next change starts a step of its own.
+            self.undo.push((
+                current,
+                std::mem::discriminant(&Command::Redo),
+                Instant::now() - Self::RUN,
+            ));
+            Some(show)
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    /// Whether there is anything to undo, and to redo.
+    pub fn can(&self) -> (bool, bool) {
+        (!self.undo.is_empty(), !self.redo.is_empty())
+    }
+}
+
 pub struct Shared {
     pub show: Mutex<Show>,
     /// Bumped on every change to the show. Clients and the saver watch it.
@@ -113,6 +187,8 @@ pub struct Shared {
     pub library_rev: watch::Sender<u64>,
     /// Effects, looks and palettes kept to use in any show.
     pub saved: Mutex<Saved>,
+    /// Earlier states of the show, for undo and redo.
+    pub history: Mutex<History>,
     /// MIDI controllers: which are heard, and what is being learnt.
     pub midi: Mutex<MidiStatus>,
     /// Where knobs were last turned to, waiting for the next frame. A
@@ -155,6 +231,7 @@ impl Shared {
             library,
             library_rev: watch::Sender::new(1),
             saved: Mutex::new(saved),
+            history: Mutex::new(History::default()),
             midi: Mutex::new(MidiStatus::default()),
             knob_moves: Mutex::new(Vec::new()),
             notice: Mutex::new(notice),
@@ -223,6 +300,8 @@ impl Shared {
                 self.library_rev.send_modify(|r| *r += 1);
                 return Ok(None);
             }
+            Command::Undo => return self.step_history(true),
+            Command::Redo => return self.step_history(false),
             Command::MidiLearn { target } => {
                 if let Some(LearnTarget::Pad { binding }) = target
                     && !self.show.lock().unwrap().bindings.iter().any(|b| b.id == *binding)
@@ -292,6 +371,12 @@ impl Shared {
             commands::apply(&mut show, command)?;
             if *show == before {
                 return Ok(None);
+            }
+            if commands::undoable(command) {
+                self.history
+                    .lock()
+                    .unwrap()
+                    .remember(before, std::mem::discriminant(command));
             }
         }
         if let Command::SetAudio {
@@ -396,6 +481,8 @@ impl Shared {
     /// room, not to a show, stay as they are.
     fn switch_to(&self, path: PathBuf, mut next: Show) {
         self.save();
+        // Undo does not reach back into another show.
+        self.history.lock().unwrap().clear();
         next.repair();
         {
             let mut show = self.show.lock().unwrap();
@@ -461,6 +548,49 @@ impl Shared {
     }
 
     /// After a show is renamed, its file takes the new name too.
+    /// Takes back the last change (`back`), or puts it back. What is being
+    /// played stays as it is: brightness, blackout, faders, speed and this
+    /// computer's settings are not part of what undo moves.
+    fn step_history(&self, back: bool) -> Result<Option<String>, String> {
+        {
+            let mut show = self.show.lock().unwrap();
+            let mut history = self.history.lock().unwrap();
+            let Some(mut other) = history.step(back, show.clone()) else {
+                return Err(if back {
+                    "there is nothing to undo".into()
+                } else {
+                    "there is nothing to redo".into()
+                });
+            };
+            other.master = show.master.clone();
+            other.output = show.output.clone();
+            other.audio = show.audio.clone();
+            other.live.faders = show.live.faders;
+            other.live.speed = show.live.speed;
+            other.repair();
+            *show = other;
+        }
+        // Nothing held or waiting is sure to exist in the other state.
+        self.live.lock().unwrap().let_go();
+        self.bump_live();
+        self.bump();
+        if self.show.lock().unwrap().name != self.saved_name() {
+            self.rename_file();
+        }
+        Ok(None)
+    }
+
+    /// The name the open show's file was given, to tell when undo has
+    /// changed the show's name.
+    fn saved_name(&self) -> String {
+        self.save_path
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|p| p.file_stem().and_then(|s| s.to_str()).map(str::to_string))
+            .unwrap_or_default()
+    }
+
     /// One message from a MIDI controller. While something is being
     /// learnt, the message is tied to it; otherwise a note plays its pad
     /// and a knob is noted for the next frame.
@@ -874,6 +1004,7 @@ impl Shared {
     /// beside the show file. Returns a note saying where that is.
     pub fn replace_show(&self, mut next: Show) -> Option<String> {
         next.repair();
+        self.history.lock().unwrap().clear();
         let previous = std::mem::replace(&mut *self.show.lock().unwrap(), next.clone());
         let kept = self.save_path.lock().unwrap().as_ref().and_then(|path| {
             let backup = path.with_file_name("show.previous.json");
@@ -983,6 +1114,7 @@ impl Shared {
         let info = wled::fetch_info(&host, http_port, Duration::from_secs(4))?;
 
         let mut show = self.show.lock().unwrap();
+        let before = show.clone();
         let duplicate = show.devices.iter().any(|d| {
             let same_mac = info.mac.is_some() && d.mac == info.mac;
             same_mac || (d.address == host && d.port == info.ddp_port)
@@ -999,6 +1131,7 @@ impl Shared {
             info.matrix,
         );
         drop(show);
+        self.history.lock().unwrap().remember_other(before);
         self.bump();
 
         Ok(info.live_source.filter(|_| info.live).map(|source| {
@@ -1777,6 +1910,82 @@ mod tests {
         shared.midi_message(&[0xF8]);
         shared.midi_message(&[0x90, 200, 5]);
         let _ = layer;
+    }
+
+    #[test]
+    fn changes_can_be_taken_back_and_put_back() {
+        let shared = Shared::new(Show::default(), None, None);
+        let run = |command: Command| shared.execute(&command);
+        let layers = || shared.show.lock().unwrap().layers.len();
+        let add = || {
+            run(Command::AddLayer {
+                effect: "solid".into(),
+                group: None,
+            })
+            .unwrap()
+        };
+        assert!(run(Command::Undo).is_err(), "nothing to undo yet");
+        assert_eq!(shared.history.lock().unwrap().can(), (false, false));
+
+        add();
+        // Different kinds of change are separate steps.
+        run(Command::RenameShow { name: "Mine".into() }).unwrap();
+        assert_eq!((layers(), shared.history.lock().unwrap().can()), (2, (true, false)));
+        run(Command::Undo).unwrap();
+        assert_eq!(shared.show.lock().unwrap().name, "Untitled show");
+        assert_eq!(layers(), 2);
+        run(Command::Undo).unwrap();
+        assert_eq!(layers(), 1);
+        assert!(run(Command::Undo).is_err());
+        // And back again.
+        run(Command::Redo).unwrap();
+        assert_eq!(layers(), 2);
+        run(Command::Redo).unwrap();
+        assert_eq!(shared.show.lock().unwrap().name, "Mine");
+        assert!(run(Command::Redo).is_err());
+
+        // A run of the same kind of change, such as a slider being dragged, is one step.
+        let layer = shared.show.lock().unwrap().layers[0].id;
+        for speed in [0.3, 0.6, 0.9, 1.2] {
+            run(Command::SetParam {
+                layer,
+                param: "speed".into(),
+                value: darkrgb_core::params::ParamValue::Number(speed),
+            })
+            .unwrap();
+        }
+        run(Command::Undo).unwrap();
+        assert!(
+            !shared.show.lock().unwrap().layers[0].params.contains_key("speed"),
+            "the whole drag is taken back at once"
+        );
+        // A new change after an undo forgets what could have been redone.
+        add();
+        assert!(run(Command::Redo).is_err());
+
+        // Playing the lights is not undone, and does not fill the memory.
+        let steps = shared.history.lock().unwrap().undo.len();
+        run(Command::SetMaster {
+            brightness: Some(0.4),
+            blackout: Some(true),
+            limit: None,
+        })
+        .unwrap();
+        run(Command::SetFader { n: 1, value: 0.7 }).unwrap();
+        assert_eq!(shared.history.lock().unwrap().undo.len(), steps);
+        run(Command::Undo).unwrap();
+        {
+            let show = shared.show.lock().unwrap();
+            assert_eq!((show.master.brightness, show.master.blackout), (0.4, true));
+            assert_eq!(show.live.faders[0], 0.7);
+        }
+        // A change that did nothing is not a step.
+        let steps = shared.history.lock().unwrap().undo.len();
+        run(Command::RenameShow { name: "Mine".into() }).unwrap();
+        assert_eq!(shared.history.lock().unwrap().undo.len(), steps);
+        // Another show starts with a clean memory.
+        shared.replace_show(Show::default());
+        assert_eq!(shared.history.lock().unwrap().can(), (false, false));
     }
 
     #[test]

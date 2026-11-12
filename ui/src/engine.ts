@@ -517,6 +517,8 @@ export type Command =
   | { type: "set_link"; layer: number; param: string; source: Source; amount: number }
   | { type: "remove_link"; layer: number; param: string }
   | { type: "set_fader"; n: number; value: number }
+  | { type: "undo" }
+  | { type: "redo" }
   | { type: "midi_learn"; target: LearnTarget | null }
   | { type: "set_pad_midi"; id: number; midi: MidiNote | null }
   | { type: "set_knob"; target: KnobTarget; channel: number; cc: number }
@@ -594,6 +596,8 @@ class Engine {
   });
   /** The scene that is playing exactly as it was saved, if any. */
   readonly currentScene = new Store<number | null>(null);
+  /** Whether there is a change to take back, and one to put back. */
+  readonly history = new Store({ undo: false, redo: false });
   readonly toasts = new Store<Toast[]>([]);
 
   /** Latest audio features. Read from animation frames, not from React. */
@@ -642,6 +646,7 @@ class Engine {
         break;
       case "state":
         this.currentScene.set((message.current_scene as number | null) ?? null);
+        this.history.set({ undo: message.can_undo === true, redo: message.can_redo === true });
         this.show.set(message.show as Show);
         break;
       case "live":
@@ -863,6 +868,7 @@ export function sameAction(a: Action, b: Action): boolean {
   return a.type === b.type && ("id" in a ? a.id : 0) === ("id" in b ? b.id : 0);
 }
 
+export const useHistory = () => useSyncExternalStore(engine.history.subscribe, engine.history.get);
 export const useConnected = () => useSyncExternalStore(engine.connected.subscribe, engine.connected.get);
 export const useHello = () => useSyncExternalStore(engine.hello.subscribe, engine.hello.get);
 export const useShow = () => useSyncExternalStore(engine.show.subscribe, engine.show.get);

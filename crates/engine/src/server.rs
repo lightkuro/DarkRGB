@@ -212,12 +212,15 @@ fn hello() -> String {
 
 fn state_message(shared: &Shared, revision: u64) -> String {
     let show = shared.show.lock().unwrap();
+    let (can_undo, can_redo) = shared.history.lock().unwrap().can();
     json!({
         "type": "state",
         "revision": revision,
         "show": &*show,
         // The scene that is playing exactly as it was saved, if any.
         "current_scene": show.current_scene(),
+        "can_undo": can_undo,
+        "can_redo": can_redo,
     })
     .to_string()
 }

@@ -1,5 +1,5 @@
-import { ChevronDown, Pencil, Play, Power, Settings as Gear, Sun } from "lucide-react";
-import { engine, libraryOpen, perFrame, settingsPage, useShow, useView, viewPref } from "../engine";
+import { ChevronDown, Pencil, Play, Power, Redo2, Settings as Gear, Sun, Undo2 } from "lucide-react";
+import { engine, libraryOpen, perFrame, settingsPage, useHistory, useShow, useView, viewPref } from "../engine";
 import { AudioMeter } from "./AudioMeter";
 import { Keycap, useBinding } from "./Keys";
 import { Slider } from "./ui";
@@ -54,6 +54,7 @@ function ViewSwitch() {
 export function TopBar() {
   const show = useShow();
   const blackoutKey = useBinding({ type: "blackout" });
+  const history = useHistory();
   if (!show) return <header className="topbar" />;
   const { brightness, blackout } = show.master;
   return (
@@ -66,6 +67,28 @@ export function TopBar() {
         </span>
         <span className="brand-name">darkRGB</span>
         <ShowName name={show.name} />
+        <span className="history">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Undo"
+            title="Undo the last change (Ctrl+Z)"
+            disabled={!history.undo}
+            onClick={() => engine.send({ type: "undo" })}
+          >
+            <Undo2 size={15} />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Redo"
+            title="Redo (Ctrl+Shift+Z)"
+            disabled={!history.redo}
+            onClick={() => engine.send({ type: "redo" })}
+          >
+            <Redo2 size={15} />
+          </button>
+        </span>
       </div>
 
       <ViewSwitch />

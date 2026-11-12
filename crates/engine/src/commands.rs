@@ -377,6 +377,10 @@ pub enum Command {
     MidiLearn {
         target: Option<LearnTarget>,
     },
+    /// Takes back the last change to the show. Handled by the app.
+    Undo,
+    /// Puts back what `Undo` took back. Handled by the app.
+    Redo,
     /// Moves one of the Live view's faders, numbered from 1.
     SetFader {
         n: u8,
@@ -570,6 +574,20 @@ const CLUB_KEYS: [(Action, &str, &str); 5] = [
     (Action::Freeze, "KeyZ", "z"),
 ];
 
+/// Whether a command is something to take back with undo. Playing the
+/// lights is not: brightness, blackout, faders, speed and the settings of
+/// this computer are left alone by undo, and never fill its memory.
+pub(crate) fn undoable(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::SetMaster { .. }
+            | Command::SetFader { .. }
+            | Command::SetLive { .. }
+            | Command::SetAudio { .. }
+            | Command::SetOutput { .. }
+    )
+}
+
 /// Chooses the scene the lights wait in when the music stops, unless one
 /// is chosen already.
 fn wait_in(show: &mut Show, scene: &str, after: f32) {
@@ -745,6 +763,8 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
         | Command::DeleteShow { .. }
         | Command::RenameShowFile { .. }
         | Command::MidiLearn { .. }
+        | Command::Undo
+        | Command::Redo
         | Command::SavePattern { .. }
         | Command::SaveLook { .. }
         | Command::UsePattern { .. }
