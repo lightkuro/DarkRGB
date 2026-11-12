@@ -820,7 +820,7 @@ mod tests {
         let blue = Rgb::new(0.0, 0.0, 1.0);
 
         // Stretched, it covers everything, edges included.
-        let fx = make("picture", &with(&[picture.clone()]));
+        let fx = make("picture", &with(std::slice::from_ref(&picture)));
         assert_eq!(fx.shade(0.1, 0.05, &square), red);
         assert_eq!(fx.shade(0.9, 0.95, &square), blue);
         assert_eq!(fx.shade(0.0, 0.0, &square), red);

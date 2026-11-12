@@ -1972,10 +1972,8 @@ mod tests {
         };
         // Unpadded, as some browsers write it; stored the one way we write it.
         set(&mut show, "2x1:/wAAAAD/").unwrap();
-        assert_eq!(
-            show.layer(layer).unwrap().params["picture"],
-            ParamValue::Text("2x1:/wAAAAD/".into())
-        );
+        let stored = show.layers.iter().find(|l| l.id == layer).unwrap().params["picture"].clone();
+        assert_eq!(stored, ParamValue::Text("2x1:/wAAAAD/".into()));
         let big = Picture {
             width: MAX_SIDE,
             height: MAX_SIDE,
