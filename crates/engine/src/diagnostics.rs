@@ -299,3 +299,76 @@ pub fn discover(seconds: u64) -> bool {
     }
     !seen.is_empty()
 }
+
+/// Lists MIDI controllers and prints what they send for a while. True if
+/// at least one message arrived.
+pub fn midi_test(seconds: u64) -> bool {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use midir::Ignore;
+
+    use crate::midi::{MidiEvent, note_name, parse};
+
+    let probe = match crate::midi::open_input() {
+        Ok(probe) => probe,
+        Err(e) => {
+            println!("MIDI is not available on this computer: {e}");
+            return false;
+        }
+    };
+    let ports = probe.ports();
+    if ports.is_empty() {
+        println!("No MIDI controller was found. Plug one in and run this again.");
+        return false;
+    }
+    let heard = Arc::new(AtomicUsize::new(0));
+    let mut open = Vec::new();
+    for port in &ports {
+        let name = probe.port_name(port).unwrap_or_else(|_| "unnamed".into());
+        println!("Found: {name}");
+        let Ok(mut input) = crate::midi::open_input() else {
+            continue;
+        };
+        input.ignore(Ignore::All);
+        let (count, label) = (heard.clone(), name.clone());
+        let connected = input.connect(
+            port,
+            "darkRGB check in",
+            move |_, bytes, _| {
+                let seen = count.fetch_add(1, Ordering::Relaxed);
+                // Enough to see that it works, without flooding the screen.
+                if seen < 40 {
+                    match parse(bytes) {
+                        Some(MidiEvent::Note(note, down)) => println!(
+                            "  {label}: {} {} on channel {}",
+                            note_name(note.note),
+                            if down { "down" } else { "up" },
+                            note.channel + 1
+                        ),
+                        Some(MidiEvent::Control { channel, cc, value }) => println!(
+                            "  {label}: knob {cc} on channel {} at {:.0}%",
+                            channel + 1,
+                            value * 100.0
+                        ),
+                        None => println!("  {label}: something darkRGB does not use ({bytes:02x?})"),
+                    }
+                }
+            },
+            (),
+        );
+        match connected {
+            Ok(connection) => open.push(connection),
+            Err(e) => println!("  could not listen to it: {e}"),
+        }
+    }
+    println!("Press pads and turn knobs for {seconds} seconds.");
+    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    let total = heard.load(Ordering::Relaxed);
+    if total == 0 {
+        println!("Nothing was heard. Check that the controller is on and not in use by another program.");
+    } else {
+        println!("Heard {total} messages. MIDI works.");
+    }
+    total > 0
+}

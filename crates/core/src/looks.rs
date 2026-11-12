@@ -351,23 +351,24 @@ pub const LOOKS: &[Look] = &[
 ];
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Room, Kind::Display, Kind::Club, Kind::Custom];
+    /// In the order they are offered.
+    pub const ALL: [Kind; 4] = [Kind::Display, Kind::Club, Kind::Room, Kind::Custom];
 
     /// What the kind is called where a show is started.
     pub fn name(self) -> &'static str {
         match self {
-            Kind::Room => "Room",
             Kind::Display => "Light show",
-            Kind::Club => "Club",
+            Kind::Club => "Live show",
+            Kind::Room => "Room show",
             Kind::Custom => "Blank",
         }
     }
 
     pub fn description(self) -> &'static str {
         match self {
-            Kind::Room => "A desk, a shelf, a bedroom. The lights follow your music by themselves.",
             Kind::Display => "A house, a garden, a window. Festive scenes for people passing by.",
             Kind::Club => "A party, a dance floor, a stage. Pads to play the lights by hand, strobes at full speed.",
+            Kind::Room => "A desk, a shelf, a bedroom. The lights follow your music by themselves.",
             Kind::Custom => "An empty show. Nothing is set up for you.",
         }
     }

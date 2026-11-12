@@ -22,6 +22,6 @@ pub use layout::{Device, DeviceKind, Fixture, Shape};
 pub use params::{ParamKind, ParamSpec, ParamValue, Params};
 pub use render::{Cues, LayerHit, Renderer};
 pub use show::{
-    Action, Autopilot, Binding, Blend, FlashSettings, Idle, KeyMode, Kind, Launch, Layer, LayerGroup, LightGroup, Link,
-    Mood, Only, Scene, Show, Sound, Source,
+    Action, Autopilot, Binding, Blend, FlashSettings, Idle, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, LayerGroup,
+    LightGroup, Link, MidiNote, Mood, Only, Scene, Show, Sound, Source,
 };

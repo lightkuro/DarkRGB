@@ -122,10 +122,10 @@ the WLED version, the LED count, and whether the device is on WiFi or Ethernet.
 ## Build from source
 
 Needs [Rust](https://rustup.rs/) (the version in `rust-toolchain.toml` is installed for you) and
-[Node.js](https://nodejs.org/) 22 with [pnpm](https://pnpm.io/). The app window also needs, on Linux:
+[Node.js](https://nodejs.org/) 22 with [pnpm](https://pnpm.io/). On Linux, MIDI needs `libasound2-dev` and the app window needs the rest:
 
 ```
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev
+sudo apt install libasound2-dev libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev
 ```
 
 ```

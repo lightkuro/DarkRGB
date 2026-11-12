@@ -12,6 +12,7 @@ pub mod diagnostics;
 mod e2e_tests;
 pub mod library;
 pub mod live;
+pub mod midi;
 pub mod render_loop;
 pub mod server;
 
@@ -155,6 +156,17 @@ impl Engine {
                 .spawn(move || render_loop::run(shared, stop))
                 .context("could not start the render thread")?
         };
+
+        // MIDI controllers are listened for as long as the engine runs.
+        {
+            let (shared, stop) = (shared.clone(), stop.clone());
+            let started = std::thread::Builder::new()
+                .name("midi".into())
+                .spawn(move || midi::listen(shared, stop));
+            if let Err(e) = started {
+                log::warn!("MIDI controllers will not be heard: {e}");
+            }
+        }
 
         // Discovery is a convenience. Without it devices are added by address.
         let discovery = start_discovery(shared.clone())

@@ -390,6 +390,38 @@ pub struct Binding {
     pub action: Action,
     #[serde(default)]
     pub mode: KeyMode,
+    /// The pad or key on a MIDI controller that plays this pad.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub midi: Option<MidiNote>,
+}
+
+/// A pad or key on a MIDI controller: its channel (0..15) and note (0..127).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MidiNote {
+    pub channel: u8,
+    pub note: u8,
+}
+
+/// What a knob or fader on a MIDI controller can move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum KnobTarget {
+    Brightness,
+    Speed,
+    Sensitivity,
+    /// One of the Live view's faders, numbered from 1.
+    Fader {
+        n: u8,
+    },
+}
+
+/// Ties a knob or fader on a MIDI controller (a channel and a controller
+/// number) to something it moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Knob {
+    pub channel: u8,
+    pub cc: u8,
+    pub target: KnobTarget,
 }
 
 /// When a scene change takes effect.
@@ -422,6 +454,9 @@ pub struct LiveSettings {
     pub faders: [f32; FADERS],
     #[serde(default)]
     pub idle: Idle,
+    /// Knobs and faders of a MIDI controller, and what each moves.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knobs: Vec<Knob>,
 }
 
 /// What the lights do when the music stops: after a while they change to
@@ -458,6 +493,7 @@ impl Default for LiveSettings {
             auto: Autopilot::default(),
             faders: [0.0; FADERS],
             idle: Idle::default(),
+            knobs: Vec::new(),
         }
     }
 }
@@ -1032,6 +1068,7 @@ impl Show {
             label: label.to_string(),
             action,
             mode,
+            midi: None,
         });
         id
     }
@@ -1282,6 +1319,28 @@ impl Show {
         } else {
             default_idle_after()
         };
+        // MIDI: numbers in range, one pad per note, one knob per thing.
+        let mut notes: Vec<MidiNote> = Vec::new();
+        for binding in &mut self.bindings {
+            if let Some(note) = binding.midi {
+                if note.channel > 15 || note.note > 127 || notes.contains(&note) {
+                    binding.midi = None;
+                } else {
+                    notes.push(note);
+                }
+            }
+        }
+        let mut seen: Vec<Knob> = Vec::new();
+        self.live.knobs.retain(|k| {
+            let fits = k.channel <= 15
+                && k.cc <= 127
+                && !matches!(k.target, KnobTarget::Fader { n } if n == 0 || n as usize > FADERS);
+            let fresh = !seen
+                .iter()
+                .any(|s| s.target == k.target || (s.channel, s.cc) == (k.channel, k.cc));
+            seen.push(*k);
+            fits && fresh
+        });
         for fader in &mut self.live.faders {
             *fader = if fader.is_finite() { fader.clamp(0.0, 1.0) } else { 0.0 };
         }

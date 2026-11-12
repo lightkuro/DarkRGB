@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use darkrgb_audio::{AudioCapture, InputDevice};
-use darkrgb_core::{Action, AudioFeatures, Device, KeyMode, Kind, Launch, Only, Show};
+use darkrgb_core::{Action, AudioFeatures, Device, KeyMode, Kind, KnobTarget, Launch, Only, Show};
 use darkrgb_output::scan::{self, LocalNetwork};
 use darkrgb_output::{DeviceStats, wled};
 use serde::Serialize;
@@ -16,6 +16,7 @@ use tokio::sync::watch;
 use crate::commands::{self, Command};
 use crate::library::{Library, MAX_PALETTES, MAX_PATTERNS, Pattern, Saved, SavedPalette, free_path};
 use crate::live::{Live, Pending};
+use crate::midi::{self, LearnTarget, MidiEvent, MidiStatus};
 
 /// The name shown to users. Kept in one place so a rename is one edit.
 pub const APP_NAME: &str = "darkRGB";
@@ -112,6 +113,11 @@ pub struct Shared {
     pub library_rev: watch::Sender<u64>,
     /// Effects, looks and palettes kept to use in any show.
     pub saved: Mutex<Saved>,
+    /// MIDI controllers: which are heard, and what is being learnt.
+    pub midi: Mutex<MidiStatus>,
+    /// Where knobs were last turned to, waiting for the next frame. A
+    /// knob sends far more often than a frame is drawn.
+    pub knob_moves: Mutex<Vec<(KnobTarget, f32)>>,
     /// Something the user should be told once, such as an unreadable file.
     pub notice: Mutex<Option<String>>,
     /// What is happening live: held keys, a tapped tempo, a waiting scene.
@@ -149,6 +155,8 @@ impl Shared {
             library,
             library_rev: watch::Sender::new(1),
             saved: Mutex::new(saved),
+            midi: Mutex::new(MidiStatus::default()),
+            knob_moves: Mutex::new(Vec::new()),
             notice: Mutex::new(notice),
             live: Mutex::new(Live::default()),
             live_rev: watch::Sender::new(1),
@@ -213,6 +221,15 @@ impl Shared {
             Command::RenameShowFile { file, name } => return self.rename_show_file(file, name),
             Command::RefreshLibrary => {
                 self.library_rev.send_modify(|r| *r += 1);
+                return Ok(None);
+            }
+            Command::MidiLearn { target } => {
+                if let Some(LearnTarget::Pad { binding }) = target
+                    && !self.show.lock().unwrap().bindings.iter().any(|b| b.id == *binding)
+                {
+                    return Err("that pad is no longer set up".into());
+                }
+                self.midi.lock().unwrap().learning = *target;
                 return Ok(None);
             }
             Command::SavePattern { layer, name } => return self.save_pattern(Some(*layer), name.as_deref()),
@@ -444,6 +461,105 @@ impl Shared {
     }
 
     /// After a show is renamed, its file takes the new name too.
+    /// One message from a MIDI controller. While something is being
+    /// learnt, the message is tied to it; otherwise a note plays its pad
+    /// and a knob is noted for the next frame.
+    pub fn midi_message(self: &Arc<Self>, bytes: &[u8]) {
+        let Some(event) = midi::parse(bytes) else {
+            return;
+        };
+        let learning = {
+            let mut status = self.midi.lock().unwrap();
+            status.last = Some(match event {
+                MidiEvent::Note(note, down) => format!(
+                    "{} {} on channel {}",
+                    midi::note_name(note.note),
+                    if down { "down" } else { "up" },
+                    note.channel + 1
+                ),
+                MidiEvent::Control { channel, cc, value } => {
+                    format!("knob {cc} on channel {} at {}%", channel + 1, (value * 100.0).round())
+                }
+            });
+            status.learning
+        };
+        match (event, learning) {
+            (MidiEvent::Note(note, true), Some(LearnTarget::Pad { binding })) => {
+                self.midi.lock().unwrap().learning = None;
+                let _ = self.execute(&Command::SetPadMidi {
+                    id: binding,
+                    midi: Some(note),
+                });
+            }
+            (MidiEvent::Control { channel, cc, .. }, Some(LearnTarget::Knob { target })) => {
+                self.midi.lock().unwrap().learning = None;
+                let _ = self.execute(&Command::SetKnob { target, channel, cc });
+            }
+            // Something else is being learnt: this is not for playing.
+            (_, Some(_)) => {}
+            (MidiEvent::Note(note, down), None) => {
+                let pad = self
+                    .show
+                    .lock()
+                    .unwrap()
+                    .bindings
+                    .iter()
+                    .find(|b| b.midi == Some(note))
+                    .map(|b| b.id);
+                if let Some(pad) = pad {
+                    let _ = self.trigger(pad, down);
+                }
+            }
+            (MidiEvent::Control { channel, cc, value }, None) => {
+                let target = self
+                    .show
+                    .lock()
+                    .unwrap()
+                    .live
+                    .knobs
+                    .iter()
+                    .find(|k| (k.channel, k.cc) == (channel, cc))
+                    .map(|k| k.target);
+                if let Some(target) = target {
+                    let mut moves = self.knob_moves.lock().unwrap();
+                    moves.retain(|(t, _)| *t != target);
+                    moves.push((target, value));
+                }
+            }
+        }
+    }
+
+    /// Applies where the knobs were last turned to. Called once a frame.
+    pub fn apply_knobs(self: &Arc<Self>) {
+        let moves = std::mem::take(&mut *self.knob_moves.lock().unwrap());
+        for (target, value) in moves {
+            let command = match target {
+                KnobTarget::Brightness => Command::SetMaster {
+                    brightness: Some(value),
+                    blackout: None,
+                    limit: None,
+                },
+                KnobTarget::Fader { n } => Command::SetFader { n, value },
+                KnobTarget::Speed => Command::SetLive {
+                    launch: None,
+                    fade: None,
+                    speed: Some(midi::doubling(value)),
+                    auto: None,
+                    every_bars: None,
+                    shuffle: None,
+                    on_drops: None,
+                },
+                KnobTarget::Sensitivity => Command::SetAudio {
+                    source: None,
+                    sensitivity: Some(midi::doubling(value)),
+                    delay_ms: None,
+                    dynamics: None,
+                },
+            };
+            let _ = self.execute(&command);
+        }
+    }
+
     /// Changes what is kept, writes it to disk and tells the clients.
     /// Nothing is changed if `change` refuses or the file cannot be written.
     fn change_saved(&self, change: impl FnOnce(&mut Saved) -> Result<(), String>) -> Result<Option<String>, String> {
@@ -1537,6 +1653,130 @@ mod tests {
         })
         .unwrap_err();
         assert!(error.contains("from_the_future"), "{error}");
+    }
+
+    #[test]
+    fn a_midi_controller_can_be_taught_and_then_plays_pads_and_moves_sliders() {
+        let shared = Shared::new(Show::default(), None, None);
+        let (layer, pad) = {
+            let mut show = shared.show.lock().unwrap();
+            let layer = show.layers[0].id;
+            (
+                layer,
+                show.add_pad(None, "", Action::Layer { id: layer }, KeyMode::Hold),
+            )
+        };
+        let other = shared
+            .show
+            .lock()
+            .unwrap()
+            .add_pad(None, "", Action::Blackout, KeyMode::Toggle);
+        let learn = |target| shared.execute(&Command::MidiLearn { target }).unwrap();
+        let note_of = |id: u32| {
+            shared
+                .show
+                .lock()
+                .unwrap()
+                .bindings
+                .iter()
+                .find(|b| b.id == id)
+                .unwrap()
+                .midi
+        };
+
+        // Untaught, a controller does nothing but show that it is heard.
+        shared.midi_message(&[0x90, 36, 100]);
+        assert!(!shared.live.lock().unwrap().is_held(pad));
+        assert_eq!(
+            shared.midi.lock().unwrap().last.as_deref(),
+            Some("C2 down on channel 1")
+        );
+
+        // Taught: the next pad pressed is tied to the pad. A knob moved meanwhile is not.
+        learn(Some(LearnTarget::Pad { binding: pad }));
+        shared.midi_message(&[0xB0, 7, 64]);
+        assert!(shared.midi.lock().unwrap().learning.is_some());
+        shared.midi_message(&[0x90, 36, 100]);
+        assert_eq!(note_of(pad), Some(darkrgb_core::MidiNote { channel: 0, note: 36 }));
+        assert!(shared.midi.lock().unwrap().learning.is_none());
+        assert!(
+            !shared.live.lock().unwrap().is_held(pad),
+            "the press that taught it does not play it"
+        );
+
+        // Now it plays: held while down, let go on note-off or a note-on with no velocity.
+        shared.midi_message(&[0x90, 36, 100]);
+        assert!(shared.live.lock().unwrap().is_held(pad));
+        shared.midi_message(&[0x80, 36, 0]);
+        assert!(!shared.live.lock().unwrap().is_held(pad));
+        shared.midi_message(&[0x90, 36, 100]);
+        shared.midi_message(&[0x90, 36, 0]);
+        assert!(!shared.live.lock().unwrap().is_held(pad));
+        // Another channel is another pad.
+        shared.midi_message(&[0x91, 36, 100]);
+        assert!(!shared.live.lock().unwrap().is_held(pad));
+
+        // The same note taught to another pad moves there.
+        learn(Some(LearnTarget::Pad { binding: other }));
+        shared.midi_message(&[0x90, 36, 100]);
+        assert_eq!((note_of(pad), note_of(other).map(|n| n.note)), (None, Some(36)));
+        shared.midi_message(&[0x90, 36, 100]);
+        assert!(
+            shared.show.lock().unwrap().master.blackout,
+            "the note now switches blackout"
+        );
+        shared.midi_message(&[0x90, 36, 0]);
+        shared.midi_message(&[0x90, 36, 100]);
+        assert!(!shared.show.lock().unwrap().master.blackout);
+
+        // Knobs: taught the same way, applied once a frame, the latest position winning.
+        learn(Some(LearnTarget::Knob {
+            target: KnobTarget::Brightness,
+        }));
+        shared.midi_message(&[0xB0, 7, 0]);
+        learn(Some(LearnTarget::Knob {
+            target: KnobTarget::Fader { n: 2 },
+        }));
+        shared.midi_message(&[0xB0, 8, 0]);
+        learn(Some(LearnTarget::Knob {
+            target: KnobTarget::Speed,
+        }));
+        shared.midi_message(&[0xB0, 9, 0]);
+        assert_eq!(shared.show.lock().unwrap().live.knobs.len(), 3);
+        for value in [10, 50, 127, 64] {
+            shared.midi_message(&[0xB0, 7, value]);
+        }
+        shared.midi_message(&[0xB0, 8, 127]);
+        shared.midi_message(&[0xB0, 9, 127]);
+        assert_eq!(
+            shared.show.lock().unwrap().master.brightness,
+            1.0,
+            "nothing moves until the frame"
+        );
+        shared.apply_knobs();
+        {
+            let show = shared.show.lock().unwrap();
+            assert!((show.master.brightness - 64.0 / 127.0).abs() < 1e-6);
+            assert_eq!(show.live.faders[1], 1.0);
+            assert_eq!(show.live.speed, 4.0, "full turn is four times the speed");
+        }
+        // Cancelling, and pads that are gone.
+        learn(Some(LearnTarget::Pad { binding: pad }));
+        learn(None);
+        shared.midi_message(&[0x90, 40, 100]);
+        assert_eq!(note_of(pad), None);
+        assert!(
+            shared
+                .execute(&Command::MidiLearn {
+                    target: Some(LearnTarget::Pad { binding: 9999 })
+                })
+                .is_err()
+        );
+        // Nonsense from a controller is ignored.
+        shared.midi_message(&[]);
+        shared.midi_message(&[0xF8]);
+        shared.midi_message(&[0x90, 200, 5]);
+        let _ = layer;
     }
 
     #[test]

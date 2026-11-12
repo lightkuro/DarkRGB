@@ -166,7 +166,20 @@ export interface Binding {
   label: string;
   action: Action;
   mode: KeyMode;
+  /** The pad or key on a MIDI controller that plays this pad. */
+  midi?: MidiNote;
 }
+
+/** A pad or key on a MIDI controller: channel 0 to 15, note 0 to 127. */
+export interface MidiNote {
+  channel: number;
+  note: number;
+}
+
+/** What a knob or fader on a MIDI controller can move. */
+export type KnobTarget = { type: "brightness" | "speed" | "sensitivity" } | { type: "fader"; n: number };
+
+export type LearnTarget = { type: "pad"; binding: number } | { type: "knob"; target: KnobTarget };
 
 export type Launch = "now" | "beat" | "bar";
 
@@ -256,6 +269,8 @@ export interface Show {
     faders: number[];
     /** The scene to change to when the music stops, and after how many seconds. */
     idle: { scene: number | null; after: number };
+    /** Knobs and faders of a MIDI controller, and what each moves. Left out when there are none. */
+    knobs?: { channel: number; cc: number; target: KnobTarget }[];
   };
   output: {
     frame_rate: number;
@@ -326,6 +341,8 @@ export interface Status {
   notice: string | null;
   /** Where the show is saved on the computer running the engine. */
   show_file: string | null;
+  /** MIDI controllers: whether there is MIDI at all, which are heard, the last thing heard. */
+  midi?: { available: boolean; ports: string[]; learning: LearnTarget | null; last: string | null };
 }
 
 /** One show in the library on the engine's computer. */
@@ -500,6 +517,10 @@ export type Command =
   | { type: "set_link"; layer: number; param: string; source: Source; amount: number }
   | { type: "remove_link"; layer: number; param: string }
   | { type: "set_fader"; n: number; value: number }
+  | { type: "midi_learn"; target: LearnTarget | null }
+  | { type: "set_pad_midi"; id: number; midi: MidiNote | null }
+  | { type: "set_knob"; target: KnobTarget; channel: number; cc: number }
+  | { type: "remove_knob"; target: KnobTarget }
   | { type: "set_scene_mood"; id: number; mood: Mood }
   | { type: "set_idle"; scene: number | null; after?: number }
   | { type: "set_master"; brightness?: number; blackout?: boolean; limit?: number }

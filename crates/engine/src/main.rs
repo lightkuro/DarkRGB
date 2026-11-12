@@ -68,6 +68,11 @@ enum Tool {
         #[arg(long, default_value_t = 5)]
         seconds: u64,
     },
+    /// List MIDI controllers and print what they send, to check that one is heard.
+    MidiTest {
+        #[arg(long, default_value_t = 20)]
+        seconds: u64,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -86,6 +91,7 @@ fn main() -> anyhow::Result<()> {
             Tool::AudioTest { seconds, source } => diagnostics::audio_test(&source, seconds.clamp(2, 600)),
             Tool::DdpTest { address, fps, seconds } => diagnostics::ddp_test(&address, fps, seconds.clamp(1, 3600)),
             Tool::Discover { seconds } => diagnostics::discover(seconds.clamp(1, 120)),
+            Tool::MidiTest { seconds } => diagnostics::midi_test(seconds.clamp(1, 600)),
         };
         std::process::exit(if ok { 0 } else { 1 });
     }

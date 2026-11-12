@@ -281,6 +281,7 @@ fn status_message(shared: &Shared) -> String {
         "scan": &*shared.scan.lock().unwrap(),
         "discovered": discovered,
         "notice": &*shared.notice.lock().unwrap(),
+        "midi": &*shared.midi.lock().unwrap(),
         "show_file": shared.save_path.lock().unwrap().as_ref().map(|p| p.display().to_string()),
     })
     .to_string()

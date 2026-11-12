@@ -33,6 +33,7 @@ import {
 import { AudioControls, Tempo } from "./AudioMeter";
 import { DemoSwitch } from "./DevicePanel";
 import { KeyAssign, Keycap, modeNote } from "./Keys";
+import { MidiSettings } from "./Midi";
 import { NameField, Slider, Switch } from "./ui";
 
 const PAGES: { id: SettingsPage; name: string; icon: ReactNode }[] = [
@@ -461,6 +462,8 @@ function LivePage({ show }: { show: Show }) {
           </p>
         </>
       )}
+
+      <MidiSettings />
 
       {full ? (
         <>

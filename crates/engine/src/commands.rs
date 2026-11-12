@@ -7,9 +7,12 @@ use darkrgb_core::layout::MAX_PIXELS;
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::show::{Blend, FADERS, FRAME_RATES, LINK_STRENGTH, MAX_LINKS, linkable, mend_links};
 use darkrgb_core::{
-    Action, Band, FlashSettings, KeyMode, Kind, Launch, Layer, Link, Mood, Only, Rgb, Shape, Show, Sound, Source,
+    Action, Band, FlashSettings, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, Link, MidiNote, Mood, Only, Rgb,
+    Shape, Show, Sound, Source,
 };
 use serde::Deserialize;
+
+use crate::midi::LearnTarget;
 
 const MAX_NAME: usize = 80;
 /// Most effects outside pinned folders, which is also the most a scene holds.
@@ -353,6 +356,26 @@ pub enum Command {
     RemoveLink {
         layer: u32,
         param: String,
+    },
+    /// Ties a pad or key on a MIDI controller to a pad, or unties it. A
+    /// note plays one pad: a pad that had it loses it.
+    SetPadMidi {
+        id: u32,
+        midi: Option<MidiNote>,
+    },
+    /// Ties a knob or fader on a MIDI controller to something it moves.
+    SetKnob {
+        target: KnobTarget,
+        channel: u8,
+        cc: u8,
+    },
+    RemoveKnob {
+        target: KnobTarget,
+    },
+    /// Waits for the next thing touched on a MIDI controller and ties it
+    /// to this; nothing cancels the wait. Handled by the app.
+    MidiLearn {
+        target: Option<LearnTarget>,
     },
     /// Moves one of the Live view's faders, numbered from 1.
     SetFader {
@@ -721,6 +744,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
         | Command::DuplicateShow { .. }
         | Command::DeleteShow { .. }
         | Command::RenameShowFile { .. }
+        | Command::MidiLearn { .. }
         | Command::SavePattern { .. }
         | Command::SaveLook { .. }
         | Command::UsePattern { .. }
@@ -1502,6 +1526,51 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
         Command::RemoveLink { layer, param } => {
             let layer = show.layer_mut(*layer).ok_or("that layer no longer exists")?;
             layer.links.retain(|l| l.param != *param);
+            Ok(())
+        }
+
+        Command::SetPadMidi { id, midi } => {
+            if let Some(note) = midi
+                && (note.channel > 15 || note.note > 127)
+            {
+                return Err("that is not a MIDI note".into());
+            }
+            if !show.bindings.iter().any(|b| b.id == *id) {
+                return Err("that pad is no longer set up".into());
+            }
+            for binding in &mut show.bindings {
+                if binding.id == *id {
+                    binding.midi = *midi;
+                } else if midi.is_some() && binding.midi == *midi {
+                    binding.midi = None;
+                }
+            }
+            Ok(())
+        }
+
+        Command::SetKnob { target, channel, cc } => {
+            if *channel > 15 || *cc > 127 {
+                return Err("that is not a MIDI controller number".into());
+            }
+            if let KnobTarget::Fader { n } = target
+                && !(1..=FADERS as u8).contains(n)
+            {
+                return Err(format!("there are {FADERS} faders"));
+            }
+            // A knob moves one thing, and a thing has one knob.
+            show.live
+                .knobs
+                .retain(|k| k.target != *target && (k.channel, k.cc) != (*channel, *cc));
+            show.live.knobs.push(Knob {
+                channel: *channel,
+                cc: *cc,
+                target: *target,
+            });
+            Ok(())
+        }
+
+        Command::RemoveKnob { target } => {
+            show.live.knobs.retain(|k| k.target != *target);
             Ok(())
         }
 
@@ -2524,7 +2593,7 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 48 {
+            let command = match r.next() % 51 {
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {
@@ -2660,6 +2729,26 @@ mod tests {
                 47 => Command::SetIdle {
                     scene: r.maybe(|_| scene),
                     after: r.maybe(Awkward::number),
+                },
+                48 => Command::SetPadMidi {
+                    id: binding,
+                    midi: r.maybe(|r| MidiNote {
+                        channel: r.next() as u8 % 20,
+                        note: r.next() as u8 % 140,
+                    }),
+                },
+                49 => Command::SetKnob {
+                    target: match r.next() % 4 {
+                        0 => KnobTarget::Brightness,
+                        1 => KnobTarget::Speed,
+                        2 => KnobTarget::Sensitivity,
+                        _ => KnobTarget::Fader { n: r.next() as u8 % 6 },
+                    },
+                    channel: r.next() as u8 % 20,
+                    cc: r.next() as u8 % 140,
+                },
+                50 => Command::RemoveKnob {
+                    target: KnobTarget::Fader { n: r.next() as u8 % 6 },
                 },
                 45 => Command::SetFader {
                     n: r.next() as u8 % 6,

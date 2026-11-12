@@ -39,6 +39,7 @@ import {
 } from "../engine";
 import { KeyAssign, Keycap, behaviours, modeNote } from "./Keys";
 import { swatch } from "./LayerPanel";
+import { MidiPad } from "./Midi";
 import { Slider, Switch, useDismiss } from "./ui";
 
 const setSpeed = perFrame((speed: number) => engine.quiet({ type: "set_live", speed }));
@@ -245,6 +246,7 @@ function PadEditor({ action, show, hello, movable }: { action: Action; show: Sho
     <div className="pad-editor" role="group" aria-label={`Set up ${name}`}>
       <strong className="pad-editor-name">{name}</strong>
       <KeyAssign action={action} label="Key" keepPad />
+      {binding && <MidiPad binding={binding} />}
       {/* A pad with no key yet can still be told what a press does. */}
       {!binding && choices.length > 0 && (
         <div className="segmented" role="radiogroup" aria-label={`What a press does for ${name}`}>

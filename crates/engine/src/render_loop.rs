@@ -109,6 +109,8 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
 
     while !stop.load(Ordering::Relaxed) {
         let frame_start = Instant::now();
+        // Knobs turned on a MIDI controller since the last frame.
+        shared.apply_knobs();
 
         let show_changed = revisions.has_changed().unwrap_or(false);
         let live_changed = live_revisions.has_changed().unwrap_or(false);
