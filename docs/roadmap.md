@@ -1,6 +1,6 @@
 # Roadmap
 
-Written on 2026-11-10, last updated 2026-11-12 for version 0.5.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
+Written on 2026-11-10, last updated 2026-11-12 for version 0.6.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
 features. The design targets room/desk setups (a few WLED devices, up to a few thousand pixels) and house/yard
 shows (many controllers, 5k to 50k pixels). See [architecture.md](architecture.md) for the design.
 
@@ -38,7 +38,7 @@ Built:
 - The song's shape: how big this part of the song is against the last 45 seconds, and when it moves to a new
   section. Quiet parts are dimmed and slowed by an amount the user sets.
 - Fifteen starter scenes, placed on strips and matrices as suits each, including on lights added later.
-- Three kinds of show (a room, a light show, a club) and blank. The kind chosen when a show is started sets
+- Three kinds of show (a room show, a light show, a live show) and blank. The kind chosen when a show is started sets
   its scenes, pads, how scenes change and how it treats flashing.
 - Any slider can follow loudness, bass, mids, highs, the beat, hits, the song's energy, a slow wave in time
   with the music, or a fader in the Live view.
@@ -104,16 +104,21 @@ Built:
 - Four faders that sliders can follow, shown in the Live view when something does.
 - A key held by a window that closes or loses focus is let go.
 - Master dimmer, blackout, palettes, layers with blend modes (from stage 1).
+- MIDI controllers, with the same "learn" as keys: notes on pads, knobs and faders on brightness, speed,
+  sensitivity and the four faders. The engine listens for MIDI itself, so it works in the app window on
+  Linux, where the web view has no MIDI. **Not yet tried with a real controller**, and the machine it was
+  built on cannot even make a pretend one, so only the handling of messages is tested.
+- Colour pads: one press changes the colours of everything that is playing.
+- Four pages of pads, and an XY pad that bends two faders at once.
+- Undo and redo for every change to a show.
+- A phone or tablet as a remote, let in by a six-digit code shown on the computer.
 
 Left:
 
-- MIDI controllers, with the same "learn" as keys. The engine will listen for MIDI itself, so it works in the
-  app window on Linux, where the web view has no MIDI. Waiting until someone has a controller to test with.
 - A grid of clips: today a pad switches or fires an effect that is already in the stack. Clips that start from
   their beginning when launched, and one-shot clips that end by themselves, are not built.
-- Pad pages (banks), and an XY pad to bend two faders at once.
 - Seeing which key does what on one printable page.
-- Colour pads: one press to change the colours of everything that is playing.
+- Lights on a controller's pads showing what is on (MIDI feedback).
 
 Done when a full song can be performed from the keyboard without touching the mouse.
 
@@ -123,16 +128,23 @@ Done when a full song can be performed from the keyboard without touching the mo
 - Clips on layers with trim, move and snap to beats.
 - Curves on parameters.
 - Record a live performance into the timeline.
-- Undo and redo everywhere.
 
 Done when a three-minute show can be recorded live, cleaned up in the editor and played back in sync.
 
 ## 4. Yard scale
 
-- sACN and Art-Net controllers.
+Built:
+
+- sACN (E1.31) and Art-Net controllers, sent straight to an address (unicast), 170 LEDs to a universe, RGB
+  order. **Not yet tried with a real controller.** Multicast sACN, other colour orders, and a controller's
+  outputs starting mid-universe are not built.
+- Hours for a show to keep each day. A calendar (different days, dates, sunset) is not built.
+- Words and small pictures on matrices. Animated pictures are not built.
+
+Left:
+
 - Import an xLights layout.
 - Export `.fseq` v2 and upload to FPP.
-- Scheduler for unattended playback.
 - 3D preview.
 - Performance target: 50,000 pixels at 40 fps on a mid-range PC. Measured on 2026-11-10 for the engine alone:
   50,000 pixels on ten simulated devices with three effect layers ran at 60 fps, 4.2 ms of work per frame, on a
@@ -142,21 +154,25 @@ Done when a three-minute show can be recorded live, cleaned up in the editor and
 
 - User effects as shaders or WASM plugins.
 - DMX fixtures (pars, moving heads).
-- Phone remote polish.
+- Phone remote polish: a layout made for a phone, and the remote switched on without a restart.
 - Ableton Link tempo sync.
 - Hue, OpenRGB and other device families.
 - macOS build.
 
 ## Before the first public release
 
-The repository can be made public as it is: the history holds no secrets and no personal addresses, and every
-dependency's licence is compatible with GPL-3.0-or-later. Before handing out builds:
+The repository is public. Done since it was first listed here: the licences of the bundled libraries ship
+with every download (`tools/third_party.py` makes the list for each build), a Release workflow drafts a
+GitHub release with installers and checksums, other devices need a pairing code, and the repository is named
+after the product.
 
-- Ship the licences of the bundled libraries with the programs (MIT, Apache and BSD ask for their notices to
-  travel with binaries). `cargo about` can generate the file in CI.
-- Attach builds to GitHub Releases. CI downloads expire after a week and need a GitHub login.
-- Decide on a password or pairing code for `--lan`, or keep saying plainly that it has none.
-- Rename the repository to match the product (`darkRGB`); the old name clashes with another project.
+Still to do before the first release is published:
+
+- Run the Release workflow once and try what it makes: the Windows setup program has never been built, and
+  none of the installers has been installed on a real desktop.
+- Merge `dev` into `main`, which is still the first version.
+- Try real hardware: a WLED device, a MIDI controller, and an sACN or Art-Net controller if one is to hand.
+- Decide about signing. Unsigned, Windows shows a warning before the setup program runs.
 
 ## Open decisions
 
@@ -167,7 +183,7 @@ dependency's licence is compatible with GPL-3.0-or-later. Before handing out bui
 | Linux shell | Tauri (WebKitGTK) or Electron | Tauri is built and works. Electron only if the preview proves too slow on real hardware. |
 | Phone remote | Password or pairing code for `--lan` | Needed before recommending `--lan`. Today anyone on the network can control the lights. The Live view's pads already work by touch. |
 | Where settings live | Decided 2026-11-11, changed 2026-11-12 | The frame rate, sound source, sensitivity, speaker delay, energy setting and brightness ceiling describe the room and the computer. (The flash limit was among them until 0.5.0, when it moved to the show: it depends on who will see the lights.) They are still written into each show file, but opening, starting or importing a show keeps the ones in use, so a show file never changes them. |
-| Flash limit default | Decided 2026-11-11: on, "hard flashes" level; since 2026-11-12 asked once per show, and off for club shows | Counts a flash when the average brightness of the whole picture jumps by a quarter of full or more, and allows three a second. The stricter level counts a jump of a tenth, the threshold used for screens; at that level it softened most beat-driven looks, so it is offered as a choice and is not the default. One switch turns the limit off. |
+| Flash limit default | Decided 2026-11-11: on, "hard flashes" level; since 2026-11-12 asked once per show, and off for live shows | Counts a flash when the average brightness of the whole picture jumps by a quarter of full or more, and allows three a second. The stricter level counts a jump of a tenth, the threshold used for screens; at that level it softened most beat-driven looks, so it is offered as a choice and is not the default. One switch turns the limit off. |
 | Windows code signing | Sign or ship unsigned | Unsigned installers trigger SmartScreen warnings; certificates cost money. Ship unsigned until there are users. |
 
 ## Things to keep in mind
@@ -177,10 +193,12 @@ dependency's licence is compatible with GPL-3.0-or-later. Before handing out bui
 - **Safety:** the flash limit, and a question asked once per show about it, are built. The limit looks at the
   whole picture, so one small light flashing fast among many steady ones is not held back. Still to do: cap
   brightness or power per device so a mistake cannot overload a power supply.
-- **Network exposure:** the engine listens on localhost only by default. The first run on Windows triggers a
-  firewall prompt for device discovery; explain it in the app.
+- **Network exposure:** the engine listens on localhost only by default. With phone access on it listens on
+  the network, asks other devices for a code, and speaks plain HTTP; see SECURITY.md. The first run on
+  Windows triggers a firewall prompt for device discovery; explain it in the app.
 - **Latency:** show the measured audio-to-light delay and give a per-device offset.
-- **Linux packaging:** AppImage and Flatpak. Flatpak needs network and audio permissions declared.
+- **Linux packaging:** a `.deb` and an AppImage are built. Flatpak is not; it needs network and audio
+  permissions declared.
 - **Testing:** golden-frame tests for effects (same inputs give the same pixels) and the simulated WLED device
   in CI.
 - **Sharing shows:** songs are copyrighted, so exported or shared shows reference the audio and do not bundle it.

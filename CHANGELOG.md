@@ -1,6 +1,31 @@
 # What's new
 
-## 0.5.0 (in development)
+## 0.6.0 (in development)
+
+Controllers, a phone as a remote, words and pictures, more kinds of lights, and installers.
+
+- The kinds of show are now called Light show, Live show, Room show and Blank.
+- MIDI controllers. Any pad can learn a note: choose "MIDI" on the pad and press the key or pad on your
+  controller. Knobs and faders can drive brightness, speed, sensitivity and the four live faders. Not yet
+  tried with a real controller; please report how yours behaves.
+- Undo and redo for every change to a show, with Ctrl+Z and Ctrl+Shift+Z or the arrows by the show's name.
+  Dragging a slider is one step.
+- Colour pads: one press recolours everything that is playing, and another gives the colours back.
+- Pads can be spread over four pages, so one key or one controller pad can do four things. An XY pad bends
+  two settings at once with one finger.
+- Words: a line of text across a matrix, still or scrolling.
+- Picture: any image, shrunk to fit your matrix. Simple pictures with strong colours look best.
+- A show can keep hours, such as on at five in the afternoon and off at half past ten.
+- Pixel controllers that take sACN (E1.31) or Art-Net can be added by address and universe, beside WLED
+  devices. Not yet tried with a real controller.
+- A phone or tablet as a remote: switch it on in Settings, open the address shown on the phone, and enter
+  the six-digit code. Before, opening the app to the network let anyone on it control the lights.
+- Installers: a setup program for Windows, a `.deb` and an AppImage for Linux. Every download now carries
+  the licences of the libraries built into it.
+- Fixed: answers to some commands never reached the part of the app waiting for them, so "Use" on a kept
+  effect gave no confirmation.
+
+## 0.5.0
 
 A show for every kind of place, a simpler screen to start on, and sliders that move with the music.
 

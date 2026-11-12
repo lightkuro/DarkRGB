@@ -177,6 +177,24 @@ A scene change can **fade**: the frame loop keeps the outgoing show and its rend
 mixes them until the fade is over. The incoming scene starts with a fresh renderer; the fade hides the
 restart.
 
+**Undo** keeps whole copies of the show, a hundred at most. A command is remembered unless it is part of
+performing (master brightness, the faders, speed, sound, the page of pads); those values are carried across
+an undo, so undoing an edit never moves the brightness. A run of the same command within 900 ms, such as a
+slider being dragged, is one step.
+
+**MIDI** is heard by the engine (`midi.rs`, with `midir`), not the web view, so it works in every window and
+browser. A pad holds a note and channel; a knob holds a controller number and what it drives. "Learn" is a
+state in the engine: the next note or knob message is bound to whatever is waiting. Knob messages arrive
+far faster than frames, so only the last value for each target is kept and applied once a frame.
+
+**Colour pads** hold a palette. While one is on, the renderer hands that palette to every palette setting of
+every layer; nothing in the show is rewritten, so letting go gives the colours back. **Pages**: a pad
+belongs to one of four pages or to all of them, and a key or note is unique only among pads that share a
+page.
+
+A show's **hours** (`Schedule`) are minutes after midnight. The frame loop checks the computer's clock about
+once a second; outside the hours it blacks out the rendered copy, so the show's own blackout is untouched.
+
 Sound can be **delayed** for speakers that play late: the frame loop keeps a short history of audio features
 and reads from the past. The tapped tempo is not delayed, since it is tapped to what the user hears.
 
@@ -188,7 +206,7 @@ nothing can get around it and the preview shows what the lights do.
 
 The choice belongs to the show (`Show.flash`), because it depends on who will see the lights. A show starts
 with the limit on and `decided` false; the first time it has an effect made to flash, or the limit softens
-something, the UI asks whether to keep it. A club show starts with it off.
+something, the UI asks whether to keep it. A live show starts with it off.
 
 Effects say what they have to do with flashing (`FlashUse`), so that nothing has to be designed around the
 limit. Most say nothing. Strobe is `Capped`: while the limit is on it runs at just under the limit, on every
@@ -214,9 +232,10 @@ saturated red, both of which the full guidance for screens considers.
 where they play (all lights, strips only, matrices only) and the parts of a song they suit. `Show::add_look`
 turns one into an ordinary scene, so nothing about them is special once added.
 
-A show has a **kind** (`Kind`: room, display, club or custom), chosen when it is started. `Kind::looks` says
+A show has a **kind** (`Kind`: room, display, club or custom in files; Room show, Light show, Live show and
+Blank on screen), chosen when it is started. `Kind::looks` says
 which looks a kind gets and in what order; `commands::set_up` adds them and sets how scenes change, the scene
-to wait in when the music stops, and for a club the pads and the flash choice. The kind decides how a show
+to wait in when the music stops, and for a live show the pads and the flash choice. The kind decides how a show
 begins and nothing after that.
 
 "Strips only" is a rule on the layer (`Layer.only`), not a list of lights, so a look added before the lights
@@ -345,9 +364,14 @@ all of it.
 
 ### Generic pixel controllers
 
-- **sACN (E1.31) and Art-Net:** 512 channels per universe, so 170 RGB pixels. Covers Falcon, Kulp, HinksPix,
-  Advatek PixLite and DMX nodes. WLED also accepts these but caps universes (12 on ESP32 in the source), which is
-  why DDP is preferred for WLED. [WLED E1.31](https://kno.wled.ge/interfaces/e1.31-dmx/)
+- **sACN (E1.31) and Art-Net** (built, `crates/output/src/dmx.rs`): 512 channels per universe, so 170 RGB
+  pixels. A device of these kinds has a first universe; its frame is cut into universes numbered upward
+  from it and sent as one packet each, straight to the device's address. Every universe of a frame carries
+  the same sequence number. Nothing can be asked of such a controller, so its LED count and shape are typed
+  in. Covers Falcon, Kulp, HinksPix, Advatek PixLite and DMX nodes. WLED also accepts these but caps
+  universes (12 on ESP32 in the source), which is why DDP is preferred for WLED.
+  [WLED E1.31](https://kno.wled.ge/interfaces/e1.31-dmx/) Not built: multicast, colour orders other than
+  RGB, sACN priority and synchronisation.
 - **`.fseq` v2 export and FPP upload:** render a timeline show to a file that a Falcon Player runs on its own.
 - **xLights layout import:** read models and positions from an existing xLights setup.
 
@@ -390,8 +414,18 @@ asking, with the `Origin` header required.
 - The server listens on this computer only (127.0.0.1) unless started with `--lan`.
 - Any web page can try to open a WebSocket to localhost, so the server checks two headers. `Host` must name
   this machine, which defeats DNS rebinding. `Origin` must be the page the server itself served.
-- With `--lan` there is no password yet: anyone on the network can control the lights, and the `Host` check is
-  off. A pairing code is planned before this is recommended.
+- With phone access on (`--lan`, or the switch in Settings, which takes effect at the next start) the server
+  listens on the network and the `Host` check is off. Another device must then be **paired** (`pairing.rs`):
+  it posts a six-digit code, made afresh at each start and shown only to this computer, and is handed a
+  long random token in a cookie that scripts cannot read. Without the cookie it gets the page and nothing
+  else: no WebSocket, no import. Wrong codes are counted per address (five, then a minute's wait) and
+  overall (thirty, then a wait for everyone).
+- "This computer" means a connection from a loopback address **and** under a loopback name. The second half
+  matters: a hostile page can point its own name at 127.0.0.1, and that connection arrives from this
+  computer's own browser. It is asked for the code like any other device.
+- A paired device is not told the code and cannot switch phone access on or off.
+- A request's number travels as `req` and is repeated in its `result`. Commands carry an `id` of their own
+  (the device or effect they are about), and the two once shared that field.
 
 ## Project files
 
@@ -433,6 +467,10 @@ with a `media/` folder for songs and images. Shared shows leave the songs out.
 | Beat tracking | own code | `aubio` bindings are GPL-3 and stale |
 | mDNS | `mdns-sd` | |
 | DDP | own code | The header is 10 bytes (`crates/output/src/ddp.rs`) |
+| sACN, Art-Net | own code | Two packet layouts, each checked against its standard in tests (`dmx.rs`) |
+| MIDI | `midir` | ALSA on Linux, WinMM on Windows |
+| Pairing code and token | `getrandom` | The operating system's random numbers |
+| The clock, for a show's hours | `chrono` | Local time only |
 | WLED HTTP | `ureq` | Requests never go through a system proxy |
 | Server | `axum`, `tokio` | |
 | Embedding the UI | `rust-embed` | The built UI is compiled into the program |
@@ -440,7 +478,11 @@ with a `media/` folder for songs and images. Shared shows leave the songs out.
 | Local networks | `if-addrs` | For suggesting addresses and scanning |
 | Frame pacing | `spin_sleep` | |
 
-Planned: `midir` (MIDI), `sacn` (sACN), own code for Art-Net, `symphonia` (song decoding).
+Planned: `symphonia` (song decoding).
+
+Pictures need no crate: the browser shrinks the chosen image and sends plain pixels, which travel as text in
+the effect's setting (`picture.rs`). Installers come from the Tauri bundler, configured in
+`crates/desktop/tauri.bundle.conf.json` and run only by the build workflow.
 
 Open-source projects worth reading: [LedFx](https://github.com/LedFx/LedFx) (audio effects),
 [Mizer](https://github.com/maxjoehnk/Mizer) (Rust lighting engine with a Flutter UI),
