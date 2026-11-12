@@ -1,6 +1,33 @@
 # What's new
 
-## 0.4.0 (in development)
+## 0.5.0 (in development)
+
+A show for every kind of place, a simpler screen to start on, and sliders that move with the music.
+
+- Starting a show asks what you are lighting: a room, a light show for a house or garden, or a club night.
+  Each begins with scenes, pads and settings of its own. Or start blank.
+- Eight new starter scenes, fifteen in all: Aurora, Fairy lights, Candy cane, Snowfall, Red and green, Warm
+  glow, Colour hits and Storm.
+- Five new effects: Stripes, Twinkle, Snow, Colour steps and Lightning. Six new palettes.
+- The flash limit now belongs to each show. The first time something in a show flashes fast, you are asked
+  whether to keep the limit or switch it off; after that a small note on the stage is all there is. A club
+  show starts with it off.
+- With the limit on, a strobe slows itself to three clean flashes a second instead of being softened, and
+  stays in time with the music. Lightning, which only works flashing fast, is switched off and says so.
+- A simple layout and a full one. Simple, which you start in, shows what most shows need. Full adds folders,
+  groups, what an effect hears, how effects mix, keys on everything and every setting. One switch, in
+  Settings or above the effects.
+- Any slider can follow the music: loudness, bass, mids, highs, the beat, hits or the song's energy. Or a slow
+  wave in time with the music, or one of four faders in the Live view.
+- Palettes of your own: two to eight colours, picked in the colours list.
+- Keep an effect with its settings, a whole look, or a palette, and use it in any show. Kept things are
+  offered first when you add an effect, and listed under the show's name.
+- When the music stops, the lights can change to a scene you choose and come back when it starts again.
+- Autopilot picks calm scenes for the quiet parts of a song and big ones for the drops. Each scene can say
+  which it is.
+- An effect can be kept to strips or to matrices, whichever lights the show has now or gets later.
+
+## 0.4.0
 
 Live mode you can set up as you play, lights that follow the shape of the song, and a place for your shows.
 

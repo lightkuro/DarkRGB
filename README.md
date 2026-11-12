@@ -10,58 +10,83 @@ between them:
 It targets ESP32 controllers running [WLED](https://kno.wled.ge/) first, then generic sACN and Art-Net pixel
 controllers.
 
-![darkRGB: two strips picked on the stage, starter scenes with number keys, a pinned folder of live effects](docs/images/main.png)
+![darkRGB: a room show on demo lights, in the simple layout](docs/images/main.png)
+
+## Who it is for
+
+Starting a show asks what you are lighting, and sets the show up to suit:
+
+- **A room or a desk.** Scenes that change by themselves with the music, a calm scene to wait in when the
+  music stops, and nothing to learn first.
+- **A light show** on a house, in a garden or in a window. Festive scenes (fairy lights, candy cane, snow,
+  red and green), long and slow to change, gentle on people passing by.
+- **A club night or a concert.** Pads to play the lights by hand: white flash, strobe, colour pulse,
+  lightning, blackout, tap tempo. Scene changes land on the beat.
+
+Or start blank. The kind of show only decides what it begins with; everything can be changed afterwards.
 
 ## Status
 
-Version 0.4.0, in development. Audio-reactive mode works end to end and now follows the shape of a song, not
-only its loudness. Live mode is playable from the keyboard or a touch screen. MIDI and the timeline are not
-started.
+Version 0.5.0, in development. Audio-reactive mode and live control are both complete enough to run a show
+with: fifteen starter scenes, twenty effects, pads and keys, autopilot, and any slider tied to the music.
+MIDI controllers and the timeline are not started.
 
 | | Linux | Windows |
 |---|---|---|
-| Automated tests | pass | passed as of 0.2.0; nothing since has been built there |
+| Automated tests | pass | see the latest CI run |
 | System audio with no setup | works (PulseAudio and PipeWire, tested with virtual speakers) | works (checked on one Windows PC) |
-| The app window | works, keys included (tested under a virtual display) | built as of 0.2.0; not yet run by anyone |
+| The app window | works, keys included (tested under a virtual display) | built by CI; not yet run by anyone since 0.2.0 |
 | Real WLED hardware | not yet tried | not yet tried |
 
 The effects, the song-energy tracking and the drop detection have only met synthetic test songs so far, so
 expect them to need tuning against real music. See [docs/roadmap.md](docs/roadmap.md) for the details.
 
-**Flashing lights.** Fast flashing can trigger seizures in people with photosensitive epilepsy. darkRGB softens
-hard flashes that come faster than three a second, on the lights and in the preview. The limit is on by
-default and one switch turns it off; with it off and other people in the room, that risk is yours to manage.
+**Flashing lights.** Fast flashing can trigger seizures in people with photosensitive epilepsy. Each show has
+a flash limit that holds flashing to three a second: strobes slow down to that, and anything else that
+flashes faster is softened. A new show starts with it on, and asks you to choose the first time something
+flashes fast; a club show starts with it off. With the limit off and other people in the room, that risk is
+yours to manage. The limit judges the whole picture and is a safeguard, not a guarantee.
 
 What works today:
 
 - Opens as one window. Finds WLED devices on the network, adds them by address, or scans the network for them.
 - Demo lights and virtual lights that exist only on screen, for trying effects and planning layouts without
-  hardware. One click on first run gives demo lights, seven starter scenes and autopilot.
+  hardware. One click on first run gives demo lights and a show that is already running.
+- A simple layout by default, and a full one with every control, switched by one setting.
 - Captures system audio with no setup and analyses it: loudness, 32 frequency bands, hits in bass, mids and
   highs, tempo and beats, how big this part of the song is, and when the song moves to a new section.
-- Fifteen effects in layers. Each can play on all lights, chosen ones or a group, drawn across them or once
-  per light, and react to everything, bass, mids, highs or a frequency range you pick.
+- Twenty effects in layers. Each can play on all lights, chosen ones, a group, or only strips or only
+  matrices; drawn across them or once per light; reacting to everything, bass, mids, highs or a frequency
+  range you pick.
+- Any slider can follow the music (loudness, bass, mids, highs, the beat, hits, the song's energy), a slow
+  wave in time with it, or a fader in the Live view.
+- Colours from built-in palettes or palettes of your own.
 - Quiet parts of a song are dimmer and calmer and drops hit harder; a setting says how much.
-- Folders for effects and groups for lights, each switched or dimmed as one.
-- A live preview where strips and matrices are arranged by dragging. Pick one light or several, move and turn
-  them together, or type an angle.
-- Scenes, master brightness and blackout. Autopilot changes scene every few bars and when the song changes.
+- Scenes, master brightness and blackout. Autopilot changes scene every few bars and when the song changes,
+  choosing calm scenes for quiet parts and big ones for drops. When the music stops, the lights can wait in a
+  scene of your choosing.
 - Pads and keys for scenes, effects, folders, groups, blackout, tap tempo, a hand-fired beat, next and previous
-  scene, and freeze. A key can switch its thing, act only while held, or fire the effect's reaction.
-- A Live view with all the pads, set up in place and usable by touch, with faders for speed and sensitivity.
-- A flash limit that softens fast hard flashes, on by default.
-- A list of your shows: open, new, copy, rename, delete. Every change saves itself.
-- Simple by default; an Advanced switch and a settings window hold the rest.
+  scene, and freeze. A press can switch its thing, act only while held, or fire the effect's reaction.
+- A Live view with all the pads, set up in place and usable by touch, with faders for speed, sensitivity and
+  anything you link to them.
+- A library: your shows (open, new, copy, rename, delete), and effects, looks and palettes you keep to use in
+  any show. Every change saves itself.
 
-![The Live view while the white flash pad is held](docs/images/live.png)
+![The Live view of a club show while the white flash pad is held](docs/images/live.png)
 
-Setting up the pads in the Live view, the list of shows, and the seven starter scenes (three moments of each):
+Starting a show, the question about flashing, and the fifteen starter scenes:
 
-![Customizing a pad: its key, what a press does, its place](docs/images/live-customize.png)
+![Choosing what a new show is for](docs/images/new-show.png)
 
-![The list of shows](docs/images/library.png)
+![The question a show asks the first time something flashes fast](docs/images/flash.png)
 
-![The starter scenes](docs/images/looks.png)
+![The starter scenes for rooms, light shows and clubs](docs/images/looks.png)
+
+The full layout, with a slider following the bass, and what has been kept for any show:
+
+![The full layout: an effect's strength follows the bass](docs/images/full.png)
+
+![Effects, looks and palettes kept in the library](docs/images/kept.png)
 
 ## Try it
 
@@ -125,16 +150,18 @@ discovery and streaming without hardware.
 ## Layout
 
 ```
-crates/core      layout, layers, effects, renderer (no I/O)
+crates/core      layout, layers, effects, renderer, flash limit (no I/O)
 crates/audio     audio capture and analysis
 crates/output    DDP, WLED info, discovery, network scan
-crates/engine    the engine as a library, and darkrgb-cli
+crates/engine    the engine as a library (commands, live state, library of shows), and darkrgb-cli
 crates/desktop   darkrgb, the app window (Tauri)
 crates/sim       a pretend WLED device for tests
 ui/              the interface (React, TypeScript, Vite)
 docs/            research, architecture, roadmap
 ```
 
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to build, test and send changes.
+- [SECURITY.md](SECURITY.md): what the program exposes on a network, and how to report a problem.
 - [docs/research.md](docs/research.md): what xLights, Vixen and LedFx do well, where they hurt, and the gap.
 - [docs/architecture.md](docs/architecture.md): the stack and the core design.
 - [docs/roadmap.md](docs/roadmap.md): what is proven, what comes next, open decisions.

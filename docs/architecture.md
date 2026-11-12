@@ -163,8 +163,12 @@ What is live and not saved lives in `crates/engine/src/live.rs`, as pure logic w
 - **Hand-fired beats.** Raise the beat and hit signals for every layer for a moment.
 - **A waiting scene.** With scene changes set to wait, a requested scene starts on the first beat (or fourth
   beat) that begins after it was asked for, or after a few seconds if no beat comes.
+- **Waiting for music.** After a chosen stretch of silence the scene set aside for it takes the place of what
+  is playing, in the rendered copy only, with a fade; the first sound brings the show back. Choosing a scene
+  by hand ends the waiting. Autopilot is paused meanwhile.
 - **Autopilot.** Counts bars on the beat and asks for the next scene (in order or shuffled, skipping scenes
-  marked to sit out) every 2, 4, 8 or 16 bars; by the clock when no tempo is found. A change of section in the
+  marked to sit out, and passing over calm scenes in big parts of a song and big scenes in quiet ones) every
+  2, 4, 8 or 16 bars; by the clock when no tempo is found. A change of section in the
   song brings the next scene at once and restarts the count. A scene the user asks for always comes first,
   and also restarts the count. A section change within 4 seconds of a scene change is ignored, so one
   transition in the music gives one change of scene.
@@ -182,6 +186,16 @@ Fast flashing can trigger seizures in people with photosensitive epilepsy, and t
 flashing easy. The limit is the last step of the frame loop (`FlashGuard` in `crates/core/src/safety.rs`), so
 nothing can get around it and the preview shows what the lights do.
 
+The choice belongs to the show (`Show.flash`), because it depends on who will see the lights. A show starts
+with the limit on and `decided` false; the first time it has an effect made to flash, or the limit softens
+something, the UI asks whether to keep it. A club show starts with it off.
+
+Effects say what they have to do with flashing (`FlashUse`), so that nothing has to be designed around the
+limit. Most say nothing. Strobe is `Capped`: while the limit is on it runs at just under the limit, on every
+second or fourth beat when it is locked to the music, so its flashes stay whole instead of being softened.
+Lightning is `Needed`: a burst slowed to three flashes a second is not a burst, so the renderer leaves it out
+while the limit is on, and the UI says why.
+
 It watches the average luminance of the whole picture. A **flash** is a rise of at least a set share of full
 brightness, followed by a fall. At most three flashes are let through in any second, and never two closer
 together than a quarter of a second. A rise over the limit is held just under the threshold: the colours stay,
@@ -196,9 +210,32 @@ saturated red, both of which the full guidance for screens considers.
 
 ### Starter looks
 
-`crates/core/src/looks.rs` holds seven ready-made scenes as data: a few layers each, with parameters and where
-they play (all lights, strips only, matrices only). `Show::add_look` turns one into an ordinary scene, so
-nothing about them is special once added.
+`crates/core/src/looks.rs` holds fifteen ready-made scenes as data: a few layers each, with parameters, links,
+where they play (all lights, strips only, matrices only) and the parts of a song they suit. `Show::add_look`
+turns one into an ordinary scene, so nothing about them is special once added.
+
+A show has a **kind** (`Kind`: room, display, club or custom), chosen when it is started. `Kind::looks` says
+which looks a kind gets and in what order; `commands::set_up` adds them and sets how scenes change, the scene
+to wait in when the music stops, and for a club the pads and the flash choice. The kind decides how a show
+begins and nothing after that.
+
+"Strips only" is a rule on the layer (`Layer.only`), not a list of lights, so a look added before the lights
+are there still lands where it should.
+
+### Links: settings that move by themselves
+
+A layer can carry **links** (`Link`: a setting, a source, an amount). Each frame the renderer works out where
+every source stands (`Source::value`): loudness, the beat and hits as the layer hears them; bass, mids, highs
+and the song's energy from the whole sound; a slow wave counted in beats; one of four faders. A linked setting
+is moved from where its slider is set by `amount` of its range, clamped to the range, for that frame only
+(`linked_settings` in `render.rs`). The stored show is never changed, so a link cannot drift. The layer's
+strength can be linked under the name `opacity`.
+
+### Colours
+
+A palette setting holds either the id of a built-in palette or the user's own colours written out
+(`#e8112d,#ffffff|loop`; see `color::parse_custom`). Carrying the colours in the setting itself means a scene,
+a copy or a kept pattern needs nothing looked up to keep its colours.
 
 ### What a layer hears
 
@@ -219,7 +256,10 @@ quiet parts, by an amount the user sets (`audio.dynamics`; 0 switches it off). A
 ### Simple first
 
 Every parameter is marked basic or advanced, and the defaults of advanced ones must give a good result
-untouched. The UI shows only basic settings until its Advanced switch is on. Effects also carry a category,
+untouched. The UI has two layouts, chosen by one setting kept on each device. The simple one shows basic
+settings and leaves out what a first show does not need: folders, groups of lights, virtual lights, how
+effects mix, links, keys on effects, frame rate, and the details of autopilot. The full one shows everything.
+Nothing a show already uses is hidden: a key, a link or a fade that is set shows in the simple layout too. Effects also carry a category,
 which groups them in the picker.
 
 ### Effects
@@ -322,12 +362,12 @@ Built. One WebSocket per client at `/ws`; the engine also serves the UI over HTT
 
 | From the engine | Content |
 |---|---|
-| text `hello` | Version, the effect list with each effect's parameters, palettes, the starter looks, the frame rates on offer. Sent once. |
+| text `hello` | Version, the effect list with each effect's parameters, palettes, the starter looks, the kinds of show, the frame rates on offer. Sent once. |
 | text `state` | The whole show, and which scene is playing unchanged. On connect and after every change. |
 | text `audio` | Audio features, 30 times a second. |
 | text `status` | Frame rate, whether the flash limit held anything back, per-device send counts, audio status, discovered devices. Once a second. |
 | text `live` | Pads being held, a scene waiting for the beat, the tapped tempo, whether the picture is frozen. On every change. |
-| text `library` | The shows on this computer and which is open. On connect and when the list changes. |
+| text `library` | The shows on this computer and which is open; the effects, looks and palettes that have been kept. On connect and on change. |
 | text `result` | Outcome of a command that carried an `id`. |
 | binary, first byte 1 | Preview colours: RGB per pixel, 30 times a second. |
 | binary, first byte 2 | Canvas position of every pixel, sent when the layout changes. |
@@ -370,11 +410,17 @@ commands take a file name, which must be a plain `.json` name inside the shows f
 `--no-save` there is no library, and a new or imported show takes the place of the open one, which is first
 written to `show.previous.json` beside it.
 
-Settings that describe the room and the computer (frame rate, flash limit, sound source, sensitivity, speaker
-delay, energy setting, brightness ceiling) are written into every show file but never taken from one that is
-opened, started or imported: the ones in use carry over.
+Settings that describe the room and the computer (frame rate, sound source, sensitivity, speaker delay,
+energy setting, brightness ceiling) are written into every show file but never taken from one that is
+opened, started or imported: the ones in use carry over. The flash choice is the show's own.
 
-Planned: saved patterns (an effect with its settings, or a whole look) shared between shows; a folder per show
+Beside the shows, `patterns.json` holds what the user has **kept** to use in any show: an effect with its
+settings, a whole look, or a palette under a name. A kept layer names no lights, only kinds of light, because
+another show has other lights. Using one goes through a command like everything else, which checks it again:
+unknown effects are refused, settings out of range are dropped. A patterns file edited by hand cannot put
+anything into a show that a command could not.
+
+Planned: a folder per show
 with a `media/` folder for songs and images. Shared shows leave the songs out.
 
 ## Rust crates in use
