@@ -1,6 +1,6 @@
 # Roadmap
 
-Written on 2026-11-10, last updated 2026-11-12 for version 0.6.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
+Written on 2026-11-10, last updated 2026-11-12 for version 0.7.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
 features. The design targets room/desk setups (a few WLED devices, up to a few thousand pixels) and house/yard
 shows (many controllers, 5k to 50k pixels). See [architecture.md](architecture.md) for the design.
 
@@ -124,10 +124,31 @@ Done when a full song can be performed from the keyboard without touching the mo
 
 ## 3. Timeline
 
-- Import a song; show its waveform and an automatic beat grid.
-- Clips on layers with trim, move and snap to beats.
-- Curves on parameters.
-- Record a live performance into the timeline.
+Built in 0.7.0:
+
+- A song chosen from a file, kept by the engine, played by the app window; its outline drawn, and a tempo
+  and first beat guessed from it for a grid.
+- A lane for scenes and a lane for every pad. Clips are placed, moved, stretched, picked several at a time
+  and deleted, and snap to beats, halves or quarters.
+- Recording: scenes chosen and pads pressed while the timeline plays become clips.
+- Play, stop, jump, repeat. The engine works out what should be on from the clips alone each frame, so a
+  jump or a repeat needs nothing special.
+- The lights follow the song: the window playing it tells the engine where it is.
+
+Left:
+
+- Curves on settings (a slider drawn over time). Today a timeline can only say which scene shows and which
+  pads are held.
+- Seeing the look at the playhead while stopped. Today the timeline acts only while it plays.
+- Copy, paste and repeat of clips; a split tool; markers; more than one song in a show; a playlist.
+- Playing the song without the app window open (the engine does not decode sound itself), and so running a
+  timeline from a schedule with nobody there.
+- Exporting to `.fseq` for a Falcon Player.
+- The song's own start is where a person lines it up: there is no fine offset between song and lights
+  beyond the show's light delay.
+
+Tried with a 31-second synthetic song in a browser and in the app window on Linux. Not yet tried with real
+music, a long song, MP3 on a Linux system without the codecs, or on Windows.
 
 Done when a three-minute show can be recorded live, cleaned up in the editor and played back in sync.
 
@@ -143,6 +164,8 @@ Built:
 
 Left:
 
+- Strips bent into shapes (0.7.0 has arches, rings, stars, zigzags and hand-drawn paths; not yet matrices of
+  odd shapes, or a tree as one model).
 - Import an xLights layout.
 - Export `.fseq` v2 and upload to FPP.
 - 3D preview.
@@ -158,6 +181,38 @@ Left:
 - Ableton Link tempo sync.
 - Hue, OpenRGB and other device families.
 - macOS build.
+
+## An outside review of 0.6.0
+
+On 2026-11-12 an independent reviewer was given the repository and asked what keeps this from being a truly
+good audio-reactive and live tool. It could read everything and run nothing. Its ranked findings, and where
+each stands after 0.7.0:
+
+1. **The beat clock.** Lights are always a little late and nothing fires early to make up for it; bars are
+   counted from whenever listening began, not from beat one; when the music breaks down the tempo is lost
+   and every onset becomes a "beat"; the tracker can lock at double time; tap tempo replaces the music's
+   tempo and then drifts; there is no nudge, no halving or doubling, no beat display, no MIDI clock or
+   Ableton Link. **Not addressed. This is the first job of the next round.**
+2. **Effects and tempo.** Most speeds were in seconds, not beats; no mirror, repeat or kaleidoscope for any
+   effect; links have one wave shape and no smoothing; colour cannot be modulated; no pitch-to-colour; the
+   section detector judges by loudness alone and is reset by a short silence. *Partly addressed:* seven of
+   the eight new effects count in beats, and scanner, theatre chase (Marquee), breathe and falling peaks
+   were among the staples it named. The rest stands.
+3. **Nothing has met real hardware or real music.** Stands, and only the owner can change it.
+4. **The outdoor display audience was promised a timeline that did not exist,** and shapes were only straight
+   strips and rectangles. *Addressed in part:* 0.7.0 has a timeline and bent strips. Still missing: xLights
+   import, FSEQ export, a calendar, power limiting by current, colour orders and start channels for sACN.
+5. **The live model is shallow next to a console.** A scene replaces everything; no cue list; MIDI ignores
+   velocity and gives no feedback; no DMX fixtures. Stands.
+6. **Output under load.** All sends are on the render thread through one socket, and a full buffer drops the
+   rest of a device's universes for that frame; no sACN or Art-Net sync; no latency offset for each device;
+   8-bit output with no dithering, so slow dim fades will step. Stands.
+7. **Unattended reliability.** A panic in an effect would stop the show silently; no autostart; no
+   stream-terminated packet on exit; the flash limit judges the whole picture. Stands.
+
+It also advised: stop adding features until a real device and real music have been through the loop; call
+autopilot's "bars" what they are (four beats from an arbitrary start) until there is a downbeat; reconsider
+dimming quiet parts by default for live shows.
 
 ## Before the first public release
 

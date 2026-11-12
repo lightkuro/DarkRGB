@@ -85,7 +85,18 @@ Its speed on a real graphics card is not measured.
 - A **group of lights** collects fixtures under a name. A layer can target a group, so lights added to the
   group later are included; a group has its own brightness and on/off switch, applied after the layers are
   mixed. A fixture is in one group or none. Built.
+- A strip can be **bent** (`Fixture.path`): it passes through corners given as places in its box, from (0, 0)
+  to (1, 1), and its LEDs are spread evenly by distance along the line, which may close on itself. The box
+  resizes and turns like a matrix's. Drawn on each light by itself, an effect still runs along the strip;
+  drawn across the lights, it is drawn across the shape.
 - Effects render in layout space, so one effect can sweep across fixtures on different devices.
+- A layer's pattern can be **turned** (`Layer.angle`, `Layer.spin`, and a link to `angle`). The renderer
+  turns each light's place in the pattern about the middle and rescales, so the pattern's width and height
+  become the extent of the lights along the turned axes: every light still lands inside the pattern, and no
+  effect sees a place outside 0..1. A line of lights has one direction only and is left alone.
+- Drawn on each light by itself, a pattern on a matrix is turned back by as much as the matrix is turned on
+  the canvas, so it stays the right way up in the room: turning a matrix on the canvas says how it hangs.
+  `Layer.turns` gives the older behaviour, the pattern turning with the light.
 - The user never sees universe or channel numbers. The engine derives packets from the layout.
 
 ### Clips, layers and modulators
@@ -390,7 +401,7 @@ Built. One WebSocket per client at `/ws`; the engine also serves the UI over HTT
 | text `state` | The whole show, and which scene is playing unchanged. On connect and after every change. |
 | text `audio` | Audio features, 30 times a second. |
 | text `status` | Frame rate, whether the flash limit held anything back, per-device send counts, audio status, discovered devices. Once a second. |
-| text `live` | Pads being held, a scene waiting for the beat, the tapped tempo, whether the picture is frozen. On every change. |
+| text `live` | Pads being held, a scene waiting for the beat, the tapped tempo, whether the picture is frozen, and where the timeline is. On every change, and once a second while a timeline plays. |
 | text `library` | The shows on this computer and which is open; the effects, looks and palettes that have been kept. On connect and on change. |
 | text `result` | Outcome of a command that carried a request number, `req`, which it repeats. |
 | binary, first byte 1 | Preview colours: RGB per pixel, 30 times a second. |
@@ -405,9 +416,38 @@ needs no UI code.
 A command either changes the show or it does nothing: `commands::apply` works on a copy, checks the limits
 on the result, and only then swaps it in.
 
-One thing goes over plain HTTP: opening a show file (`POST /api/import`), because a whole show does not fit in
-a WebSocket message. It gets the same checks as a show file read from disk, and the same checks on who is
-asking, with the `Origin` header required.
+Two things go over plain HTTP because they do not fit in a WebSocket message. Opening a show file
+(`POST /api/import`) gets the same checks as a show file read from disk. A timeline's song goes up with
+`POST /api/song?name=...` and comes back with `GET /api/song/<file>`; the engine names the file after its
+contents and serves only names of that form, so the route cannot be made to read anything else. Both posts
+get the same checks on who is asking, with the `Origin` header required.
+
+### The timeline
+
+`Show.timeline` holds a song's name, a length, a beat grid (tempo and first beat) and **clips**. A scene clip
+says "from here, this scene"; a pad clip says "from here to there, this pad is held". There is no third
+kind: anything that can be played live can be written down, and nothing new had to be invented to play it
+back.
+
+- **Nothing remembers where playback is.** `Timeline::at(t)` answers "which scene, which pads?" from the
+  clips alone. Each frame the engine asks it and applies the answer in `Live::overlay`, exactly as it applies
+  held keys and the scene for silence: over a copy, leaving the saved show untouched. Starting anywhere,
+  jumping and repeating therefore need no special cases, and stopping gives the show back as it was.
+- A pad that sets something off (a fired effect, a beat by hand) does so on the frame its clip begins.
+- **The clock is the engine's** (`Transport` in `live.rs`), but the song is played by the app window, which
+  fetches it whole and plays it from memory. Four times a second the window says where the song is; a
+  difference of more than 30 ms moves the engine's clock. Sound being late is noticed and lights moving a
+  little are not, so the lights follow the sound. A jump the engine makes goes the other way: the window
+  moves the song. The engine hears the song through the same system-audio capture as any other music, so
+  reactive effects react to it.
+- **Recording** writes clips as things are played while the timeline runs. A held pad's clip grows until it
+  is let go. A pad that switches something is, while recording, on from one press to the next: it is not
+  really switched, or it would be switched twice over, once by the press and once by its own clip. A scene
+  chosen is written as a clip and shown by the timeline; the show underneath is not changed.
+- Clips go when their scene or pad goes (`Show::prune_bindings`).
+- The window draws the song's outline and guesses a tempo from it (`ui/src/songPlayer.ts`): how strongly
+  rises in loudness repeat at each spacing from 70 to 180 beats a minute. It is a starting point, with
+  halve, double and "beat here" beside it.
 
 ### Who may connect
 

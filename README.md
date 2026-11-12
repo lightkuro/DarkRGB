@@ -6,7 +6,7 @@ between them:
 - **Audio-reactive:** lights follow whatever the computer is playing, with no audio routing setup.
 - **Live:** trigger effects, colours and scenes from the keyboard, a touch screen, a phone or a MIDI controller,
   like a lighting console.
-- **Timeline:** pre-programmed shows synced to a song (not started yet).
+- **Timeline:** shows laid out in time against a song, placed by hand or recorded by performing them.
 
 It sends to ESP32 controllers running [WLED](https://kno.wled.ge/), and to pixel controllers that take sACN
 (E1.31) or Art-Net.
@@ -29,9 +29,14 @@ Or start blank. The kind of show only decides what it begins with; everything ca
 
 ## Status
 
-Version 0.6.0, in development. Audio-reactive mode and live control are both complete enough to run a show
-with: fifteen starter scenes, twenty-two effects, pads, keys and MIDI controllers, autopilot, any slider tied
-to the music, and undo. The timeline is not started.
+Version 0.7.0, in development. Audio-reactive mode and live control are both complete enough to run a show
+with: fifteen starter scenes, thirty effects, pads, keys and MIDI controllers, autopilot, any slider tied to
+the music, and undo. The timeline is new in this version: it plays, records and edits, and has not yet been
+used for a whole show by anyone.
+
+**Nothing here has yet met real LEDs or real music.** Every check so far used simulated devices and a
+synthetic test song. An outside review of 0.6.0 put that first among its concerns; see
+[docs/roadmap.md](docs/roadmap.md).
 
 | | Linux | Windows |
 |---|---|---|
@@ -42,6 +47,7 @@ to the music, and undo. The timeline is not started.
 | sACN and Art-Net | packets checked against the standards and received by a test program; no real controller yet | the same code; not yet run |
 | MIDI controllers | built, and its message handling tested; not yet tried with a real controller | the same |
 | Installers | `.deb` and AppImage build | the setup program has not been built yet |
+| Timeline | plays against a song in a browser and in the app window; recording and editing checked | not yet run |
 
 The effects, the song-energy tracking and the drop detection have only met synthetic test songs so far, so
 expect them to need tuning against real music. See [docs/roadmap.md](docs/roadmap.md) for the details.
@@ -61,7 +67,14 @@ What works today:
 - A simple layout by default, and a full one with every control, switched by one setting.
 - Captures system audio with no setup and analyses it: loudness, 32 frequency bands, hits in bass, mids and
   highs, tempo and beats, how big this part of the song is, and when the song moves to a new section.
-- Twenty-two effects in layers, among them words and small pictures for matrices. Each can play on all lights, chosen ones, a group, or only strips or only
+- Thirty effects in layers, among them words and small pictures for matrices. Many keep time with the music:
+  a scanner crosses in a beat, tiles reshuffle on the beat, rings leave the middle one a beat.
+- A pattern can be turned to any angle and set spinning, and the angle can follow the music. A matrix hung
+  at an angle, such as a square mounted as a diamond, keeps its pattern the right way up.
+- Strips can be bent into shapes: arches, circles, stars, zigzags, outlines, or anything drawn corner by
+  corner.
+- A timeline: a song, a lane for scenes and a lane for every pad. Clips are placed by hand, snapping to the
+  beat, or recorded by playing the show while the song runs. Each can play on all lights, chosen ones, a group, or only strips or only
   matrices; drawn across them or once per light; reacting to everything, bass, mids, highs or a frequency
   range you pick.
 - Any slider can follow the music (loudness, bass, mids, highs, the beat, hits, the song's energy), a slow
@@ -99,6 +112,20 @@ The full layout, with a slider following the bass, and what has been kept for an
 ![The full layout: an effect's strength follows the bass](docs/images/full.png)
 
 ![Effects, looks and palettes kept in the library](docs/images/kept.png)
+
+The timeline, with a song, scenes and pads on it:
+
+![The timeline playing: a song's outline, scene clips and pad clips](docs/images/timeline.png)
+
+A strip bent into an arch over a matrix hung as a diamond, and the shape editor:
+
+![An arch of lights over a diamond-mounted matrix whose words stay level](docs/images/shapes.png)
+
+![The shape editor with a star drawn from ten corners](docs/images/shape.png)
+
+The eight effects added in 0.7.0:
+
+![Scanner, Marquee, Breathe, Peaks, Fireworks, Rings, Pinwheel and Tiles](docs/images/effects-new.png)
 
 A picture on a matrix, and adding a pixel controller that is not WLED:
 

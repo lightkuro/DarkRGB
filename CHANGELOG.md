@@ -1,6 +1,28 @@
 # What's new
 
-## 0.6.0 (in development)
+## 0.7.0 (in development)
+
+A timeline, shapes of your own, patterns that turn, and eight more effects.
+
+- A timeline, in a third view beside Edit and Live. Choose a song; its outline is drawn and its tempo guessed
+  for a beat grid. Click the Scenes lane to say which scene starts where. Drag in a pad's lane to hold that
+  pad there: a flash, a strobe, a colour, a blackout. Clips move, stretch, snap to the beat and delete.
+- Record a performance: press Record and Play, then choose scenes and press pads as the song runs. Everything
+  is written onto the timeline to tidy up afterwards. Play and Record are in the Live view too.
+- A timeline can repeat, for a show left running.
+- Strips can be bent into shapes. Pick an arch, circle, square, triangle, star, zigzag or spiral, or draw
+  your own corner by corner. Select a strip and choose Shape.
+- Patterns can be turned: every effect has an Angle, and in the full layout a Spin. The angle can follow the
+  music or a fader.
+- A matrix hung at an angle, such as a square mounted as a diamond, now keeps its pattern the right way up.
+  Turn the matrix on the stage to match how it hangs. (A switch puts back the old behaviour, where the
+  pattern turned with the light.)
+- Eight new effects, thirty in all: Scanner, Marquee, Breathe, Pinwheel, Peaks (bars with caps that hang
+  and fall), Fireworks, Rings and Tiles. Most can keep time with the music.
+- Fixed: lights flickered while being dragged on the stage.
+- Fixed: a jump on the timeline while stopped did not show until playback started.
+
+## 0.6.0
 
 Controllers, a phone as a remote, words and pictures, more kinds of lights, and installers.
 
