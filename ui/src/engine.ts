@@ -321,6 +321,8 @@ export interface Show {
     /** False until whoever makes the show has chosen. */
     decided: boolean;
   };
+  /** The show laid out in time. Left out until someone begins one. */
+  timeline?: Timeline;
 }
 
 /** What is happening live, beyond what is saved in the show. */
@@ -337,7 +339,37 @@ export interface Live {
   idle: boolean;
   /** The show's schedule has the lights off at this time of day. */
   asleep: boolean;
+  /** Where the timeline is, as of the engine's last frame. */
+  timeline?: { playing: boolean; recording: boolean; position: number };
 }
+
+/** What a clip on the timeline plays: a scene from then on, or a pad held for its length. */
+export type ClipKind = { type: "scene"; id: number } | { type: "pad"; id: number };
+
+export interface Clip {
+  id: number;
+  /** Seconds from the start. */
+  start: number;
+  /** Seconds it lasts. 0 for a scene clip, which lasts until the next. */
+  length: number;
+  what: ClipKind;
+}
+
+/** A show laid out in time, usually against a song. */
+export interface Timeline {
+  song: { file: string; name: string } | null;
+  /** Seconds from start to end. */
+  length: number;
+  /** The tempo of the grid clips snap to; 0 for no grid. */
+  bpm: number;
+  /** Where the grid's first beat falls, in seconds. */
+  offset: number;
+  repeat: boolean;
+  clips: Clip[];
+}
+
+/** What a show has before anyone touches its timeline. */
+export const NO_TIMELINE: Timeline = { song: null, length: 180, bpm: 0, offset: 0, repeat: false, clips: [] };
 
 export interface DeviceStats {
   frames_sent: number;
@@ -482,6 +514,17 @@ export type Command =
   | { type: "add_device"; address: string }
   | { type: "scan_network"; prefix: string }
   | { type: "set_demo"; enabled: boolean }
+  | { type: "timeline_play"; from?: number }
+  | { type: "timeline_stop" }
+  | { type: "timeline_seek"; position: number }
+  | { type: "timeline_sync"; position: number }
+  | { type: "timeline_record"; on: boolean }
+  | { type: "set_timeline"; length?: number; bpm?: number; offset?: number; repeat?: boolean }
+  | { type: "add_clip"; start: number; length?: number; what: ClipKind }
+  | { type: "update_clips"; clips: { id: number; start?: number; length?: number }[] }
+  | { type: "remove_clips"; ids: number[] }
+  | { type: "clear_timeline" }
+  | { type: "remove_song" }
   | { type: "set_remote"; enabled: boolean }
   | { type: "add_looks" }
   | { type: "set_scene_auto"; id: number; auto: boolean }
@@ -692,6 +735,8 @@ class Engine {
   /** Bumped whenever positions change, so the stage can rebuild buffers. */
   layoutVersion = 0;
 
+  /** When the last word on the live state arrived, to count on from. */
+  private liveAt = 0;
   private socket: WebSocket | null = null;
   private nextId = 1;
   private pending = new Map<number, (result: CommandResult) => void>();
@@ -770,6 +815,7 @@ class Engine {
         this.show.set(message.show as Show);
         break;
       case "live":
+        this.liveAt = performance.now();
         this.live.set(message as unknown as Live);
         break;
       case "status":
@@ -850,6 +896,27 @@ class Engine {
   }
 
   /**
+   * Where the timeline is right now, in seconds. The engine says where
+   * it was at its last word; while it plays, this counts on from there.
+   */
+  playhead(): number {
+    const t = this.live.get().timeline;
+    if (!t) return 0;
+    return t.playing ? t.position + (performance.now() - this.liveAt) / 1000 : t.position;
+  }
+
+  /** Hands the engine a song for the timeline to play against. */
+  async uploadSong(file: File): Promise<CommandResult> {
+    try {
+      const response = await fetch(`/api/song?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+      if (response.status === 413) return { ok: false, error: "That file is too large to be a song." };
+      return (await response.json()) as CommandResult;
+    } catch {
+      return { ok: false, error: "Could not reach the engine." };
+    }
+  }
+
+  /**
    * Opens a show from a file: added to the library, or in place of the
    * show when there is no library. A whole show does not fit in a
    * WebSocket message, so this goes over HTTP.
@@ -886,7 +953,7 @@ export const engine = new Engine();
  * whoever is looking (a phone used as a remote keeps its own), not to
  * the show.
  */
-class Pref<T> {
+export class Pref<T> {
   private store: Store<T>;
   constructor(
     private key: string,
@@ -921,7 +988,7 @@ export const fullPref = new Pref<boolean>("darkrgb.advanced", false);
 export const useFull = () => useSyncExternalStore(fullPref.subscribe, fullPref.get);
 
 /** Building the show, or performing it with the panels out of the way. */
-export type View = "edit" | "live";
+export type View = "edit" | "live" | "timeline";
 export const viewPref = new Pref<View>("darkrgb.view", "edit");
 export const useView = () => useSyncExternalStore(viewPref.subscribe, viewPref.get);
 

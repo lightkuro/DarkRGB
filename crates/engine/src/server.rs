@@ -364,8 +364,10 @@ async fn static_handler(State(state): State<AppState>, headers: HeaderMap, uri: 
     h.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
+            // `blob:` for sound only: the timeline's song is fetched from
+            // this server and played from memory.
             "default-src 'self'; connect-src 'self' ws:; style-src 'self' 'unsafe-inline'; \
-             img-src 'self' data:; frame-ancestors 'none'",
+             img-src 'self' data:; media-src 'self' blob:; frame-ancestors 'none'",
         ),
     );
     response

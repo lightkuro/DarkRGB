@@ -3050,6 +3050,268 @@ input.number {
   fill: var(--accent);
 }
 
+/* ------------------------------------------------------------ timeline */
+
+.timeline {
+  --grid-beat: rgba(255, 255, 255, 0.05);
+  --grid-bar: rgba(255, 255, 255, 0.13);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: 52vh;
+  padding: 10px 14px 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+.timeline-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-small);
+  background: var(--raised);
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+
+.transport .tool.play.active {
+  color: var(--accent);
+}
+
+.transport .tool.record.active {
+  color: #ff4d5e;
+}
+
+.transport-time {
+  padding: 0 10px 0 6px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.transport-time .of {
+  color: var(--faint);
+}
+
+.tool-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tool-field select {
+  padding: 4px 6px;
+}
+
+.timeline-body {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  min-height: 96px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #07090c;
+}
+
+.lane-names {
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.lane-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 10px;
+  border-top: 1px solid var(--line);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+}
+
+.lane-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.lane-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.lanes {
+  position: relative;
+  min-width: 100%;
+  touch-action: none;
+  user-select: none;
+}
+
+.ruler {
+  position: relative;
+  height: 34px;
+  background: var(--panel);
+  cursor: col-resize;
+}
+
+.ruler span {
+  position: absolute;
+  top: 9px;
+  padding-left: 5px;
+  border-left: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.lane {
+  position: relative;
+  height: 34px;
+  border-top: 1px solid var(--line);
+  cursor: crosshair;
+}
+
+.lane.wave-lane {
+  cursor: col-resize;
+}
+
+.lane.scene-lane {
+  cursor: copy;
+}
+
+.wave {
+  display: block;
+  height: 100%;
+  pointer-events: none;
+}
+
+.lane-hint {
+  position: sticky;
+  left: 10px;
+  line-height: 34px;
+  color: var(--faint);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.clip {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  min-width: 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  opacity: 0.9;
+  cursor: grab;
+  overflow: hidden;
+}
+
+.clip.scene-clip {
+  top: 4px;
+  bottom: 4px;
+  padding: 0 8px;
+  background: #2b3550;
+  border-left: 3px solid var(--accent);
+  border-radius: 3px 5px 5px 3px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 26px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.clip.picked {
+  box-shadow: 0 0 0 2px #fff;
+  opacity: 1;
+  z-index: 1;
+}
+
+.clip.ghost {
+  background: transparent;
+  border: 1px dashed var(--accent);
+  pointer-events: none;
+}
+
+.clip-end {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.clip-menu {
+  position: absolute;
+  top: 30px;
+  z-index: 5;
+  display: grid;
+  min-width: 150px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--raised);
+  box-shadow: var(--shadow), 0 0 0 1px var(--line-strong);
+}
+
+.clip-menu button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.clip-menu button:hover {
+  background: var(--raised-2);
+}
+
+.clip-menu button.quiet {
+  color: var(--muted);
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.lanes-end {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(4, 5, 7, 0.82);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.timeline-hint {
+  margin: 0;
+}
+
 .picture-field {
   display: flex;
   align-items: center;

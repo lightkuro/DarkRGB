@@ -248,8 +248,10 @@ pub struct Live {
     pub transport: Transport,
     /// What the timeline calls for on this frame: nothing while stopped.
     moment: Moment,
-    /// Where the timeline was on the last frame, to tell clients.
-    position: f64,
+    /// The engine time of the last frame. Clients are told where the
+    /// timeline's clock stood then, which after a jump is the new place
+    /// and never the old one.
+    frame_at: f64,
     /// Pads being recorded: the clip each press began, by pad.
     pub recording: HashMap<u32, u32>,
 }
@@ -272,7 +274,7 @@ impl Live {
                 step.ended = true;
             }
         }
-        self.position = position;
+        self.frame_at = now;
         let moment = if self.transport.playing {
             show.timeline.at(position as f32)
         } else {
@@ -329,7 +331,7 @@ impl Live {
             timeline: TransportStatus {
                 playing: self.transport.playing,
                 recording: self.transport.recording,
-                position: self.position,
+                position: self.transport.position(self.frame_at),
             },
         }
     }

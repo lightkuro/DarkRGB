@@ -12,6 +12,8 @@ import { TopBar } from "./components/TopBar";
 import { engine, useConnected, useNeedsCode, useShow, useStatus, useToasts, useView } from "./engine";
 import { PairScreen } from "./components/PairScreen";
 import { ShapeEditor } from "./components/ShapeEditor";
+import { TimelineView } from "./components/Timeline";
+import { startSongPlayer } from "./songPlayer";
 import { startKeys } from "./keys";
 
 function Toasts() {
@@ -38,6 +40,7 @@ export function App() {
   const view = useView();
   useEffect(() => engine.connect(), []);
   useEffect(() => startKeys(), []);
+  useEffect(() => startSongPlayer(), []);
 
   return (
     <div className="app">
@@ -54,6 +57,11 @@ export function App() {
         <main className="workspace live">
           <Stage />
           <LivePads />
+        </main>
+      ) : view === "timeline" ? (
+        <main className="workspace live">
+          <Stage />
+          <TimelineView />
         </main>
       ) : (
         <main className="workspace">

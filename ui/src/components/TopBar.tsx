@@ -1,4 +1,4 @@
-import { ChevronDown, Pencil, Play, Power, Redo2, Settings as Gear, Sun, Undo2 } from "lucide-react";
+import { ChevronDown, Music, Pencil, Play, Power, Redo2, Settings as Gear, Sun, Undo2 } from "lucide-react";
 import { engine, libraryOpen, perFrame, settingsPage, useHistory, useShow, useView, viewPref } from "../engine";
 import { AudioMeter } from "./AudioMeter";
 import { Keycap, useBinding } from "./Keys";
@@ -46,6 +46,16 @@ function ViewSwitch() {
         onClick={() => viewPref.set("live")}
       >
         <Play size={13} /> Live
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={view === "timeline"}
+        className={view === "timeline" ? "selected" : ""}
+        title="Lay the show out in time, against a song"
+        onClick={() => viewPref.set("timeline")}
+      >
+        <Music size={13} /> Timeline
       </button>
     </div>
   );

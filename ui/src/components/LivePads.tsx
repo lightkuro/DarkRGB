@@ -45,6 +45,7 @@ import { KeyAssign, Keycap, behaviours, modeNote } from "./Keys";
 import { swatch } from "./LayerPanel";
 import { MidiPad } from "./Midi";
 import { Slider, Switch, useDismiss } from "./ui";
+import { Transport } from "./Timeline";
 
 const setSpeed = perFrame((speed: number) => engine.quiet({ type: "set_live", speed }));
 const setSensitivity = perFrame((sensitivity: number) => engine.quiet({ type: "set_audio", sensitivity }));
@@ -106,7 +107,7 @@ function findLayer(show: Show, id: number): Layer | undefined {
 }
 
 /** The name, icon and colour of the thing an action is about. */
-function describe(action: Action, show: Show, hello: Hello): { name: string; icon: ReactNode; colour?: string } {
+export function describe(action: Action, show: Show, hello: Hello): { name: string; icon: ReactNode; colour?: string } {
   switch (action.type) {
     case "scene":
       return { name: show.scenes.find((s) => s.id === action.id)?.name ?? "?", icon: <Clapperboard size={15} /> };
@@ -531,6 +532,8 @@ export function LivePads() {
         >
           <Pencil size={13} /> {customizing ? "Done" : "Customize"}
         </button>
+        {/* A show with a timeline is played, and recorded, from here too. */}
+        {!customizing && show.timeline && <Transport compact />}
         {customizing && (
           <span className="hint">
             {selectedExists ? "Press a key to assign it, or pick another pad." : "Pick a pad to set it up."}
