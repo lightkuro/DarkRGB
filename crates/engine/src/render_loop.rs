@@ -162,9 +162,11 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
         last_frame = frame_start;
         let now = shared.now();
         let heard = delay.step(now, shared.audio.features(), show.audio.delay_ms);
-        let (audio, launch, cues, frozen, idle_changed) = {
+        let (audio, launch, cues, frozen, idle_changed, timeline) = {
             let mut live = shared.live.lock().unwrap();
             let clocked = live.clocked(now, heard);
+            // Where the timeline has got to, and what it calls for now.
+            let timeline = live.timeline_step(now, &base);
             // The music stopping, or starting again.
             let mut idle_changed = live.idle_step(now, &base, &clocked);
             // The show's hours, looked at once a second.
@@ -184,8 +186,9 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
             let launch = match (asked, live.pending) {
                 (Some(scene), _) => Some(scene),
                 (None, Some(_)) => None,
-                // Nothing changes by itself while waiting for the music.
-                (None, None) if live.idle => None,
+                // Nothing changes by itself while waiting for the music,
+                // or while a timeline is saying which scene to show.
+                (None, None) if live.idle || live.timeline_has_the_scene() => None,
                 (None, None) => live.autopilot(now, &base, &clocked, beat),
             };
             (
@@ -194,10 +197,18 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
                 live.cues(now),
                 live.is_frozen(&base),
                 idle_changed,
+                timeline,
             )
         };
         last_now = now;
-        if idle_changed {
+        // Pads on the timeline that set something off do so as their clips begin.
+        if !timeline.entered.is_empty() {
+            shared.timeline_fire(&timeline.entered);
+        }
+        // Clients are told where a playing timeline is once a second;
+        // between times they count on from what they were told.
+        let playing_tick = frame_index.is_multiple_of(show.output.frame_rate.max(1) as u64) && timeline.playing;
+        if idle_changed || timeline.changed || playing_tick {
             // Seen by this loop on its next frame, and by the clients.
             shared.bump_live();
         }

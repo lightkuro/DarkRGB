@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use darkrgb_audio::{AudioCapture, InputDevice};
+use darkrgb_core::timeline::{Clip, ClipKind, MAX_CLIPS, MIN_CLIP, SONG_TYPES, Song, song_file_ok};
 use darkrgb_core::{Action, AudioFeatures, Device, KeyMode, Kind, KnobTarget, Launch, Only, Show};
 use darkrgb_output::scan::{self, LocalNetwork};
 use darkrgb_output::{DeviceStats, wled};
@@ -307,6 +308,16 @@ impl Shared {
             } => return self.new_show(name.as_deref(), *keep_lights, *kind),
             Command::ExportShow => return self.export_show(),
             Command::SetRemote { enabled } => return self.set_remote(*enabled),
+            Command::TimelinePlay { from } => return self.timeline_play(*from),
+            Command::TimelineStop => return self.timeline_stop(),
+            Command::TimelineSeek { position } => return self.timeline_seek(*position),
+            Command::TimelineSync { position } => {
+                if position.is_finite() && self.live.lock().unwrap().transport.sync(self.now(), *position) {
+                    self.bump_live();
+                }
+                return Ok(None);
+            }
+            Command::TimelineRecord { on } => return self.timeline_record(*on),
             Command::OpenShow { file } => return self.open_show(file),
             Command::DuplicateShow { file } => return self.duplicate_show(file),
             Command::DeleteShow { file } => return self.delete_show(file),
@@ -812,6 +823,288 @@ impl Shared {
         })
     }
 
+    /// A place on the timeline, checked and kept inside it.
+    fn timeline_place(&self, position: f64) -> Result<f64, String> {
+        if !position.is_finite() {
+            return Err("that is not a place on the timeline".into());
+        }
+        Ok(position.clamp(0.0, self.show.lock().unwrap().timeline.length as f64))
+    }
+
+    fn timeline_play(&self, from: Option<f64>) -> Result<Option<String>, String> {
+        let from = from.map(|f| self.timeline_place(f)).transpose()?;
+        let length = self.show.lock().unwrap().timeline.length as f64;
+        let now = self.now();
+        {
+            let mut live = self.live.lock().unwrap();
+            // Played from the very end, it starts again from the beginning.
+            let from = from.unwrap_or(live.transport.position(now));
+            live.transport
+                .play(now, Some(if from >= length - 0.01 { 0.0 } else { from }));
+        }
+        self.bump_live();
+        Ok(None)
+    }
+
+    fn timeline_stop(&self) -> Result<Option<String>, String> {
+        self.finish_recording();
+        self.live.lock().unwrap().transport.stop(self.now());
+        self.bump_live();
+        Ok(None)
+    }
+
+    fn timeline_seek(&self, position: f64) -> Result<Option<String>, String> {
+        let position = self.timeline_place(position)?;
+        // A clip being recorded ends where the jump was made from.
+        self.finish_recording();
+        self.live.lock().unwrap().transport.seek(self.now(), position);
+        self.bump_live();
+        Ok(None)
+    }
+
+    fn timeline_record(&self, on: bool) -> Result<Option<String>, String> {
+        if !on {
+            self.finish_recording();
+        }
+        self.live.lock().unwrap().transport.recording = on;
+        self.bump_live();
+        Ok(None)
+    }
+
+    /// Changes the show's timeline as one step that can be undone.
+    fn change_timeline(&self, change: impl FnOnce(&mut Show)) {
+        let before = {
+            let mut show = self.show.lock().unwrap();
+            let before = show.clone();
+            change(&mut show);
+            if *show == before {
+                return;
+            }
+            before
+        };
+        self.history.lock().unwrap().remember_other(before);
+        self.bump();
+    }
+
+    /// Ends every clip that is still being recorded, where the timeline
+    /// is now.
+    fn finish_recording(&self) {
+        let (open, position) = {
+            let mut live = self.live.lock().unwrap();
+            let position = live.transport.position(self.now()) as f32;
+            (std::mem::take(&mut live.recording), position)
+        };
+        if open.is_empty() {
+            return;
+        }
+        self.change_timeline(|show| {
+            for clip in show
+                .timeline
+                .clips
+                .iter_mut()
+                .filter(|c| open.values().any(|id| *id == c.id))
+            {
+                clip.length = (position - clip.start).max(MIN_CLIP);
+            }
+        });
+        self.bump_live();
+    }
+
+    /// Writes a press of a pad onto the timeline, if recording. Returns
+    /// true when the press has been dealt with here and must not also do
+    /// what it usually does: a pad that switches something is, while
+    /// recording, simply on from one press to the next.
+    fn record_pad(&self, binding: u32, action: Action, mode: KeyMode, down: bool) -> bool {
+        let (recording, position, open) = {
+            let live = self.live.lock().unwrap();
+            (
+                live.is_recording(),
+                live.transport.position(self.now()) as f32,
+                live.recording.get(&binding).copied(),
+            )
+        };
+        // Scenes are written down where they are chosen, and these two
+        // are things to do, not things to hold.
+        let never = matches!(
+            action,
+            Action::Scene { .. } | Action::TapTempo | Action::NextScene | Action::PrevScene
+        );
+        if !recording || never {
+            return false;
+        }
+        let held = mode == KeyMode::Hold && action.can_hold();
+        let once = action == Action::Hit || (mode == KeyMode::Fire && action.can_fire());
+        // Letting go ends the clip of a held pad. A second press ends the
+        // clip of one that switches.
+        if let Some(clip) = open
+            && (!down || !held)
+        {
+            if !down && !held {
+                return true;
+            }
+            self.live.lock().unwrap().recording.remove(&binding);
+            self.change_timeline(|show| {
+                if let Some(clip) = show.timeline.clips.iter_mut().find(|c| c.id == clip) {
+                    clip.length = (position - clip.start).max(MIN_CLIP);
+                }
+            });
+            self.bump_live();
+            return !held;
+        }
+        if !down {
+            return !held && !once;
+        }
+        let mut made = None;
+        self.change_timeline(|show| {
+            if show.timeline.clips.len() >= MAX_CLIPS || position > show.timeline.length {
+                return;
+            }
+            let id = show.alloc_id();
+            show.timeline.clips.push(Clip {
+                id,
+                start: position,
+                // A pad that sets something off is a short mark. The
+                // others grow until they are let go.
+                length: if once { 0.15 } else { MIN_CLIP },
+                what: ClipKind::Pad { id: binding },
+            });
+            made = Some(id);
+        });
+        if let (Some(id), false) = (made, once) {
+            self.live.lock().unwrap().recording.insert(binding, id);
+            self.bump_live();
+        }
+        // A held pad and one that fires still act as they always do, so
+        // what is recorded is also seen. One that switches is left to the
+        // recording, or it would be switched twice over.
+        !held && !once
+    }
+
+    /// Writes a change of scene onto the timeline, if recording. Returns
+    /// true when it did: the timeline then shows the scene itself.
+    fn record_scene(&self, scene: u32) -> bool {
+        let (recording, position) = {
+            let live = self.live.lock().unwrap();
+            (live.is_recording(), live.transport.position(self.now()) as f32)
+        };
+        if !recording {
+            return false;
+        }
+        self.change_timeline(|show| {
+            if position > show.timeline.length {
+                return;
+            }
+            // Chosen again within a moment, the later choice stands.
+            show.timeline
+                .clips
+                .retain(|c| !(matches!(c.what, ClipKind::Scene { .. }) && (c.start - position).abs() < 0.05));
+            if show.timeline.clips.len() >= MAX_CLIPS {
+                return;
+            }
+            let id = show.alloc_id();
+            show.timeline.clips.push(Clip {
+                id,
+                start: position,
+                length: 0.0,
+                what: ClipKind::Scene { id: scene },
+            });
+        });
+        true
+    }
+
+    /// Sets off what pads do once, for clips that have just begun.
+    pub fn timeline_fire(&self, pads: &[u32]) {
+        let now = self.now();
+        let mut layers: Vec<u32> = Vec::new();
+        let mut hit = false;
+        {
+            let show = self.show.lock().unwrap();
+            for pad in pads.iter().filter_map(|id| show.bindings.iter().find(|b| b.id == *id)) {
+                match pad.action {
+                    Action::Hit => hit = true,
+                    Action::Layer { id } if pad.mode == KeyMode::Fire => layers.push(id),
+                    Action::LayerGroup { id } if pad.mode == KeyMode::Fire => {
+                        layers.extend(show.layers.iter().filter(|l| l.group == Some(id)).map(|l| l.id));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if layers.is_empty() && !hit {
+            return;
+        }
+        let mut live = self.live.lock().unwrap();
+        if hit {
+            live.hit(now);
+        }
+        if !layers.is_empty() {
+            live.fire(&layers, now);
+        }
+        drop(live);
+        self.bump_live();
+    }
+
+    /// The folder songs are kept in: with the library, beside a show
+    /// opened by itself, or failing both among the system's temporary files.
+    pub fn songs_dir(&self) -> PathBuf {
+        if let Some(library) = &self.library {
+            return library.songs_dir();
+        }
+        let beside = self
+            .save_path
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|p| p.parent().map(Path::to_path_buf));
+        beside
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!("{APP_NAME}-songs"))
+    }
+
+    /// Where a song the show names is kept, if the name is one of ours
+    /// and the file is there.
+    pub fn song_path(&self, file: &str) -> Option<PathBuf> {
+        if !song_file_ok(file) {
+            return None;
+        }
+        let path = self.songs_dir().join(file);
+        path.is_file().then_some(path)
+    }
+
+    /// Keeps a song the user chose and makes it the timeline's. The file
+    /// is named after what is in it, so the same song is kept once.
+    pub fn store_song(&self, name: &str, bytes: &[u8]) -> Result<Option<String>, String> {
+        let name = commands::name(name, "The song's name")?;
+        let ext = name
+            .rsplit_once('.')
+            .map(|(_, ext)| ext.to_ascii_lowercase())
+            .unwrap_or_default();
+        if !SONG_TYPES.contains(&ext.as_str()) {
+            return Err(format!(
+                "that does not look like a sound file. These kinds work: {}",
+                SONG_TYPES.join(", ")
+            ));
+        }
+        if bytes.is_empty() {
+            return Err("that file is empty".into());
+        }
+        // FNV-1a: only to tell files apart, not to keep anything secret.
+        let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ *b as u64).wrapping_mul(0x0100_0000_01b3)
+        });
+        let file = format!("{hash:016x}.{ext}");
+        let dir = self.songs_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("could not make a folder for songs: {e}"))?;
+        let path = dir.join(&file);
+        if !path.is_file() {
+            std::fs::write(&path, bytes).map_err(|e| format!("could not keep the song: {e}"))?;
+        }
+        self.change_timeline(|show| {
+            show.timeline.song = Some(Song { file, name });
+        });
+        Ok(None)
+    }
+
     /// Remembers whether other devices may connect. The server listens
     /// where it was told to when it started, so this is for next time.
     fn set_remote(&self, enabled: bool) -> Result<Option<String>, String> {
@@ -899,6 +1192,10 @@ impl Shared {
                 None => return Err("that key is no longer set up".into()),
             }
         };
+        // While recording, the press is written onto the timeline.
+        if self.record_pad(binding, action, mode, down) {
+            return Ok(None);
+        }
         if mode == KeyMode::Hold && action.can_hold() {
             if self.live.lock().unwrap().hold(binding, down) {
                 self.bump_live();
@@ -1122,6 +1419,11 @@ impl Shared {
             }
             show.live.launch
         };
+        // While recording, the choice goes onto the timeline, which then
+        // shows it. The show underneath is left as it was.
+        if self.record_scene(id) {
+            return Ok(None);
+        }
         let now = self.now();
         let waits = launch != Launch::Now && self.features().bpm > 0.0;
         if waits {

@@ -789,6 +789,237 @@ async fn post(port: u16, origin: Option<&str>, body: &str) -> (String, String) {
     (status, body)
 }
 
+#[test]
+fn a_performance_is_recorded_onto_the_timeline_and_plays_back() {
+    use darkrgb_core::timeline::ClipKind;
+    let engine = Engine::start();
+    let shared = &engine.shared;
+    let run = |command: Command| shared.execute(&command).unwrap();
+    run(Command::SaveScene { name: "Verse".into() });
+    run(Command::SaveScene { name: "Chorus".into() });
+    run(Command::Bind {
+        key: Some("KeyB".into()),
+        label: String::new(),
+        action: Action::Blackout,
+        mode: KeyMode::Hold,
+    });
+    let layer = shared.show.lock().unwrap().layers[0].id;
+    run(Command::Bind {
+        key: Some("KeyQ".into()),
+        label: String::new(),
+        action: Action::Layer { id: layer },
+        mode: KeyMode::Toggle,
+    });
+    let (verse, chorus, dark, switch) = {
+        let show = shared.show.lock().unwrap();
+        (
+            show.scenes[0].id,
+            show.scenes[1].id,
+            show.binding_for(Action::Blackout).unwrap().id,
+            show.binding_for(Action::Layer { id: layer }).unwrap().id,
+        )
+    };
+    run(Command::SetTimeline {
+        length: Some(30.0),
+        bpm: None,
+        offset: None,
+        repeat: None,
+    });
+    let position = || shared.live.lock().unwrap().status().timeline.position;
+    let clips = || shared.show.lock().unwrap().timeline.clips.clone();
+    let lights_out = || {
+        shared
+            .live
+            .lock()
+            .unwrap()
+            .overlay(&shared.show.lock().unwrap())
+            .master
+            .blackout
+    };
+    let press = |binding: u32, down: bool| run(Command::Trigger { binding, down });
+
+    // Armed but not playing, nothing is written.
+    run(Command::TimelineRecord { on: true });
+    press(dark, true);
+    press(dark, false);
+    assert!(clips().is_empty());
+
+    run(Command::TimelinePlay { from: Some(1.0) });
+    wait_for("the timeline to run", || position() > 1.05);
+    run(Command::RecallScene { id: verse });
+    std::thread::sleep(Duration::from_millis(150));
+    press(dark, true);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(lights_out(), "a pad being recorded still does what it does");
+    press(dark, false);
+    // A pad that switches is on from one press to the next.
+    press(switch, true);
+    press(switch, false);
+    std::thread::sleep(Duration::from_millis(250));
+    let enabled = || shared.live.lock().unwrap().overlay(&shared.show.lock().unwrap()).layers[0].enabled;
+    assert!(!enabled(), "switched off, as the press asks");
+    press(switch, true);
+    press(switch, false);
+    assert!(enabled());
+    std::thread::sleep(Duration::from_millis(100));
+    run(Command::RecallScene { id: chorus });
+    // A pad still held when playback stops ends there.
+    press(dark, true);
+    std::thread::sleep(Duration::from_millis(120));
+    run(Command::TimelineStop);
+    press(dark, false);
+    let stopped_at = position();
+
+    let recorded = clips();
+    let kinds: Vec<ClipKind> = recorded.iter().map(|c| c.what).collect();
+    assert_eq!(
+        kinds,
+        [
+            ClipKind::Scene { id: verse },
+            ClipKind::Pad { id: dark },
+            ClipKind::Pad { id: switch },
+            ClipKind::Scene { id: chorus },
+            ClipKind::Pad { id: dark },
+        ]
+    );
+    assert!(
+        recorded.windows(2).all(|w| w[0].start <= w[1].start),
+        "in the order they were played"
+    );
+    assert!(
+        (0.25..0.6).contains(&recorded[1].length),
+        "held for 0.3 s: {}",
+        recorded[1].length
+    );
+    assert!(
+        (0.2..0.5).contains(&recorded[2].length),
+        "on for 0.25 s: {}",
+        recorded[2].length
+    );
+    assert!(
+        (recorded[4].end() as f64 - stopped_at).abs() < 0.08,
+        "ends where playback stopped"
+    );
+    assert!(
+        !shared.live.lock().unwrap().status().timeline.recording,
+        "stopping ends the recording"
+    );
+    // The show underneath was not changed by any of it.
+    {
+        let show = shared.show.lock().unwrap();
+        assert!(show.layers[0].enabled && !show.master.blackout);
+    }
+
+    // Played back, the lights go out where the pad was held.
+    let from = recorded[1].start as f64 - 0.2;
+    run(Command::TimelinePlay { from: Some(from) });
+    wait_for("playback", || position() > from + 0.02);
+    assert!(!lights_out());
+    wait_for("the recorded blackout", lights_out);
+    assert!((position() - recorded[1].start as f64).abs() < 0.15);
+    wait_for("it to end", || !lights_out());
+    run(Command::TimelineStop);
+
+    // What was recorded can be undone, a step at a time: first where
+    // the last clip ended, then the clip itself.
+    run(Command::Undo);
+    assert_eq!(clips().len(), recorded.len());
+    assert!(clips()[4].length < recorded[4].length);
+    run(Command::Undo);
+    assert_eq!(clips().len(), recorded.len() - 1);
+    // Bad places are refused; a place past the end is brought back to it.
+    assert!(shared.execute(&Command::TimelineSeek { position: f64::NAN }).is_err());
+    run(Command::TimelineSeek { position: 1.0e9 });
+    wait_for("the jump", || (position() - 30.0).abs() < 1e-6);
+    // Played from the very end, it starts over.
+    run(Command::TimelinePlay { from: None });
+    wait_for("it to start over", || position() < 5.0 && position() > 0.0);
+    run(Command::TimelineStop);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_song_is_kept_for_the_timeline_and_handed_back() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let engine = Engine::start();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = server::service(engine.shared.clone(), Access::default());
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let request = |method: &'static str, path: String, origin: bool, body: Vec<u8>| async move {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let origin = if origin {
+            format!("Origin: http://127.0.0.1:{port}\r\n")
+        } else {
+            String::new()
+        };
+        let head = format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{origin}Content-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream.write_all(&body).await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let split = response
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .unwrap_or(response.len());
+        let head = String::from_utf8_lossy(&response[..split]).to_string();
+        (head, response[(split + 4).min(response.len())..].to_vec())
+    };
+    let sound: Vec<u8> = (0..5000u32).map(|i| (i * 7 % 251) as u8).collect();
+
+    // Only the served page may send one, and only a sound file is taken.
+    let (head, _) = request("POST", "/api/song?name=Night%20drive.mp3".into(), false, sound.clone()).await;
+    assert!(head.contains(" 403 "), "{head}");
+    let (head, body) = request("POST", "/api/song?name=notes.txt".into(), true, sound.clone()).await;
+    assert!(head.contains(" 400 "), "{head}");
+    assert!(String::from_utf8_lossy(&body).contains("sound file"));
+    let (head, _) = request("POST", "/api/song?name=empty.mp3".into(), true, Vec::new()).await;
+    assert!(head.contains(" 400 "), "{head}");
+    assert_eq!(engine.shared.show.lock().unwrap().timeline.song, None);
+
+    let (head, body) = request("POST", "/api/song?name=Night%20drive.MP3".into(), true, sound.clone()).await;
+    assert!(head.contains(" 200 "), "{head} {}", String::from_utf8_lossy(&body));
+    let song = engine
+        .shared
+        .show
+        .lock()
+        .unwrap()
+        .timeline
+        .song
+        .clone()
+        .expect("the show names its song");
+    assert_eq!(song.name, "Night drive.MP3");
+    assert!(
+        song.file.ends_with(".mp3") && darkrgb_core::timeline::song_file_ok(&song.file),
+        "{}",
+        song.file
+    );
+
+    // Handed back byte for byte, as sound.
+    let (head, body) = request("GET", format!("/api/song/{}", song.file), false, Vec::new()).await;
+    assert!(
+        head.contains(" 200 ") && head.to_lowercase().contains("content-type: audio/mpeg"),
+        "{head}"
+    );
+    assert_eq!(body, sound);
+    // Nothing else can be fetched this way.
+    for bad in ["nothing.mp3", "..%2F..%2Fetc%2Fpasswd", "x.txt", ".mp3"] {
+        let (head, _) = request("GET", format!("/api/song/{bad}"), false, Vec::new()).await;
+        assert!(head.contains(" 404 "), "{bad}: {head}");
+    }
+    // The same song sent again is the same file, and undo lets it go.
+    let (_, _) = request("POST", "/api/song?name=again.mp3".into(), true, sound.clone()).await;
+    assert_eq!(
+        engine.shared.show.lock().unwrap().timeline.song.as_ref().unwrap().file,
+        song.file
+    );
+    engine.shared.execute(&Command::RemoveSong).unwrap();
+    assert_eq!(engine.shared.show.lock().unwrap().timeline.song, None);
+    let _ = std::fs::remove_file(engine.shared.songs_dir().join(&song.file));
+}
+
 /// Sends one request as a device elsewhere on the network would: under
 /// the computer's network name, not `127.0.0.1`. Returns the status
 /// line, the headers and the body.

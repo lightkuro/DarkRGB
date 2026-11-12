@@ -9,6 +9,7 @@ use darkrgb_core::picture::{MAX_SIDE, Picture};
 use darkrgb_core::show::{
     Blend, FADERS, FRAME_RATES, LINK_ANGLE, LINK_STRENGTH, MAX_LINKS, PAGES, linkable, mend_links,
 };
+use darkrgb_core::timeline::{Clip, ClipKind, MAX_CLIPS, MAX_LENGTH, MIN_CLIP};
 use darkrgb_core::{
     Action, Band, Device, DeviceKind, FlashSettings, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, Link, MidiNote,
     Mood, Only, Rgb, Shape, Show, Sound, Source, Swatch,
@@ -80,6 +81,49 @@ fn host(text: &str) -> Result<String, String> {
     Ok(text.to_string())
 }
 
+/// A new place or length for one clip.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct ClipChange {
+    pub id: u32,
+    #[serde(default)]
+    pub start: Option<f32>,
+    #[serde(default)]
+    pub length: Option<f32>,
+}
+
+/// Checks a clip against the show it is for, and returns it as it will
+/// be stored: inside the timeline, a scene clip without a length, a pad
+/// clip with at least the shortest one.
+fn checked_clip(show: &Show, start: f32, length: f32, what: ClipKind) -> Result<(f32, f32), String> {
+    let start = finite(start, "Where a clip starts")?;
+    let length = finite(length, "A clip's length")?;
+    if !(0.0..=show.timeline.length).contains(&start) {
+        return Err("a clip has to start inside the timeline".into());
+    }
+    match what {
+        ClipKind::Scene { id } => {
+            if !show.scenes.iter().any(|s| s.id == id) {
+                return Err("that scene no longer exists".into());
+            }
+            Ok((start, 0.0))
+        }
+        ClipKind::Pad { id } => {
+            let Some(pad) = show.bindings.iter().find(|b| b.id == id) else {
+                return Err("that pad no longer exists".into());
+            };
+            // Scenes have a lane of their own, and these three are things
+            // to do once, not things to hold.
+            if matches!(
+                pad.action,
+                Action::Scene { .. } | Action::TapTempo | Action::NextScene | Action::PrevScene
+            ) {
+                return Err("that pad cannot be put on the timeline".into());
+            }
+            Ok((start, length.clamp(MIN_CLIP, MAX_LENGTH)))
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
@@ -98,6 +142,56 @@ pub enum Command {
     SetRemote {
         enabled: bool,
     },
+    /// Starts the timeline, from `from` seconds or from where it stands.
+    /// Handled by the app, like the other four that drive its clock.
+    TimelinePlay {
+        #[serde(default)]
+        from: Option<f64>,
+    },
+    TimelineStop,
+    /// Jumps to a place on the timeline, playing or not.
+    TimelineSeek {
+        position: f64,
+    },
+    /// Sent a few times a second by the window that is playing the song,
+    /// saying where the song is, so the lights follow the sound.
+    TimelineSync {
+        position: f64,
+    },
+    /// While on and playing, scenes chosen and pads pressed are written
+    /// onto the timeline as clips.
+    TimelineRecord {
+        on: bool,
+    },
+    /// The timeline's length in seconds, its beat grid, and whether it
+    /// starts again at the end.
+    SetTimeline {
+        #[serde(default)]
+        length: Option<f32>,
+        #[serde(default)]
+        bpm: Option<f32>,
+        #[serde(default)]
+        offset: Option<f32>,
+        #[serde(default)]
+        repeat: Option<bool>,
+    },
+    AddClip {
+        start: f32,
+        #[serde(default)]
+        length: f32,
+        what: ClipKind,
+    },
+    /// Moves or stretches clips. All of them, or none.
+    UpdateClips {
+        clips: Vec<ClipChange>,
+    },
+    RemoveClips {
+        ids: Vec<u32>,
+    },
+    /// Takes every clip off the timeline. The song and grid stay.
+    ClearTimeline,
+    /// Lets go of the timeline's song. Its clips stay.
+    RemoveSong,
     /// Adds or removes the built-in demo lights.
     SetDemo {
         enabled: bool,
@@ -881,6 +975,100 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
     match command {
         Command::AddDevice { .. } | Command::ScanNetwork { .. } | Command::SetRemote { .. } => {
             Err("that command needs the network".into())
+        }
+        Command::TimelinePlay { .. }
+        | Command::TimelineStop
+        | Command::TimelineSeek { .. }
+        | Command::TimelineSync { .. }
+        | Command::TimelineRecord { .. } => Err("that command needs the engine's clock".into()),
+
+        Command::SetTimeline {
+            length,
+            bpm,
+            offset,
+            repeat,
+        } => {
+            let length = length.map(|v| finite(v, "The length")).transpose()?;
+            let bpm = bpm.map(|v| finite(v, "The tempo")).transpose()?;
+            let offset = offset.map(|v| finite(v, "The first beat")).transpose()?;
+            if length.is_some_and(|l| !(1.0..=MAX_LENGTH).contains(&l)) {
+                return Err("a timeline is between a second and six hours long".into());
+            }
+            // No tempo means no grid.
+            if bpm.is_some_and(|b| b != 0.0 && !(20.0..=400.0).contains(&b)) {
+                return Err("the tempo should be between 20 and 400 beats a minute, or 0 for no grid".into());
+            }
+            let timeline = &mut show.timeline;
+            if let Some(length) = length {
+                timeline.length = length;
+            }
+            if let Some(bpm) = bpm {
+                timeline.bpm = bpm;
+            }
+            if let Some(offset) = offset {
+                timeline.offset = offset;
+            }
+            if let Some(repeat) = repeat {
+                timeline.repeat = *repeat;
+            }
+            // Shortening the timeline brings what stuck out back inside.
+            timeline.repair();
+            Ok(())
+        }
+
+        Command::AddClip { start, length, what } => {
+            if show.timeline.clips.len() >= MAX_CLIPS {
+                return Err(format!("a timeline holds at most {MAX_CLIPS} clips"));
+            }
+            let (start, length) = checked_clip(show, *start, *length, *what)?;
+            let id = show.alloc_id();
+            show.timeline.clips.push(Clip {
+                id,
+                start,
+                length,
+                what: *what,
+            });
+            Ok(())
+        }
+
+        Command::UpdateClips { clips } => {
+            if clips.is_empty() || clips.len() > MAX_CLIPS {
+                return Err("no clips to change".into());
+            }
+            let mut next = show.timeline.clips.clone();
+            for change in clips {
+                let Some(clip) = next.iter_mut().find(|c| c.id == change.id) else {
+                    return Err("one of those clips is no longer there".into());
+                };
+                let (start, length) = checked_clip(
+                    show,
+                    change.start.unwrap_or(clip.start),
+                    change.length.unwrap_or(clip.length),
+                    clip.what,
+                )?;
+                (clip.start, clip.length) = (start, length);
+            }
+            show.timeline.clips = next;
+            Ok(())
+        }
+
+        Command::RemoveClips { ids } => {
+            let before = show.timeline.clips.len();
+            show.timeline.clips.retain(|c| !ids.contains(&c.id));
+            if show.timeline.clips.len() == before {
+                return Err("those clips are no longer there".into());
+            }
+            Ok(())
+        }
+
+        Command::ClearTimeline => {
+            show.timeline.clips.clear();
+            Ok(())
+        }
+
+        Command::RemoveSong => {
+            show.timeline.song = None;
+            Ok(())
         }
         Command::Trigger { .. }
         | Command::Perform { .. }
@@ -2025,6 +2213,120 @@ mod tests {
 
     fn parse(json: &str) -> Command {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn clips_are_put_on_the_timeline_moved_and_taken_off() {
+        let mut show = Show::default();
+        show.save_scene("Verse");
+        show.save_scene("Chorus");
+        let (verse, chorus) = (show.scenes[0].id, show.scenes[1].id);
+        let flash = show.bind("KeyF", "", Action::Blackout, KeyMode::Hold);
+        let tap = show.bind("KeyT", "", Action::TapTempo, KeyMode::Toggle);
+        let add = |start: f32, length: f32, what: ClipKind| Command::AddClip { start, length, what };
+
+        // What the UI sends.
+        let parsed: Command = serde_json::from_str(&format!(
+            r#"{{"type":"add_clip","start":0,"what":{{"type":"scene","id":{verse}}}}}"#
+        ))
+        .unwrap();
+        apply(&mut show, &parsed).unwrap();
+        apply(&mut show, &add(30.0, 99.0, ClipKind::Scene { id: chorus })).unwrap();
+        apply(&mut show, &add(31.0, 0.5, ClipKind::Pad { id: flash })).unwrap();
+        apply(&mut show, &add(40.0, 0.0, ClipKind::Pad { id: flash })).unwrap();
+        let clips = show.timeline.clips.clone();
+        assert_eq!(clips.len(), 4);
+        assert_eq!(clips[1].length, 0.0, "a scene clip has no length");
+        assert_eq!(clips[3].length, MIN_CLIP, "a pad clip has at least the shortest");
+        assert_eq!(show.timeline.at(31.2).scene, Some(chorus));
+        assert_eq!(show.timeline.at(31.2).pads, [flash]);
+
+        let before = show.clone();
+        for bad in [
+            add(-1.0, 1.0, ClipKind::Scene { id: verse }),
+            add(181.0, 1.0, ClipKind::Scene { id: verse }),
+            add(f32::NAN, 1.0, ClipKind::Scene { id: verse }),
+            add(1.0, f32::INFINITY, ClipKind::Pad { id: flash }),
+            add(1.0, 1.0, ClipKind::Scene { id: 9999 }),
+            add(1.0, 1.0, ClipKind::Pad { id: 9999 }),
+            add(1.0, 1.0, ClipKind::Pad { id: tap }),
+        ] {
+            assert!(apply(&mut show, &bad).is_err(), "{bad:?}");
+            assert_eq!(show, before);
+        }
+
+        // Moving two at once; one bad change and neither moves.
+        let change = |id: u32, start: Option<f32>, length: Option<f32>| ClipChange { id, start, length };
+        let moved = Command::UpdateClips {
+            clips: vec![
+                change(clips[2].id, Some(32.0), None),
+                change(clips[3].id, None, Some(2.0)),
+            ],
+        };
+        apply(&mut show, &moved).unwrap();
+        assert_eq!(
+            (show.timeline.clips[2].start, show.timeline.clips[2].length),
+            (32.0, 0.5)
+        );
+        assert_eq!(
+            (show.timeline.clips[3].start, show.timeline.clips[3].length),
+            (40.0, 2.0)
+        );
+        let before = show.clone();
+        let half_bad = Command::UpdateClips {
+            clips: vec![
+                change(clips[2].id, Some(10.0), None),
+                change(clips[3].id, Some(-5.0), None),
+            ],
+        };
+        assert!(apply(&mut show, &half_bad).is_err());
+        assert_eq!(show, before);
+
+        // The grid and the length. A shorter timeline pulls its clips in.
+        apply(
+            &mut show,
+            &Command::SetTimeline {
+                length: Some(35.0),
+                bpm: Some(128.0),
+                offset: Some(0.25),
+                repeat: Some(true),
+            },
+        )
+        .unwrap();
+        let t = &show.timeline;
+        assert_eq!((t.length, t.bpm, t.offset, t.repeat), (35.0, 128.0, 0.25, true));
+        assert_eq!(t.clips[3].start, 35.0);
+        for bad in [
+            (Some(0.5), None),
+            (Some(1.0e9), None),
+            (None, Some(5.0)),
+            (None, Some(f32::NAN)),
+        ] {
+            let command = Command::SetTimeline {
+                length: bad.0,
+                bpm: bad.1,
+                offset: None,
+                repeat: None,
+            };
+            assert!(apply(&mut show, &command).is_err(), "{bad:?}");
+        }
+
+        // Deleting a scene or a pad takes its clips with it.
+        apply(&mut show, &Command::DeleteScene { id: chorus }).unwrap();
+        assert!(
+            show.timeline
+                .clips
+                .iter()
+                .all(|c| c.what != ClipKind::Scene { id: chorus })
+        );
+        apply(&mut show, &Command::Unbind { id: flash }).unwrap();
+        assert_eq!(show.timeline.clips.len(), 1);
+        let last = show.timeline.clips[0].id;
+        assert!(apply(&mut show, &Command::RemoveClips { ids: vec![4242] }).is_err());
+        apply(&mut show, &Command::RemoveClips { ids: vec![last, 4242] }).unwrap();
+        assert!(show.timeline.clips.is_empty());
+        // The grid outlives the clips, so the show still has a timeline to save.
+        assert!(!show.timeline.is_untouched());
     }
 
     #[test]
@@ -3196,7 +3498,39 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 57 {
+            let clip = r.id(show.timeline.clips.iter().map(|c| c.id).collect());
+            let command = match r.next() % 61 {
+                57 => Command::SetTimeline {
+                    length: r.maybe(Awkward::number),
+                    bpm: r.maybe(Awkward::number),
+                    offset: r.maybe(Awkward::number),
+                    repeat: r.maybe(Awkward::flag),
+                },
+                58 => Command::AddClip {
+                    start: r.number(),
+                    length: r.number(),
+                    what: if r.flag() {
+                        ClipKind::Scene { id: scene }
+                    } else {
+                        ClipKind::Pad { id: binding }
+                    },
+                },
+                59 => Command::UpdateClips {
+                    clips: (0..r.next() % 3)
+                        .map(|_| ClipChange {
+                            id: clip,
+                            start: r.maybe(Awkward::number),
+                            length: r.maybe(Awkward::number),
+                        })
+                        .collect(),
+                },
+                60 => {
+                    if r.flag() {
+                        Command::RemoveClips { ids: vec![clip] }
+                    } else {
+                        Command::ClearTimeline
+                    }
+                }
                 56 => Command::SetPath {
                     fixture,
                     points: (0..[0, 1, 2, 3, 5, 64, 65][r.next() as usize % 7])

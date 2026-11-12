@@ -20,9 +20,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Router;
+use axum::body::Bytes;
 use axum::extract::connect_info::IntoMakeServiceWithConnectInfo;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State};
 use axum::http::header::{self, HeaderMap, HeaderValue};
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -66,6 +67,9 @@ struct AppState {
 
 /// Largest show file that can be imported. Far more than any real show.
 const MAX_IMPORT_BYTES: usize = 8 * 1024 * 1024;
+/// Largest song that can be kept for a timeline: about twenty minutes of
+/// uncompressed sound.
+const MAX_SONG_BYTES: usize = 250 * 1024 * 1024;
 
 /// The server, ready to be given a listener. It is told each caller's
 /// address, which is how this computer is told from another device.
@@ -76,6 +80,11 @@ pub fn service(shared: Arc<Shared>, access: Access) -> IntoMakeServiceWithConnec
 fn router(shared: Arc<Shared>, access: Access) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
+        .route(
+            "/api/song",
+            post(song_upload).layer(DefaultBodyLimit::max(MAX_SONG_BYTES)),
+        )
+        .route("/api/song/{file}", get(song_download))
         .route("/api/access", get(access_handler))
         .route("/api/pair", post(pair_handler).layer(DefaultBodyLimit::max(1024)))
         .route(
@@ -106,6 +115,68 @@ async fn import_handler(
         Err(error) => (StatusCode::BAD_REQUEST, json!({ "ok": false, "error": error })),
     };
     (status, [(header::CONTENT_TYPE, "application/json")], body.to_string()).into_response()
+}
+
+/// Takes the song a timeline is to play, as the body of a POST with the
+/// file's own name in the query. Kept on the engine's computer, so the
+/// show finds it again next time. Who may send one is checked as for a
+/// show file.
+async fn song_upload(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    body: Bytes,
+) -> Response {
+    let asked_here = allowed(&headers, &state.access) && headers.get(header::ORIGIN).is_some();
+    if !asked_here || !may_control(&headers, peer, &state.access) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let name = query.get("name").cloned().unwrap_or_default();
+    let shared = state.shared.clone();
+    // Writing a large file is kept off the tasks that serve the preview.
+    let outcome = tokio::task::spawn_blocking(move || shared.store_song(&name, &body))
+        .await
+        .unwrap_or_else(|_| Err("the song could not be kept".into()));
+    match outcome {
+        Ok(note) => json_response(StatusCode::OK, json!({ "ok": true, "note": note })),
+        Err(error) => json_response(StatusCode::BAD_REQUEST, json!({ "ok": false, "error": error })),
+    }
+}
+
+/// Hands a kept song back to the page that plays it.
+async fn song_download(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(file): Path<String>,
+) -> Response {
+    if !allowed(&headers, &state.access) || !may_control(&headers, peer, &state.access) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // Only names the engine itself gives songs, so nothing else can be read.
+    let Some(path) = state.shared.song_path(&file) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mime = mime_guess::from_path(&path).first_or_octet_stream();
+    match tokio::task::spawn_blocking(move || std::fs::read(path)).await {
+        Ok(Ok(bytes)) => {
+            let mut response = bytes.into_response();
+            let h = response.headers_mut();
+            h.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_str(mime.as_ref()).unwrap_or(HeaderValue::from_static("application/octet-stream")),
+            );
+            // Named after its contents, so it never changes.
+            h.insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, max-age=31536000, immutable"),
+            );
+            h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+            response
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// The host part of a `Host` header or origin, without port or brackets.

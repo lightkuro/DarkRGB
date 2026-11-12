@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use darkrgb_core::timeline::Moment;
 use darkrgb_core::{Action, AudioFeatures, Cues, KeyMode, Launch, LayerHit, Mood, Show};
 use serde::Serialize;
 
@@ -123,6 +124,91 @@ pub struct LiveStatus {
     pub idle: bool,
     /// The show's schedule has the lights off at this time of day.
     pub asleep: bool,
+    /// Where the timeline is.
+    pub timeline: TransportStatus,
+}
+
+/// What clients are told about the timeline's playback.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct TransportStatus {
+    pub playing: bool,
+    /// What is played by hand is being written onto the timeline.
+    pub recording: bool,
+    /// Seconds from the start, as of the last frame.
+    pub position: f64,
+}
+
+/// The timeline's clock: playing or stopped, and where.
+///
+/// It runs on the engine's own time. A window playing the song keeps it
+/// honest with [`Transport::sync`], because sound is what people notice
+/// being late, so the lights follow the sound and not the other way.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Transport {
+    pub playing: bool,
+    pub recording: bool,
+    /// Where it was at `anchor`, in seconds from the start.
+    position: f64,
+    /// The engine time `position` was true at.
+    anchor: f64,
+}
+
+impl Transport {
+    /// Seconds from the start of the timeline, at engine time `now`.
+    pub fn position(&self, now: f64) -> f64 {
+        if self.playing {
+            (self.position + (now - self.anchor)).max(0.0)
+        } else {
+            self.position
+        }
+    }
+
+    /// Starts playing, from `from` or from where it stands.
+    pub fn play(&mut self, now: f64, from: Option<f64>) {
+        self.position = from.unwrap_or(self.position(now)).max(0.0);
+        self.anchor = now;
+        self.playing = true;
+    }
+
+    /// Stops where it is. Recording stops with it.
+    pub fn stop(&mut self, now: f64) {
+        self.position = self.position(now);
+        self.playing = false;
+        self.recording = false;
+    }
+
+    /// Jumps to `position`, playing or not.
+    pub fn seek(&mut self, now: f64, position: f64) {
+        self.position = position.max(0.0);
+        self.anchor = now;
+    }
+
+    /// Told where the song really is by the window playing it. Small
+    /// differences are left alone, so the clock does not jitter; a real
+    /// one is taken at once. Returns whether the clock was moved.
+    pub fn sync(&mut self, now: f64, position: f64) -> bool {
+        if !self.playing || (self.position(now) - position).abs() < SYNC_SLACK_S {
+            return false;
+        }
+        self.seek(now, position);
+        true
+    }
+}
+
+/// How far the engine's clock may be from the song before it is moved.
+const SYNC_SLACK_S: f64 = 0.03;
+
+/// What a step of the timeline changed, for the frame loop to act on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TimelineStep {
+    /// The scene or the pads the timeline calls for are not what they were.
+    pub changed: bool,
+    /// Pads whose clips have just begun.
+    pub entered: Vec<u32>,
+    /// Playback reached the end and stopped.
+    pub ended: bool,
+    /// The timeline is running.
+    pub playing: bool,
 }
 
 #[derive(Debug, Default)]
@@ -158,9 +244,78 @@ pub struct Live {
     idle_fade: bool,
     /// The show's schedule has the lights off at this time of day.
     pub asleep: bool,
+    /// The timeline's clock.
+    pub transport: Transport,
+    /// What the timeline calls for on this frame: nothing while stopped.
+    moment: Moment,
+    /// Where the timeline was on the last frame, to tell clients.
+    position: f64,
+    /// Pads being recorded: the clip each press began, by pad.
+    pub recording: HashMap<u32, u32>,
 }
 
 impl Live {
+    /// Moves the timeline on to engine time `now` and works out what it
+    /// calls for. Stopped, it calls for nothing and the show is itself.
+    pub fn timeline_step(&mut self, now: f64, show: &Show) -> TimelineStep {
+        let mut step = TimelineStep::default();
+        let mut position = self.transport.position(now);
+        let length = show.timeline.length as f64;
+        if self.transport.playing && position >= length {
+            if show.timeline.repeat {
+                self.transport.seek(now, 0.0);
+                position = 0.0;
+            } else {
+                self.transport.stop(now);
+                self.transport.seek(now, length);
+                position = length;
+                step.ended = true;
+            }
+        }
+        self.position = position;
+        let moment = if self.transport.playing {
+            show.timeline.at(position as f32)
+        } else {
+            Moment::default()
+        };
+        if moment != self.moment {
+            step.entered = moment
+                .pads
+                .iter()
+                .copied()
+                .filter(|pad| !self.moment.pads.contains(pad))
+                .collect();
+            // A change of scene by the timeline fades like any other.
+            if moment.scene != self.moment.scene {
+                self.scene_serial += 1;
+            }
+            self.moment = moment;
+            step.changed = true;
+        }
+        step.changed |= step.ended;
+        step.playing = self.transport.playing;
+        step
+    }
+
+    /// Whether what is played by hand should be written down: recording
+    /// is on and the timeline is running.
+    pub fn is_recording(&self) -> bool {
+        self.transport.playing && self.transport.recording
+    }
+
+    /// Whether the timeline is deciding the scene right now.
+    pub fn timeline_has_the_scene(&self) -> bool {
+        self.moment.scene.is_some()
+    }
+
+    /// Whether a pad counts as held: by a key, or by a clip on the timeline.
+    fn pad_on(&self, binding: &darkrgb_core::Binding) -> bool {
+        (binding.mode == KeyMode::Hold && self.is_held(binding.id))
+            || self.moment.pads.contains(&binding.id)
+            // A pad switched on while recording is on until its second press.
+            || self.recording.contains_key(&binding.id)
+    }
+
     pub fn status(&self) -> LiveStatus {
         let mut held: Vec<u32> = self.held.keys().copied().collect();
         held.sort_unstable();
@@ -171,6 +326,11 @@ impl Live {
             frozen: self.frozen,
             idle: self.idle,
             asleep: self.asleep,
+            timeline: TransportStatus {
+                playing: self.transport.playing,
+                recording: self.transport.recording,
+                position: self.position,
+            },
         }
     }
 
@@ -372,7 +532,7 @@ impl Live {
         let held = show
             .bindings
             .iter()
-            .any(|b| b.action == Action::Freeze && b.mode == KeyMode::Hold && self.is_held(b.id));
+            .any(|b| b.action == Action::Freeze && self.pad_on(b));
         self.frozen != held
     }
 
@@ -435,12 +595,18 @@ impl Live {
         {
             (out.layers, out.layer_groups) = show.scene_stack(scene);
         }
+        // A timeline that is playing decides the scene. Again the saved
+        // show is left as it is, for when playback stops.
+        if let Some(scene) = self.moment.scene.and_then(|id| show.scenes.iter().find(|s| s.id == id)) {
+            (out.layers, out.layer_groups) = show.scene_stack(scene);
+        }
         // Outside the show's hours the lights are dark. The show's own
         // blackout switch is not touched.
         if self.asleep {
             out.master.blackout = true;
         }
-        let held = |b: &&darkrgb_core::Binding| b.mode == KeyMode::Hold && self.is_held(b.id);
+        // Held by a key, or by a clip on the timeline: either way once.
+        let held = |b: &&darkrgb_core::Binding| self.pad_on(b);
         // A held scene first, so that keys held with it act on its effects.
         for binding in show.bindings.iter().filter(held) {
             if let Action::Scene { id } = binding.action
@@ -973,6 +1139,144 @@ mod tests {
         show.live.idle.scene = None;
         assert!(live.idle_step(3012.0, &show, &quiet));
         assert!(!live.idle);
+    }
+
+    #[test]
+    fn the_timelines_clock_plays_stops_jumps_and_follows_the_song() {
+        let mut t = Transport::default();
+        assert_eq!(t.position(50.0), 0.0, "stopped, it stays where it is");
+        t.play(100.0, None);
+        assert!((t.position(102.5) - 2.5).abs() < 1e-9);
+        t.stop(103.0);
+        assert!((t.position(900.0) - 3.0).abs() < 1e-9);
+        t.play(200.0, Some(60.0));
+        assert!((t.position(201.0) - 61.0).abs() < 1e-9);
+        t.seek(201.0, 10.0);
+        assert!(
+            (t.position(202.0) - 11.0).abs() < 1e-9,
+            "a jump while playing plays on from there"
+        );
+        // The window playing the song says where the song is. A hair's
+        // difference is left alone; a real one is taken.
+        assert!(!t.sync(202.0, 11.02));
+        assert!((t.position(202.0) - 11.0).abs() < 1e-9);
+        assert!(t.sync(202.0, 11.2));
+        assert!((t.position(203.0) - 12.2).abs() < 1e-9);
+        // Stopping ends a recording too, and a stopped clock ignores the song.
+        t.recording = true;
+        t.stop(203.0);
+        assert!(!t.recording && !t.sync(204.0, 99.0));
+    }
+
+    fn timeline_show() -> (Show, [u32; 2], [u32; 2]) {
+        use darkrgb_core::timeline::{Clip, ClipKind};
+        let mut show = Show::default();
+        show.layers[0].effect = "plasma".into();
+        let verse = show.save_scene("Verse");
+        show.layers[0].effect = "fire".into();
+        let chorus = show.save_scene("Chorus");
+        show.layers[0].effect = "solid".into();
+        let layer = show.layers[0].id;
+        // A pad that switches the layer when pressed, and one for blackout.
+        let pad = show.bind("KeyQ", "", Action::Layer { id: layer }, KeyMode::Toggle);
+        let dark = show.bind("KeyB", "", Action::Blackout, KeyMode::Hold);
+        let clip = |id: u32, start: f32, length: f32, what: ClipKind| Clip {
+            id,
+            start,
+            length,
+            what,
+        };
+        show.timeline.length = 20.0;
+        show.timeline.clips = vec![
+            clip(901, 2.0, 0.0, ClipKind::Scene { id: verse }),
+            clip(902, 10.0, 0.0, ClipKind::Scene { id: chorus }),
+            clip(903, 4.0, 2.0, ClipKind::Pad { id: dark }),
+            clip(904, 12.0, 1.0, ClipKind::Pad { id: pad }),
+        ];
+        (show, [verse, chorus], [pad, dark])
+    }
+
+    #[test]
+    fn a_playing_timeline_decides_the_scene_and_holds_its_pads() {
+        let (show, _, _) = timeline_show();
+        let mut live = Live::default();
+        let effect = |live: &Live| live.overlay(&show).layers[0].effect.clone();
+        // Stopped, the show is itself.
+        assert!(!live.timeline_step(0.0, &show).changed);
+        assert_eq!(effect(&live), "solid");
+
+        live.transport.play(100.0, None);
+        assert!(
+            !live.timeline_step(101.0, &show).changed,
+            "nothing before the first clip"
+        );
+        assert_eq!(effect(&live), "solid");
+        let serial = live.scene_serial;
+        let step = live.timeline_step(102.0, &show);
+        assert!(step.changed && step.entered.is_empty());
+        assert_eq!(effect(&live), "plasma", "the verse");
+        assert_eq!(live.scene_serial, serial + 1, "a change of scene, so it fades like one");
+        assert!(live.timeline_has_the_scene());
+        // The same moment again changes nothing.
+        assert!(!live.timeline_step(102.5, &show).changed);
+
+        // The blackout pad's clip: held from 4 to 6, without touching the show.
+        let step = live.timeline_step(104.0, &show);
+        assert_eq!(step.entered.len(), 1);
+        assert!(live.overlay(&show).master.blackout);
+        assert!(!show.master.blackout);
+        assert_eq!(live.scene_serial, serial + 1, "a pad is not a change of scene");
+        live.timeline_step(106.0, &show);
+        assert!(!live.overlay(&show).master.blackout);
+
+        live.timeline_step(110.0, &show);
+        assert_eq!(effect(&live), "fire", "the chorus");
+        // A pad that switches its effect when pressed has it switched for the clip.
+        assert!(live.overlay(&show).layers[0].enabled);
+        live.timeline_step(112.5, &show);
+        assert!(!live.overlay(&show).layers[0].enabled);
+        live.timeline_step(113.5, &show);
+        assert!(live.overlay(&show).layers[0].enabled);
+
+        // A jump back shows what was there then.
+        live.transport.seek(114.0, 3.0);
+        live.timeline_step(114.0, &show);
+        assert_eq!(effect(&live), "plasma");
+
+        // At the end it stops, and the show is itself again.
+        let step = live.timeline_step(140.0, &show);
+        assert!(step.ended && step.changed && !step.playing);
+        assert_eq!(effect(&live), "solid");
+        assert_eq!(live.status().timeline.position, 20.0);
+        assert!(!live.status().timeline.playing);
+    }
+
+    #[test]
+    fn a_timeline_set_to_repeat_starts_again_and_one_stopped_calls_for_nothing() {
+        let (mut show, _, _) = timeline_show();
+        show.timeline.repeat = true;
+        let mut live = Live::default();
+        live.transport.play(0.0, Some(19.0));
+        live.timeline_step(0.5, &show);
+        assert_eq!(live.overlay(&show).layers[0].effect, "fire");
+        let step = live.timeline_step(1.5, &show);
+        assert!(step.playing && !step.ended);
+        assert!(live.status().timeline.position < 0.01, "back at the start");
+        assert_eq!(
+            live.overlay(&show).layers[0].effect,
+            "solid",
+            "before the first clip again"
+        );
+        live.timeline_step(4.0, &show);
+        assert_eq!(live.overlay(&show).layers[0].effect, "plasma");
+        // Stopped by hand in the middle of a held pad: everything is let go.
+        live.transport.seek(4.0, 5.0);
+        live.timeline_step(4.0, &show);
+        assert!(live.overlay(&show).master.blackout);
+        live.transport.stop(4.5);
+        assert!(live.timeline_step(4.6, &show).changed);
+        assert!(!live.overlay(&show).master.blackout);
+        assert_eq!(live.overlay(&show).layers[0].effect, "solid");
     }
 
     #[test]

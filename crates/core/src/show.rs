@@ -6,6 +6,7 @@ use crate::audio::{AudioFeatures, Band};
 use crate::effects;
 use crate::layout::{Device, Fixture, MAX_PIXELS, Shape};
 use crate::params::Params;
+use crate::timeline::Timeline;
 
 pub const SHOW_VERSION: u32 = 1;
 
@@ -809,6 +810,9 @@ pub struct Show {
     pub flash: FlashSettings,
     #[serde(default)]
     pub schedule: Schedule,
+    /// The show laid out in time against a song, if anyone has begun one.
+    #[serde(default, skip_serializing_if = "Timeline::is_untouched")]
+    pub timeline: Timeline,
     /// Next id to hand out. Ids are never reused.
     #[serde(default = "first_id")]
     pub next_id: u32,
@@ -916,6 +920,7 @@ impl Default for Show {
             output: OutputSettings::default(),
             flash: FlashSettings::default(),
             schedule: Schedule::default(),
+            timeline: Timeline::default(),
             next_id: 1,
         };
         show.add_layer(effects::DEFAULT_EFFECT);
@@ -1165,6 +1170,12 @@ impl Show {
             | Action::PrevScene
             | Action::Freeze => true,
         });
+        // Clips on the timeline go with the scene or pad they play.
+        let (scenes, bindings) = (&self.scenes, &self.bindings);
+        self.timeline.prune(
+            |id| scenes.iter().any(|s| s.id == id),
+            |id| bindings.iter().any(|b| b.id == id),
+        );
         // A swatch lives as long as its pad does.
         let bindings = &self.bindings;
         self.live
@@ -1465,6 +1476,7 @@ impl Show {
         for fixture in &mut self.fixtures {
             fixture.mend_path();
         }
+        self.timeline.repair();
         if !FRAME_RATES.contains(&self.output.frame_rate) {
             self.output.frame_rate = OutputSettings::default().frame_rate;
         }

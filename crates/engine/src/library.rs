@@ -202,6 +202,11 @@ impl Library {
         }
     }
 
+    /// Where the songs that timelines play are kept.
+    pub fn songs_dir(&self) -> PathBuf {
+        self.dir.join("songs")
+    }
+
     fn remote_file(&self) -> PathBuf {
         self.dir.join("remote.txt")
     }

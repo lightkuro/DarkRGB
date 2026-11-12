@@ -17,6 +17,7 @@ pub mod picture;
 pub mod render;
 pub mod safety;
 pub mod show;
+pub mod timeline;
 
 pub use audio::{AudioFeatures, BANDS, Band};
 pub use color::{Pal, Palette, Rgb};
