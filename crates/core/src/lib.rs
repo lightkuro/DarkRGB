@@ -7,6 +7,7 @@ pub mod audio;
 pub mod color;
 pub mod effect;
 pub mod effects;
+mod extra_effects;
 pub mod font;
 pub mod layout;
 pub mod looks;

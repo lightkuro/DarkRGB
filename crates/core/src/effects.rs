@@ -32,9 +32,12 @@ pub fn registry() -> &'static [EffectDef] {
             Strobe::def(),
         ]
         .into_iter()
+        .chain(crate::extra_effects::follows())
         .chain(crate::more_effects::hits_and_beats())
+        .chain(crate::extra_effects::hits_and_beats())
         .chain([Plasma::def(), Flow::def()])
         .chain(crate::more_effects::ambient())
+        .chain(crate::extra_effects::ambient())
         .chain([Solid::def()])
         .collect()
     })
