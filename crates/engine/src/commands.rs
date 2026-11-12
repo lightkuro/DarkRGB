@@ -3,7 +3,7 @@
 
 use darkrgb_core::color;
 use darkrgb_core::effects;
-use darkrgb_core::layout::MAX_PIXELS;
+use darkrgb_core::layout::{MAX_PATH_POINTS, MAX_PIXELS};
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::picture::{MAX_SIDE, Picture};
 use darkrgb_core::show::{
@@ -153,6 +153,14 @@ pub enum Command {
         height: Option<f32>,
         rotation: Option<f32>,
         reverse: Option<bool>,
+    },
+    /// Bends a strip through corners, each a place in its box from (0, 0)
+    /// to (1, 1). No corners makes it straight again.
+    SetPath {
+        fixture: u32,
+        points: Vec<[f32; 2]>,
+        #[serde(default)]
+        closed: bool,
     },
     /// Adds an effect on top of the stack, or on top of a folder's effects.
     AddLayer {
@@ -1088,10 +1096,10 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 fixture.width = v.clamp(0.01, 100.0);
             }
             if let Some(v) = height {
-                // A strip has no height; keep its box flat.
+                // A straight strip has no height; keep its box flat.
                 fixture.height = match fixture.shape {
-                    Shape::Strip { .. } => 0.0,
-                    Shape::Matrix { .. } => v.clamp(0.01, 100.0),
+                    Shape::Strip { .. } if !fixture.bent() => 0.0,
+                    _ => v.clamp(0.01, 100.0),
                 };
             }
             if let Some(v) = rotation {
@@ -1099,6 +1107,41 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let (Some(r), Shape::Strip { reverse, .. }) = (reverse, &mut fixture.shape) {
                 *reverse = *r;
+            }
+            Ok(())
+        }
+
+        Command::SetPath {
+            fixture,
+            points,
+            closed,
+        } => {
+            if points.len() == 1 || points.len() > MAX_PATH_POINTS {
+                return Err(format!("a shape needs between 2 and {MAX_PATH_POINTS} corners"));
+            }
+            if points.iter().flatten().any(|v| !v.is_finite()) {
+                return Err("a corner of that shape is not a place".into());
+            }
+            let fixture = show.fixture_mut(*fixture).ok_or("that light no longer exists")?;
+            if !matches!(fixture.shape, Shape::Strip { .. }) {
+                return Err("only a strip can be bent into a shape".into());
+            }
+            let points: Vec<[f32; 2]> = points
+                .iter()
+                .map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)])
+                .collect();
+            if !points.is_empty() && points.iter().all(|p| *p == points[0]) {
+                return Err("the corners of a shape cannot all be in one place".into());
+            }
+            let was_bent = fixture.bent();
+            fixture.closed = *closed && points.len() >= 3;
+            fixture.path = points;
+            // A straight strip's box is flat. Bent, it gets a box as high
+            // as it is wide to begin with; straight again, a flat one.
+            if fixture.bent() && !was_bent {
+                fixture.height = fixture.width;
+            } else if !fixture.bent() {
+                fixture.height = 0.0;
             }
             Ok(())
         }
@@ -1982,6 +2025,84 @@ mod tests {
 
     fn parse(json: &str) -> Command {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_strip_can_be_bent_into_a_shape_and_straightened() {
+        let mut show = show_with_device();
+        let strip = show.fixtures[0].id;
+        let bend = |points: Vec<[f32; 2]>, closed: bool| Command::SetPath {
+            fixture: strip,
+            points,
+            closed,
+        };
+        let width = show.fixtures[0].width;
+        assert_eq!(show.fixtures[0].height, 0.0);
+        // What the UI sends. Corners outside the box are brought inside.
+        let parsed: Command = serde_json::from_str(&format!(
+            r#"{{"type":"set_path","fixture":{strip},"points":[[0,0],[0.5,1.4],[1,0]]}}"#
+        ))
+        .unwrap();
+        apply(&mut show, &parsed).unwrap();
+        let f = &show.fixtures[0];
+        assert_eq!(f.path, vec![[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]);
+        assert!(f.bent() && !f.closed);
+        assert_eq!(f.height, width, "a bent strip gets a box to be bent in");
+        // Its box can now be made taller or flatter, unlike a straight strip's.
+        apply(
+            &mut show,
+            &Command::UpdateFixture {
+                id: strip,
+                name: None,
+                x: None,
+                y: None,
+                width: None,
+                height: Some(0.25),
+                rotation: None,
+                reverse: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(show.fixtures[0].height, 0.25);
+        apply(
+            &mut show,
+            &bend(vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], true),
+        )
+        .unwrap();
+        assert!(show.fixtures[0].closed);
+        assert_eq!(show.fixtures[0].height, 0.25, "reshaping keeps the size");
+        // Two corners cannot close.
+        apply(&mut show, &bend(vec![[0.0, 0.0], [1.0, 1.0]], true)).unwrap();
+        assert!(!show.fixtures[0].closed);
+
+        let before = show.clone();
+        for bad in [
+            bend(vec![[0.5, 0.5]], false),
+            bend(vec![[0.5, 0.5], [0.5, 0.5]], false),
+            bend(vec![[0.0, f32::NAN], [1.0, 1.0]], false),
+            bend(vec![[0.1, 0.1]; MAX_PATH_POINTS + 1], false),
+            Command::SetPath {
+                fixture: 9999,
+                points: vec![[0.0, 0.0], [1.0, 1.0]],
+                closed: false,
+            },
+        ] {
+            assert!(apply(&mut show, &bad).is_err(), "{bad:?}");
+            assert_eq!(show, before);
+        }
+        // Straight again: no corners, a flat box.
+        apply(&mut show, &bend(Vec::new(), false)).unwrap();
+        assert!(!show.fixtures[0].bent());
+        assert_eq!(show.fixtures[0].height, 0.0);
+        // A matrix cannot be bent.
+        show.add_device(Device::wled("m", "127.0.0.9", 4048, 16), Some((4, 4)));
+        let matrix = show.fixtures.last().unwrap().id;
+        let bad = Command::SetPath {
+            fixture: matrix,
+            points: vec![[0.0, 0.0], [1.0, 1.0]],
+            closed: false,
+        };
+        assert!(apply(&mut show, &bad).is_err());
     }
 
     #[test]
@@ -3075,7 +3196,14 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 56 {
+            let command = match r.next() % 57 {
+                56 => Command::SetPath {
+                    fixture,
+                    points: (0..[0, 1, 2, 3, 5, 64, 65][r.next() as usize % 7])
+                        .map(|_| [r.number(), r.number()])
+                        .collect(),
+                    closed: r.flag(),
+                },
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {

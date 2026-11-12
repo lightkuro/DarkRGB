@@ -1306,6 +1306,8 @@ impl Show {
             height,
             rotation: 0.0,
             group: None,
+            path: Vec::new(),
+            closed: false,
         });
         self.devices.push(device);
         device_id
@@ -1459,6 +1461,9 @@ impl Show {
         }
         for device in &mut self.devices {
             device.mend_universe();
+        }
+        for fixture in &mut self.fixtures {
+            fixture.mend_path();
         }
         if !FRAME_RATES.contains(&self.output.frame_rate) {
             self.output.frame_rate = OutputSettings::default().frame_rate;

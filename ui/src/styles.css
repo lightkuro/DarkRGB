@@ -2982,6 +2982,74 @@ input.number {
   max-width: 420px;
 }
 
+.dialog.shape-editor {
+  width: min(420px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+}
+
+.shape-body {
+  display: grid;
+  gap: 12px;
+  justify-items: stretch;
+}
+
+/* The words under the drawing change as corners are added. Room is kept
+   for the longest, so the drawing does not move under the pointer. */
+.shape-body > .shape-canvas + .hint {
+  min-height: 4.4em;
+}
+
+.shape-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.shape-canvas {
+  justify-self: center;
+  background: #06080b;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.shape-box {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-dasharray: 4 4;
+}
+
+.shape-line {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+
+.shape-led {
+  fill: var(--accent);
+}
+
+.shape-led.first {
+  fill: #fff;
+}
+
+.shape-corner {
+  fill: var(--panel);
+  stroke: var(--accent);
+  stroke-width: 2;
+  cursor: grab;
+}
+
+.shape-corner.held {
+  fill: var(--accent);
+}
+
 .picture-field {
   display: flex;
   align-items: center;

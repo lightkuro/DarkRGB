@@ -40,6 +40,7 @@ import {
   type Show,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
+import { shaping } from "./ShapeEditor";
 import { ConfirmButton, IconButton, NameField, Slider, Switch } from "./ui";
 
 function describe(fixtures: Fixture[], device: Device): string {
@@ -258,6 +259,14 @@ function DeviceRow({
             <div className="field inline">
               <span>Angle</span>
               <AngleField fixture={own[0]!} />
+            </div>
+          )}
+          {own.length === 1 && own[0]!.shape.type === "strip" && (
+            <div className="field inline">
+              <span>Shape</span>
+              <button type="button" className="text-button" onClick={() => shaping.set(own[0]!.id)}>
+                {(own[0]!.path?.length ?? 0) >= 2 ? `${own[0]!.path!.length} corners` : "Straight"} · Change…
+              </button>
             </div>
           )}
           {show.light_groups.length > 0 && (

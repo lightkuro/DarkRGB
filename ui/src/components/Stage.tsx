@@ -8,6 +8,7 @@
 // the effects see the same selection.
 
 import {
+  Shapes,
   ArrowLeftRight,
   BoxSelect,
   FolderPlus,
@@ -36,6 +37,7 @@ import {
 } from "../engine";
 import { StageRenderer, type View } from "../stageGl";
 import { AddByAddress, AddPixels, AngleField, FoundDevices } from "./DevicePanel";
+import { shaping } from "./ShapeEditor";
 import { KindCards } from "./KindCards";
 import { clock } from "./Settings";
 
@@ -328,7 +330,10 @@ export function Stage() {
         const along = Math.abs((wx - f.x) * Math.cos(rad) - (wy - f.y) * Math.sin(rad));
         const width = Math.max(0.02, along * 2);
         // A matrix keeps its LEDs square.
-        const height = f.shape.type === "matrix" ? (width * f.shape.rows) / f.shape.cols : 0;
+        // A bent strip keeps the proportions of the box it is bent in.
+        const bent = f.shape.type === "strip" && (f.path?.length ?? 0) >= 2 && f.width > 0;
+        const height =
+          f.shape.type === "matrix" ? (width * f.shape.rows) / f.shape.cols : bent ? (width * f.height) / f.width : 0;
         moveTo([{ ...f, width, height }]);
       }
     }
@@ -430,7 +435,8 @@ export function Stage() {
         {shown.map((f) => {
           const [sx, sy] = toScreen(f.x, f.y);
           const w = f.width * view.scale + MARGIN * 2;
-          const h = (f.shape.type === "strip" ? 0 : f.height * view.scale) + Math.max(MARGIN, STRIP_GRIP) * 2;
+          const flat = f.shape.type === "strip" && (f.path?.length ?? 0) < 2;
+          const h = (flat ? 0 : f.height * view.scale) + Math.max(MARGIN, STRIP_GRIP) * 2;
           const isPicked = picked.includes(f.id);
           return (
             <g key={f.id} transform={`translate(${sx} ${sy}) rotate(${f.rotation})`}>
@@ -589,6 +595,11 @@ export function Stage() {
                 <RotateCw size={15} /> Turn
               </button>
               {full && single && <AngleField fixture={single} />}
+              {single?.shape.type === "strip" && (
+                <button type="button" className="tool" title="Bend this strip into a shape" onClick={() => shaping.set(single.id)}>
+                  <Shapes size={15} /> Shape
+                </button>
+              )}
               {full && single?.shape.type === "strip" && (
                 <button
                   type="button"

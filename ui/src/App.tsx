@@ -11,6 +11,7 @@ import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
 import { engine, useConnected, useNeedsCode, useShow, useStatus, useToasts, useView } from "./engine";
 import { PairScreen } from "./components/PairScreen";
+import { ShapeEditor } from "./components/ShapeEditor";
 import { startKeys } from "./keys";
 
 function Toasts() {
@@ -66,6 +67,7 @@ export function App() {
       <Settings />
       <Library />
       <FlashPrompt />
+      <ShapeEditor />
       <Toasts />
       {needsCode && <PairScreen />}
       {!connected && !needsCode && (

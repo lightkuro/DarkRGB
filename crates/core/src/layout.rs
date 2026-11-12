@@ -223,11 +223,108 @@ pub struct Fixture {
     /// The group of lights this fixture is filed under, if any.
     #[serde(default)]
     pub group: Option<u32>,
+    /// For a strip that does not run straight: the corners it passes
+    /// through, each as a place in the fixture's box from (0, 0) at the
+    /// top left to (1, 1) at the bottom right. Its LEDs are spread evenly
+    /// along the line through them. Empty for a straight strip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<[f32; 2]>,
+    /// The line through `path` runs on from its last corner to its first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
 }
+
+/// The most corners a strip's path can have.
+pub const MAX_PATH_POINTS: usize = 64;
 
 impl Fixture {
     pub fn pixel_count(&self) -> u32 {
         self.shape.pixel_count()
+    }
+
+    /// Puts right a path from a file edited by hand: corners inside the
+    /// box, not too many of them, and none at all on a matrix.
+    pub fn mend_path(&mut self) {
+        if !matches!(self.shape, Shape::Strip { .. }) {
+            self.path.clear();
+        }
+        self.path.retain(|p| p[0].is_finite() && p[1].is_finite());
+        self.path.truncate(MAX_PATH_POINTS);
+        if self.path.len() < 2 {
+            self.path.clear();
+        }
+        for p in &mut self.path {
+            *p = [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)];
+        }
+        self.closed &= self.path.len() >= 3;
+        if self.bent() && !(self.height.is_finite() && self.height > 0.0) {
+            self.height = self.width;
+        }
+    }
+
+    /// A strip that follows a path instead of running straight.
+    pub fn bent(&self) -> bool {
+        matches!(self.shape, Shape::Strip { .. }) && self.path.len() >= 2
+    }
+
+    /// The corners of a bent strip in the fixture's own frame, centred on
+    /// zero, with the first repeated at the end when the path is closed.
+    fn corners(&self) -> Vec<[f32; 2]> {
+        let mut corners: Vec<[f32; 2]> = self
+            .path
+            .iter()
+            .map(|p| [(p[0] - 0.5) * self.width, (p[1] - 0.5) * self.height])
+            .collect();
+        if self.closed && corners.len() >= 2 {
+            corners.push(corners[0]);
+        }
+        corners
+    }
+
+    /// How long a bent strip's path is on the canvas. For a straight one,
+    /// its width.
+    pub fn run_length(&self) -> f32 {
+        if !self.bent() {
+            return self.width;
+        }
+        let corners = self.corners();
+        corners
+            .windows(2)
+            .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+            .sum()
+    }
+
+    /// Where each of `count` LEDs sits along the path, in the fixture's
+    /// own frame: evenly spaced by distance, half a step in from each end.
+    fn along_path(&self, count: u32) -> Vec<[f32; 2]> {
+        let corners = self.corners();
+        let total = self.run_length();
+        let mut out = Vec::with_capacity(count as usize);
+        if total <= 1e-9 {
+            out.resize(count as usize, corners[0]);
+            return out;
+        }
+        let (mut leg, mut before) = (0usize, 0.0f32);
+        for i in 0..count {
+            let at = (i as f32 + 0.5) / count as f32 * total;
+            // Walk on to the leg this distance falls in.
+            loop {
+                let (a, b) = (corners[leg], corners[leg + 1]);
+                let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+                if at <= before + length || leg + 2 >= corners.len() {
+                    let t = if length > 1e-9 {
+                        ((at - before) / length).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+                    break;
+                }
+                before += length;
+                leg += 1;
+            }
+        }
+        out
     }
 
     /// Canvas position of every pixel, in wiring order.
@@ -238,6 +335,13 @@ impl Fixture {
         let cell = |i: u32, n: u32, span: f32| ((i as f32 + 0.5) / n as f32 - 0.5) * span;
 
         match self.shape {
+            Shape::Strip { count, reverse } if self.bent() => {
+                let mut along = self.along_path(count);
+                if reverse {
+                    along.reverse();
+                }
+                along.into_iter().map(|[lx, ly]| place(lx, ly)).collect()
+            }
             Shape::Strip { count, reverse } => (0..count)
                 .map(|i| {
                     let i = if reverse { count - 1 - i } else { i };
@@ -279,7 +383,83 @@ mod tests {
             height: 2.0,
             rotation: 0.0,
             group: None,
+            path: Vec::new(),
+            closed: false,
         }
+    }
+
+    #[test]
+    fn a_bent_strip_spreads_its_leds_evenly_along_its_corners() {
+        // An L in a box 4 wide and 2 high: down the left side (2 long),
+        // then along the bottom (4 long). Six LEDs, one for each unit.
+        let mut f = fixture(Shape::Strip {
+            count: 6,
+            reverse: false,
+        });
+        f.path = vec![[0.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
+        assert!(f.bent());
+        assert!((f.run_length() - 6.0).abs() < 1e-5);
+        let p = f.pixel_positions();
+        let expect = [[8.0, 4.5], [8.0, 5.5], [8.5, 6.0], [9.5, 6.0], [10.5, 6.0], [11.5, 6.0]];
+        for (got, want) in p.iter().zip(expect) {
+            assert!(close(*got, want), "{got:?} should be {want:?}");
+        }
+        // Wired from the other end.
+        f.shape = Shape::Strip {
+            count: 6,
+            reverse: true,
+        };
+        assert!(close(f.pixel_positions()[0], [11.5, 6.0]));
+
+        // Closed, the line runs back to where it began: a square of 12.
+        let mut f = fixture(Shape::Strip {
+            count: 12,
+            reverse: false,
+        });
+        f.path = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        f.closed = true;
+        assert!((f.run_length() - 12.0).abs() < 1e-5);
+        let p = f.pixel_positions();
+        assert!(
+            close(p[0], [8.5, 4.0]) && close(p[11], [8.0, 4.5]),
+            "{:?} {:?}",
+            p[0],
+            p[11]
+        );
+        // Turned a quarter, the whole shape turns about the fixture's centre.
+        f.rotation = 90.0;
+        assert!(
+            close(f.pixel_positions()[0], [11.0, 3.5]),
+            "{:?}",
+            f.pixel_positions()[0]
+        );
+
+        // Corners on top of each other do no harm, and one corner is no path.
+        let mut f = fixture(Shape::Strip {
+            count: 3,
+            reverse: false,
+        });
+        f.path = vec![[0.5, 0.5], [0.5, 0.5]];
+        assert!(f.pixel_positions().iter().all(|p| close(*p, [10.0, 5.0])));
+        f.path = vec![[0.2, 0.2]];
+        assert!(!f.bent());
+        assert!(close(f.pixel_positions()[0], [10.0 - 4.0 / 3.0, 5.0]));
+        // A matrix takes no notice of a path, and a show from before has none.
+        let mut m = fixture(Shape::Matrix {
+            cols: 2,
+            rows: 2,
+            serpentine: false,
+        });
+        let before = m.pixel_positions();
+        m.path = vec![[0.0, 0.0], [1.0, 1.0]];
+        assert_eq!(m.pixel_positions(), before);
+        let text = serde_json::to_string(&fixture(Shape::Strip {
+            count: 3,
+            reverse: false,
+        }))
+        .unwrap();
+        assert!(!text.contains("path") && !text.contains("closed"));
+        assert!(serde_json::from_str::<Fixture>(&text).unwrap().path.is_empty());
     }
 
     fn close(a: [f32; 2], b: [f32; 2]) -> bool {

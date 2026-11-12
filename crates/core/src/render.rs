@@ -512,7 +512,8 @@ fn build_targets(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> (Vec<Tar
         let count = fixture.pixel_count();
         if Show::layer_hits(layer, fixture) {
             fixtures_hit += 1;
-            lone_strip = matches!(fixture.shape, Shape::Strip { .. }).then_some(fixture);
+            // A bent strip is a shape, and a pattern is drawn across it.
+            lone_strip = (matches!(fixture.shape, Shape::Strip { .. }) && !fixture.bent()).then_some(fixture);
             for i in 0..count {
                 picked.push((offset + i, positions[(offset + i) as usize]));
             }

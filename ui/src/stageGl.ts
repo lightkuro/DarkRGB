@@ -2,6 +2,7 @@
 // neighbouring lights merge the way real LEDs do behind a diffuser.
 
 import { engine, type Fixture } from "./engine";
+import { runLength } from "./components/ShapeEditor";
 
 export interface View {
   /** Canvas position shown at the centre of the stage. */
@@ -60,7 +61,7 @@ function pixelSizes(fixtures: Fixture[], total: number): Float32Array {
     const count = f.shape.type === "strip" ? f.shape.count : f.shape.cols * f.shape.rows;
     const spacing =
       f.shape.type === "strip"
-        ? f.width / Math.max(1, f.shape.count)
+        ? runLength(f) / Math.max(1, f.shape.count)
         : Math.min(f.width / Math.max(1, f.shape.cols), f.height / Math.max(1, f.shape.rows));
     sizes.fill(spacing, offset, Math.min(total, offset + count));
     offset += count;

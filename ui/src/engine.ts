@@ -129,6 +129,10 @@ export interface Fixture {
   rotation: number;
   /** The group of lights this fixture is filed under, if any. */
   group: number | null;
+  /** A bent strip's corners, each from (0, 0) to (1, 1) in its box. Left out when straight. */
+  path?: [number, number][];
+  /** The path runs on from its last corner to its first. */
+  closed?: boolean;
 }
 
 /** A named set of lights that can be aimed at, dimmed or switched as one. */
@@ -582,6 +586,7 @@ export type Command =
       spin?: number;
       turns?: boolean;
     }
+  | { type: "set_path"; fixture: number; points: [number, number][]; closed: boolean }
   | { type: "set_param"; layer: number; param: string; value: ParamValue }
   | { type: "reset_params"; layer: number }
   | { type: "set_link"; layer: number; param: string; source: Source; amount: number }
@@ -640,7 +645,7 @@ const SILENCE: AudioFeatures = {
   drop: 0,
 };
 
-class Store<T> {
+export class Store<T> {
   private listeners = new Set<() => void>();
   constructor(private value: T) {}
   get = (): T => this.value;
