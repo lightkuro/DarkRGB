@@ -74,6 +74,9 @@ fn make_solid(shared: &Arc<Shared>, colour: &str) {
             targets: None,
             each: None,
             only: None,
+            angle: None,
+            spin: None,
+            turns: None,
         })
         .unwrap();
     shared
@@ -576,6 +579,9 @@ fn a_beat_fired_by_hand_sets_off_effects_that_wait_for_one() {
             targets: None,
             each: None,
             only: None,
+            angle: None,
+            spin: None,
+            turns: None,
         })
         .unwrap();
     // With no sound and no beat, the pulse stays dark.
@@ -985,6 +991,9 @@ fn a_strobe_keeps_to_the_limit_by_itself_and_runs_free_with_it_off() {
             targets: None,
             each: None,
             only: None,
+            angle: None,
+            spin: None,
+            turns: None,
         })
         .unwrap();
     shared
@@ -1047,6 +1056,9 @@ fn flashing_that_no_effect_announced_is_still_limited_at_the_device() {
             targets: None,
             each: None,
             only: None,
+            angle: None,
+            spin: None,
+            turns: None,
         })
         .unwrap();
     shared
@@ -1074,6 +1086,9 @@ fn flashing_that_no_effect_announced_is_still_limited_at_the_device() {
                     targets: None,
                     each: None,
                     only: None,
+                    angle: None,
+                    spin: None,
+                    turns: None,
                 });
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -1211,6 +1226,9 @@ fn next_scene_previous_scene_freeze_and_speed() {
             targets: None,
             each: None,
             only: None,
+            angle: None,
+            spin: None,
+            turns: None,
         })
         .unwrap();
     let moving = |sim: &Sim| {

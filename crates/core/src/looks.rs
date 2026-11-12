@@ -452,6 +452,9 @@ impl Show {
                 // Kept as a rule, not as a list of lights, so the look
                 // lands where it should on lights added later too.
                 only: part.only,
+                angle: 0.0,
+                spin: 0.0,
+                turns: false,
                 links: part
                     .links
                     .iter()

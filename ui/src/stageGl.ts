@@ -142,8 +142,12 @@ export class StageRenderer {
     }
     if (this.count === 0) return;
 
-    // Colours only apply when they were rendered for the positions we hold.
-    const fresh = engine.colorsSerial === engine.layoutSerial && engine.colors.length === this.count * 3;
+    // Colours belong to lights in order, wherever those lights are. So a
+    // frame rendered just before a light was moved is still right for it,
+    // and is kept until the next one arrives: blanking in between made
+    // lights flicker while they were dragged. Only a change in how many
+    // lights there are leaves nothing to show.
+    const fresh = engine.colors.length === this.count * 3;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, fresh ? engine.colors : this.black);
 

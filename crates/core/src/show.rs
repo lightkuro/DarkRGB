@@ -154,6 +154,8 @@ pub const MAX_LINKS: usize = 8;
 /// The name a link uses for the layer's own strength, which is not one of
 /// the effect's settings.
 pub const LINK_STRENGTH: &str = "opacity";
+/// The name a link uses for the angle a layer's pattern is turned to.
+pub const LINK_ANGLE: &str = "angle";
 
 impl Source {
     /// Where the source is now, 0..1. `heard` is the sound as the layer
@@ -243,6 +245,23 @@ pub struct Layer {
     /// Settings that move by themselves, following the music or a fader.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
+    /// How far the pattern is turned, in degrees clockwise. A sweep that
+    /// crosses from left to right at 0 comes down from the top at 90.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub angle: f32,
+    /// How fast the pattern keeps turning, in degrees a second.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub spin: f32,
+    /// Drawn on each light by itself, the pattern normally stays the right
+    /// way up in the room however a matrix is turned on the stage (a
+    /// square hung as a diamond still shows its words level). With this
+    /// on, the pattern turns with the light instead.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub turns: bool,
+}
+
+fn is_nought(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// The parts of a song a scene suits, for autopilot to choose by.
@@ -809,6 +828,7 @@ fn first_id() -> u32 {
 /// The layer's strength always can be.
 pub fn linkable(effect: &str, param: &str) -> bool {
     param == LINK_STRENGTH
+        || param == LINK_ANGLE
         || effects::find(effect).is_some_and(|def| {
             def.info
                 .params
@@ -980,6 +1000,9 @@ impl Show {
                 group,
                 each: false,
                 only: Only::Any,
+                angle: 0.0,
+                spin: 0.0,
+                turns: false,
                 links: Vec::new(),
             },
         );

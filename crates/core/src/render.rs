@@ -9,7 +9,7 @@ use crate::effects;
 use crate::layout::{Fixture, Shape};
 use crate::params::{ParamKind, ParamReader, ParamSpec, ParamValue, Params};
 use crate::show::{Blend, Layer, Show};
-use crate::show::{LINK_STRENGTH, Source};
+use crate::show::{LINK_ANGLE, LINK_STRENGTH, Source};
 
 /// A hit fired by hand for one layer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,12 +40,62 @@ struct Segment {
     targets: Vec<Target>,
     aspect: f32,
     flat: bool,
+    /// Degrees the pattern is turned on this segment before the layer's
+    /// own angle: what keeps it upright on a matrix that has been turned.
+    turn: f32,
 }
 
 struct LayerState {
     effect_id: String,
     effect: Box<dyn Effect>,
     segments: Vec<Segment>,
+    /// How far the layer's spin has carried the pattern round, in degrees.
+    spun: f32,
+}
+
+/// A pattern turned by some angle inside a box of a given shape.
+///
+/// The pattern keeps filling the box: its own width and height become the
+/// box's extent along the turned axes, so every point of the box still
+/// lands between 0 and 1 and no effect ever sees a place outside itself.
+#[derive(Clone, Copy)]
+struct Turn {
+    sin: f32,
+    cos: f32,
+    /// Width over height of the box.
+    aspect: f32,
+    /// The extent of the box along the pattern's x and y, in box heights.
+    wide: f32,
+    high: f32,
+}
+
+impl Turn {
+    fn new(degrees: f32, aspect: f32) -> Self {
+        let aspect = aspect.max(1e-3);
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        Self {
+            sin,
+            cos,
+            aspect,
+            wide: (aspect * cos.abs() + sin.abs()).max(1e-6),
+            high: (aspect * sin.abs() + cos.abs()).max(1e-6),
+        }
+    }
+
+    /// The shape of the pattern's own frame: what an effect should take
+    /// the box's width over height to be.
+    fn aspect(&self) -> f32 {
+        self.wide / self.high
+    }
+
+    /// Where a point of the box falls in the pattern.
+    fn apply(&self, x: f32, y: f32) -> (f32, f32) {
+        let (px, py) = ((x - 0.5) * self.aspect, y - 0.5);
+        (
+            ((px * self.cos + py * self.sin) / self.wide + 0.5).clamp(0.0, 1.0),
+            ((py * self.cos - px * self.sin) / self.high + 0.5).clamp(0.0, 1.0),
+        )
+    }
 }
 
 /// Keeps effect state between frames and caches pixel positions.
@@ -88,8 +138,12 @@ impl Renderer {
             self.scratch.resize(self.positions.len(), Rgb::BLACK);
         }
 
-        let target_key: Vec<(u32, Vec<u32>, bool)> =
-            show.layers.iter().map(|l| (l.id, l.targets.clone(), l.each)).collect();
+        let target_key: Vec<(u32, Vec<u32>, bool)> = show
+            .layers
+            .iter()
+            // Which lights, each by itself or not, turning with them or not.
+            .map(|l| (l.id * 2 + l.turns as u32, l.targets.clone(), l.each))
+            .collect();
         let targets_changed = layout_changed || target_key != self.target_key;
         self.target_key = target_key;
 
@@ -107,6 +161,7 @@ impl Renderer {
                         effect_id: layer.effect.clone(),
                         effect: (def.make)(),
                         segments: Vec::new(),
+                        spun: 0.0,
                     },
                 );
             }
@@ -173,9 +228,13 @@ impl Renderer {
                 0.0
             };
             // Settings that follow the music or a fader, moved for this frame.
-            let (linked, own_strength) = linked_settings(layer, &def.info.params, |source| {
+            let (linked, own_strength, swing) = linked_settings(layer, &def.info.params, |source| {
                 source.value(&heard, audio, &show.live.faders, time)
             });
+            // The pattern's angle: where it is set, how far it has spun,
+            // and how far a link is pushing it.
+            state.spun = (state.spun + layer.spin * dt).rem_euclid(360.0);
+            let angle = layer.angle + state.spun + swing;
             // A colour pad in force: every palette setting takes its colours.
             let linked = match &recolour {
                 Some(value) if def.info.params.iter().any(|p| matches!(p.kind, ParamKind::Palette)) => {
@@ -217,8 +276,19 @@ impl Renderer {
                 // Each light, drawn by itself, has its own shape.
                 ctx.aspect = segment.aspect;
                 ctx.flat = segment.flat;
+                // A line of lights has no second direction to turn in.
+                let turned = angle + segment.turn;
+                let turn =
+                    (!segment.flat && turned.rem_euclid(360.0).abs() > 1e-3).then(|| Turn::new(turned, segment.aspect));
+                if let Some(turn) = &turn {
+                    ctx.aspect = turn.aspect();
+                }
                 for t in &segment.targets {
-                    let src = state.effect.shade(t.x, t.y, &ctx).clamp().scale(follow);
+                    let (x, y) = match &turn {
+                        Some(turn) => turn.apply(t.x, t.y),
+                        None => (t.x, t.y),
+                    };
+                    let src = state.effect.shade(x, y, &ctx).clamp().scale(follow);
                     let dst = &mut self.frame[t.index as usize];
                     *dst = match layer.blend {
                         Blend::Normal => dst.lerp(src, opacity),
@@ -326,13 +396,21 @@ impl Renderer {
 /// A layer's settings with its links applied, and its strength likewise.
 /// The settings are `None` when no link touches them, which is the usual
 /// case and costs nothing.
-fn linked_settings(layer: &Layer, specs: &[ParamSpec], value_of: impl Fn(Source) -> f32) -> (Option<Params>, f32) {
+/// The layer's settings as its links leave them for this frame: the
+/// effect's settings if any moved, the strength, and how many degrees the
+/// pattern is pushed round (half a turn at most, either way).
+fn linked_settings(layer: &Layer, specs: &[ParamSpec], value_of: impl Fn(Source) -> f32) -> (Option<Params>, f32, f32) {
     let mut strength = layer.opacity;
+    let mut swing = 0.0;
     let mut params: Option<Params> = None;
     for link in &layer.links {
         let push = value_of(link.source) * link.amount.clamp(-1.0, 1.0);
         if link.param == LINK_STRENGTH {
             strength = (strength + push).clamp(0.0, 1.0);
+            continue;
+        }
+        if link.param == LINK_ANGLE {
+            swing += push * 180.0;
             continue;
         }
         let Some(spec) = specs.iter().find(|s| s.id == link.param) else {
@@ -347,7 +425,7 @@ fn linked_settings(layer: &Layer, specs: &[ParamSpec], value_of: impl Fn(Source)
             .get_or_insert_with(|| layer.params.clone())
             .insert(link.param.clone(), ParamValue::Number(moved));
     }
-    (params, strength)
+    (params, strength, swing)
 }
 
 fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Segment> {
@@ -356,7 +434,12 @@ fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Seg
         return if targets.is_empty() {
             Vec::new()
         } else {
-            vec![Segment { targets, aspect, flat }]
+            vec![Segment {
+                targets,
+                aspect,
+                flat,
+                turn: 0.0,
+            }]
         };
     }
     let mut segments = Vec::new();
@@ -364,7 +447,7 @@ fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Seg
     for fixture in &show.fixtures {
         let count = fixture.pixel_count();
         if Show::layer_hits(layer, fixture) && count > 0 {
-            segments.push(own_segment(fixture, offset, count, positions));
+            segments.push(own_segment(fixture, offset, count, positions, layer.turns));
         }
         offset += count;
     }
@@ -373,7 +456,7 @@ fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Seg
 
 /// A fixture in its own frame: along its length for a strip, across its
 /// own columns and rows for a matrix, however it is turned on the canvas.
-fn own_segment(fixture: &Fixture, offset: u32, count: u32, positions: &[[f32; 2]]) -> Segment {
+fn own_segment(fixture: &Fixture, offset: u32, count: u32, positions: &[[f32; 2]], turns: bool) -> Segment {
     match fixture.shape {
         Shape::Strip { reverse, .. } => Segment {
             targets: (0..count)
@@ -388,6 +471,7 @@ fn own_segment(fixture: &Fixture, offset: u32, count: u32, positions: &[[f32; 2]
                 .collect(),
             aspect: 1.0,
             flat: true,
+            turn: 0.0,
         },
         Shape::Matrix { .. } => {
             // Turn each pixel's place on the canvas back into the matrix's own.
@@ -407,6 +491,9 @@ fn own_segment(fixture: &Fixture, offset: u32, count: u32, positions: &[[f32; 2]
                     .collect(),
                 aspect: w / h,
                 flat: false,
+                // Turned back by as much as the matrix is turned, the
+                // pattern is the right way up in the room.
+                turn: if turns { 0.0 } else { -fixture.rotation },
             }
         }
     }
@@ -527,6 +614,142 @@ mod tests {
         let mut bytes = Vec::new();
         r.device_bytes(&show, dev, &mut bytes);
         assert_eq!(bytes, [255, 128, 0].repeat(5));
+    }
+
+    /// A two-by-one picture, red on the left and blue on the right, on a
+    /// four-by-four matrix.
+    fn picture_show(rotation: f32) -> (Show, u32) {
+        let mut show = Show::default();
+        show.layers.clear();
+        let layer = show.add_layer("picture");
+        show.layer_mut(layer)
+            .unwrap()
+            .params
+            .insert("picture".into(), ParamValue::Text("2x1:/wAAAAD/".into()));
+        show.add_device(device(16), Some((4, 4)));
+        show.fixtures[0].rotation = rotation;
+        (show, layer)
+    }
+
+    /// The colour of the light nearest each side of the stage: left,
+    /// right, top, bottom, as 'r', 'b' or '?' when the side is mixed.
+    fn sides(show: &Show) -> String {
+        let (r, frame) = render(show);
+        let positions = r.positions().to_vec();
+        let centre = [show.fixtures[0].x, show.fixtures[0].y];
+        let reach = |axis: usize| {
+            positions
+                .iter()
+                .map(|p| (p[axis] - centre[axis]).abs())
+                .fold(0.0, f32::max)
+        };
+        let side = |axis: usize, sign: f32| {
+            let colours: Vec<char> = positions
+                .iter()
+                .zip(&frame)
+                .filter(|(p, _)| (p[axis] - centre[axis]) * sign > reach(axis) * 0.6)
+                .map(|(_, c)| if c.r > 0.5 { 'r' } else { 'b' })
+                .collect();
+            assert!(!colours.is_empty());
+            if colours.iter().all(|c| *c == colours[0]) {
+                colours[0]
+            } else {
+                '?'
+            }
+        };
+        [side(0, -1.0), side(0, 1.0), side(1, -1.0), side(1, 1.0)]
+            .iter()
+            .collect()
+    }
+
+    #[test]
+    fn a_pattern_turns_by_the_layers_angle() {
+        let (mut show, layer) = picture_show(0.0);
+        assert_eq!(sides(&show), "rb??", "red on the left, blue on the right");
+        // A quarter turn clockwise: what was on the left is now on top.
+        show.layer_mut(layer).unwrap().angle = 90.0;
+        assert_eq!(sides(&show), "??rb");
+        show.layer_mut(layer).unwrap().angle = 180.0;
+        assert_eq!(sides(&show), "br??");
+        show.layer_mut(layer).unwrap().angle = 270.0;
+        assert_eq!(sides(&show), "??br");
+        // At 45 degrees the red half is the top-left corner: every light
+        // is still lit, none falls outside the pattern.
+        show.layer_mut(layer).unwrap().angle = 45.0;
+        let (_, frame) = render(&show);
+        assert!(frame.iter().all(|c| c.r > 0.5 || c.b > 0.5));
+        assert!(frame.iter().any(|c| c.r > 0.5) && frame.iter().any(|c| c.b > 0.5));
+    }
+
+    #[test]
+    fn a_turned_matrix_keeps_its_pattern_upright_unless_told_to_turn_with_it() {
+        for rotation in [0.0, 90.0, 180.0, 270.0] {
+            let (mut show, layer) = picture_show(rotation);
+            show.layer_mut(layer).unwrap().each = true;
+            assert_eq!(sides(&show), "rb??", "upright at {rotation}");
+            // Drawn once across everything, it was always upright.
+            show.layer_mut(layer).unwrap().each = false;
+            assert_eq!(sides(&show), "rb??", "across at {rotation}");
+        }
+        // Turning with the light: a quarter turn of the matrix puts its
+        // own left side at the top of the stage.
+        let (mut show, layer) = picture_show(90.0);
+        show.layer_mut(layer).unwrap().each = true;
+        show.layer_mut(layer).unwrap().turns = true;
+        assert_eq!(sides(&show), "??rb");
+        // A diamond: upright, the left corner is red and the right blue.
+        let (mut show, layer) = picture_show(45.0);
+        show.layer_mut(layer).unwrap().each = true;
+        let (r, frame) = render(&show);
+        let centre = show.fixtures[0].x;
+        for (p, c) in r.positions().iter().zip(&frame) {
+            if (p[0] - centre).abs() > show.fixtures[0].width * 0.1 {
+                assert_eq!(c.r > 0.5, p[0] < centre, "{p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_spin_carries_the_pattern_round_and_a_link_swings_it() {
+        let (mut show, layer) = picture_show(0.0);
+        show.layer_mut(layer).unwrap().spin = 90.0;
+        let mut r = Renderer::new();
+        r.sync(&show);
+        // One second at 90 degrees a second is a quarter turn.
+        for _ in 0..60 {
+            r.render(&show, 0.0, 1.0 / 60.0, &AudioFeatures::default());
+        }
+        let top: Vec<bool> = r
+            .positions()
+            .iter()
+            .zip(r.frame())
+            .filter(|(p, _)| p[1] < show.fixtures[0].y)
+            .map(|(_, c)| c.r > 0.5)
+            .collect();
+        assert!(top.iter().all(|red| *red), "red has come round to the top");
+
+        // A fader at full with a link of one half swings it a quarter turn.
+        let (mut show, layer) = picture_show(0.0);
+        show.layer_mut(layer).unwrap().links.push(crate::show::Link {
+            param: LINK_ANGLE.into(),
+            source: Source::Fader { n: 1 },
+            amount: 0.5,
+        });
+        show.live.faders[0] = 1.0;
+        assert_eq!(sides(&show), "??rb");
+        show.live.faders[0] = 0.0;
+        assert_eq!(sides(&show), "rb??");
+        // A strip has one direction only, so an angle leaves it alone.
+        let mut show = solid_show("#ffffff");
+        show.layers[0].effect = "picture".into();
+        show.layers[0]
+            .params
+            .insert("picture".into(), ParamValue::Text("2x1:/wAAAAD/".into()));
+        show.add_device(device(4), None);
+        let (_, before) = render(&show);
+        show.layers[0].angle = 90.0;
+        let (_, after) = render(&show);
+        assert_eq!(before, after);
     }
 
     #[test]
@@ -970,15 +1193,16 @@ mod tests {
     }
 
     #[test]
-    fn a_turned_matrix_drawn_by_itself_keeps_its_own_up_and_down() {
-        // Fire burns from the matrix's own bottom row, even with the
-        // matrix turned upside down on the canvas.
+    fn a_matrix_told_to_turn_its_pattern_keeps_its_own_up_and_down() {
+        // Asked to turn with the light, fire burns from the matrix's own
+        // bottom row, even with the matrix upside down on the canvas.
         let mut show = Show::default();
         show.layers.clear();
         show.add_device(device(64), Some((8, 8)));
         show.fixtures[0].rotation = 180.0;
         let id = show.add_layer("fire");
         show.layer_mut(id).unwrap().each = true;
+        show.layer_mut(id).unwrap().turns = true;
         let mut r = Renderer::new();
         r.sync(&show);
         let mut frame = Vec::new();

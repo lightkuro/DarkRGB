@@ -6,7 +6,9 @@ use darkrgb_core::effects;
 use darkrgb_core::layout::MAX_PIXELS;
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::picture::{MAX_SIDE, Picture};
-use darkrgb_core::show::{Blend, FADERS, FRAME_RATES, LINK_STRENGTH, MAX_LINKS, PAGES, linkable, mend_links};
+use darkrgb_core::show::{
+    Blend, FADERS, FRAME_RATES, LINK_ANGLE, LINK_STRENGTH, MAX_LINKS, PAGES, linkable, mend_links,
+};
 use darkrgb_core::{
     Action, Band, Device, DeviceKind, FlashSettings, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, Link, MidiNote,
     Mood, Only, Rgb, Shape, Show, Sound, Source, Swatch,
@@ -17,6 +19,8 @@ use serde::Deserialize;
 use crate::midi::LearnTarget;
 
 const MAX_NAME: usize = 80;
+/// The fastest a pattern may be set spinning, in degrees a second.
+const MAX_SPIN: f32 = 360.0;
 /// Most effects outside pinned folders, which is also the most a scene holds.
 const MAX_LAYERS: usize = 32;
 /// Most effects inside pinned folders. They play on top of every scene.
@@ -172,6 +176,14 @@ pub enum Command {
         /// Keep to strips, to matrices, or to neither.
         #[serde(default)]
         only: Option<Only>,
+        /// Degrees the pattern is turned, and degrees a second it keeps turning.
+        #[serde(default)]
+        angle: Option<f32>,
+        #[serde(default)]
+        spin: Option<f32>,
+        /// Turn with each light, or stay upright in the room.
+        #[serde(default)]
+        turns: Option<bool>,
     },
     /// Gives a layer a label. An empty name goes back to the effect's own.
     RenameLayer {
@@ -1208,7 +1220,12 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             targets,
             each,
             only,
+            angle,
+            spin,
+            turns,
         } => {
+            let angle = angle.map(|a| finite(a, "The angle")).transpose()?;
+            let spin = spin.map(|s| finite(s, "The spin")).transpose()?;
             if let Some(effect) = effect
                 && effects::find(effect).is_none()
             {
@@ -1231,7 +1248,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 // them. A link to the strength carries over.
                 layer.effect = effect.clone();
                 layer.params.clear();
-                layer.links.retain(|l| l.param == LINK_STRENGTH);
+                layer
+                    .links
+                    .retain(|l| l.param == LINK_STRENGTH || l.param == LINK_ANGLE);
             }
             if let Some(o) = opacity {
                 layer.opacity = o.clamp(0.0, 1.0);
@@ -1253,6 +1272,15 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(o) = only {
                 layer.only = *o;
+            }
+            if let Some(a) = angle {
+                layer.angle = a.rem_euclid(360.0);
+            }
+            if let Some(s) = spin {
+                layer.spin = s.clamp(-MAX_SPIN, MAX_SPIN);
+            }
+            if let Some(t) = turns {
+                layer.turns = *t;
             }
             Ok(())
         }
@@ -1957,6 +1985,58 @@ mod tests {
     }
 
     #[test]
+    fn a_pattern_can_be_turned_and_set_spinning() {
+        let mut show = Show::default();
+        let layer = show.layers[0].id;
+        let turn = |angle: Option<f32>, spin: Option<f32>, turns: Option<bool>| Command::UpdateLayer {
+            id: layer,
+            effect: None,
+            opacity: None,
+            blend: None,
+            enabled: None,
+            targets: None,
+            each: None,
+            only: None,
+            angle,
+            spin,
+            turns,
+        };
+        apply(&mut show, &turn(Some(45.0), Some(20.0), Some(true))).unwrap();
+        let l = &show.layers[0];
+        assert_eq!((l.angle, l.spin, l.turns), (45.0, 20.0, true));
+        // Angles wrap round; a spin is held to one turn a second.
+        apply(&mut show, &turn(Some(-90.0), Some(9000.0), None)).unwrap();
+        assert_eq!((show.layers[0].angle, show.layers[0].spin), (270.0, 360.0));
+        apply(&mut show, &turn(Some(725.0), Some(-9000.0), None)).unwrap();
+        assert_eq!((show.layers[0].angle, show.layers[0].spin), (5.0, -360.0));
+        let before = show.clone();
+        assert!(apply(&mut show, &turn(Some(f32::NAN), None, None)).is_err());
+        assert!(apply(&mut show, &turn(None, Some(f32::INFINITY), None)).is_err());
+        assert_eq!(show, before);
+        // What the UI sends, and a show from before patterns could turn.
+        let parsed: Command = serde_json::from_str(r#"{"type":"update_layer","id":1,"angle":30}"#).unwrap();
+        assert!(matches!(parsed, Command::UpdateLayer { angle: Some(a), spin: None, .. } if a == 30.0));
+        apply(&mut show, &turn(Some(0.0), Some(0.0), Some(false))).unwrap();
+        let text = serde_json::to_string(&show.layers[0]).unwrap();
+        assert!(
+            !text.contains("angle") && !text.contains("spin") && !text.contains("turns"),
+            "{text}"
+        );
+        // The angle can follow the music like any slider.
+        apply(
+            &mut show,
+            &Command::SetLink {
+                layer,
+                param: "angle".into(),
+                source: Source::Bass,
+                amount: 0.5,
+            },
+        )
+        .unwrap();
+        assert_eq!(show.layers[0].links[0].param, "angle");
+    }
+
+    #[test]
     fn a_picture_setting_takes_only_small_pictures() {
         let mut show = Show::default();
         let layer = show.add_layer("picture");
@@ -2185,6 +2265,9 @@ mod tests {
             targets: None,
             each: None,
             only: None,
+            angle: None,
+            spin: None,
+            turns: None,
         };
         // Same effect: settings stay.
         apply(&mut show, &update("flow")).unwrap();
@@ -2579,6 +2662,9 @@ mod tests {
                     targets: Some(targets),
                     each: None,
                     only: None,
+                    angle: None,
+                    spin: None,
+                    turns: None,
                 },
             )
         };
@@ -2899,6 +2985,9 @@ mod tests {
             targets: Some(targets),
             each: None,
             only: None,
+            angle: None,
+            spin: None,
+            turns: None,
         };
         assert!(apply(&mut show, &target(vec![9999])).is_err());
         apply(&mut show, &target(vec![fixture, fixture])).unwrap();
@@ -3265,6 +3354,9 @@ mod tests {
                     targets: r.maybe(|r| vec![fixture, if r.flag() { group } else { r.next() % 50 }]),
                     each: r.maybe(Awkward::flag),
                     only: r.maybe(|r| [Only::Any, Only::Strips, Only::Matrices][r.next() as usize % 3]),
+                    angle: r.maybe(Awkward::number),
+                    spin: r.maybe(Awkward::number),
+                    turns: r.maybe(Awkward::flag),
                 },
                 5 => Command::RemoveDevice { id: device },
                 6 | 7 => Command::SetParam {
@@ -3605,6 +3697,9 @@ mod tests {
                 targets: None,
                 each: None,
                 only: None,
+                angle: None,
+                spin: None,
+                turns: None,
             },
         )
         .unwrap();

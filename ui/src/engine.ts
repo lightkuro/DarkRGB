@@ -242,6 +242,12 @@ export interface Layer {
   only: Only;
   /** Settings that follow something. Left out when there are none. */
   links?: Link[];
+  /** Degrees the pattern is turned, clockwise. Left out when 0. */
+  angle?: number;
+  /** Degrees a second it keeps turning. Left out when 0. */
+  spin?: number;
+  /** Drawn on each light, the pattern turns with a turned matrix instead of staying upright. */
+  turns?: boolean;
 }
 
 export interface Scene {
@@ -572,6 +578,9 @@ export type Command =
       targets?: number[];
       each?: boolean;
       only?: Only;
+      angle?: number;
+      spin?: number;
+      turns?: boolean;
     }
   | { type: "set_param"; layer: number; param: string; value: ParamValue }
   | { type: "reset_params"; layer: number }

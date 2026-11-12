@@ -57,7 +57,7 @@ import {
   type Show,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
-import { LinkedSlider, STRENGTH } from "./Links";
+import { ANGLE, LinkedSlider, STRENGTH } from "./Links";
 import { ConfirmButton, IconButton, NameField, Slider, Switch, useDismiss } from "./ui";
 import { PictureField } from "./PictureField";
 
@@ -467,6 +467,60 @@ export function EffectPicker({
   );
 }
 
+/**
+ * Turning the pattern: an angle, a spin, and whether it turns with a
+ * matrix that has itself been turned on the stage. A single strip has
+ * only one direction, so none of this changes what it shows.
+ */
+function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matrices: boolean }) {
+  const angle = layer.angle ?? 0;
+  const spin = layer.spin ?? 0;
+  const linked = layer.links?.some((l) => l.param === ANGLE) ?? false;
+  // The simple layout shows what is set, and offers the angle once there
+  // is a matrix for it to show on.
+  if (!full && !matrices && angle === 0 && spin === 0 && !linked) return null;
+  return (
+    <>
+      <LinkedSlider
+        layer={layer}
+        param={ANGLE}
+        offer={full}
+        label="Angle"
+        min={0}
+        max={360}
+        step={1}
+        value={angle}
+        format={(v) => `${Math.round(v) % 360}°`}
+        onChange={numberSender(`${layer.id}:angle`, (value) => ({ type: "update_layer", id: layer.id, angle: value }))}
+      />
+      {(full || spin !== 0) && (
+        <Slider
+          label="Spin"
+          min={-180}
+          max={180}
+          step={1}
+          value={spin}
+          format={(v) => (v === 0 ? "Still" : `${Math.abs(Math.round(v))}° a second${v < 0 ? ", backwards" : ""}`)}
+          onChange={numberSender(`${layer.id}:spin`, (value) => ({ type: "update_layer", id: layer.id, spin: value }))}
+        />
+      )}
+      {layer.each && (full || layer.turns) && (
+        <div className="field inline each">
+          <span>
+            Turn with each light
+            <span className="hint"> Off, the pattern stays the right way up however a matrix is hung.</span>
+          </span>
+          <Switch
+            checked={layer.turns ?? false}
+            label="Turn the pattern with each light"
+            onChange={(turns) => engine.send({ type: "update_layer", id: layer.id, turns })}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
 function Targets({
   layer,
   fixtures,
@@ -853,6 +907,7 @@ function LayerBody({
         format={(v) => `${Math.round(v * 100)}%`}
         onChange={numberSender(`${layer.id}:opacity`, (opacity) => ({ type: "update_layer", id: layer.id, opacity }))}
       />
+      <Turning layer={layer} full={advanced} matrices={fixtures.some((f) => f.shape.type === "matrix")} />
       {/* In the simple layout, keys are given in the Live view. One that is there already still shows. */}
       {(advanced || show.bindings.some((b) => b.action.type === "layer" && b.action.id === layer.id && b.key)) && (
         <KeyAssign action={{ type: "layer", id: layer.id }} />

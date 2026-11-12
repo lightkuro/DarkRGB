@@ -9,6 +9,8 @@ import { Slider } from "./ui";
 
 /** The name the engine uses for an effect's strength in a link. */
 export const STRENGTH = "opacity";
+/** The name a link uses for the angle a layer's pattern is turned to. */
+export const ANGLE = "angle";
 
 const SOURCES: { id: string; name: string; source: Source }[] = [
   { id: "level", name: "Loudness", source: { type: "level" } },

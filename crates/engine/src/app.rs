@@ -1662,6 +1662,9 @@ mod tests {
             targets: Some(vec![strip]),
             each: None,
             only: None,
+            angle: None,
+            spin: None,
+            turns: None,
         })
         .unwrap();
         run(Command::SetLink {
