@@ -205,6 +205,8 @@ fn blackout_and_disabling_a_device_stop_the_light() {
             enabled: Some(false),
             gamma: None,
             brightness: None,
+            address: None,
+            universe: None,
         })
         .unwrap();
     std::thread::sleep(Duration::from_millis(100));
@@ -298,8 +300,8 @@ async fn a_client_can_drive_the_show_over_the_websocket() {
     assert_eq!(state["show"]["devices"], json!([]));
     assert_eq!(state["show"]["layers"][0]["effect"], "plasma");
 
-    // Add the simulated device; the reply carries our id.
-    let add = json!({ "id": 1, "type": "add_device", "address": format!("127.0.0.1:{}", sim.http_port) });
+    // Add the simulated device; the reply carries our number.
+    let add = json!({ "req": 1, "type": "add_device", "address": format!("127.0.0.1:{}", sim.http_port) });
     ws.send(Message::Text(add.to_string().into())).await.unwrap();
     // The new state and the reply can arrive in either order.
     let (mut result, mut state) = (None, None);
@@ -318,7 +320,7 @@ async fn a_client_can_drive_the_show_over_the_websocket() {
         }
     }
     let (result, state) = (result.unwrap(), state.unwrap());
-    assert_eq!(result, json!({ "type": "result", "id": 1, "ok": true, "note": null }));
+    assert_eq!(result, json!({ "type": "result", "req": 1, "ok": true, "note": null }));
     assert_eq!(state["show"]["devices"][0]["name"], "Socket panel");
     assert_eq!(
         state["show"]["fixtures"][0]["shape"],
@@ -340,7 +342,7 @@ async fn a_client_can_drive_the_show_over_the_websocket() {
 
     // A bad command gets an error and changes nothing.
     ws.send(Message::Text(
-        json!({ "id": 2, "type": "add_layer", "effect": "nope" })
+        json!({ "req": 2, "type": "add_layer", "effect": "nope" })
             .to_string()
             .into(),
     ))
@@ -348,8 +350,30 @@ async fn a_client_can_drive_the_show_over_the_websocket() {
     .unwrap();
     let result = next_json(&mut ws, "result").await;
     assert_eq!(result["ok"], false);
-    assert_eq!(result["id"], 2);
+    assert_eq!(result["req"], 2);
     assert_eq!(engine.shared.show.lock().unwrap().layers.len(), 1);
+
+    // A command that names a device by its id is answered under the
+    // request's number, not the device's.
+    let device = engine.shared.show.lock().unwrap().devices[0].id;
+    ws.send(Message::Text(
+        json!({ "req": 77, "type": "update_device", "id": device, "name": "Panel" })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let result = next_json(&mut ws, "result").await;
+    assert_eq!((&result["req"], &result["ok"]), (&json!(77), &json!(true)));
+    assert_eq!(engine.shared.show.lock().unwrap().devices[0].name, "Panel");
+    // And without a number, a command that works is not answered at all.
+    ws.send(Message::Text(
+        json!({ "type": "update_device", "id": device, "name": "Socket panel" })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
 
     // Audio and status messages keep flowing.
     let audio = next_json(&mut ws, "audio").await;

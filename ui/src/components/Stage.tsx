@@ -35,7 +35,7 @@ import {
   type Fixture,
 } from "../engine";
 import { StageRenderer, type View } from "../stageGl";
-import { AddByAddress, AngleField, FoundDevices } from "./DevicePanel";
+import { AddByAddress, AddPixels, AngleField, FoundDevices } from "./DevicePanel";
 import { KindCards } from "./KindCards";
 import { clock } from "./Settings";
 
@@ -546,6 +546,7 @@ export function Stage() {
           </p>
           <FoundDevices />
           <AddByAddress />
+          <AddPixels />
           <div className="or">
             <span>or</span>
           </div>

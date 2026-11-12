@@ -290,12 +290,16 @@ fn status_message(shared: &Shared) -> String {
     .to_string()
 }
 
-fn result_message(id: Option<&Value>, outcome: Result<Option<String>, String>) -> Option<String> {
-    match (id, outcome) {
-        // A command sent without an id only hears back if it failed.
+/// The answer to a command. `req` is the number the client gave the
+/// request, so it can tell its answers apart. It has a name of its own
+/// because many commands carry an `id` that means something else: the
+/// device or the effect they change.
+fn result_message(req: Option<&Value>, outcome: Result<Option<String>, String>) -> Option<String> {
+    match (req, outcome) {
+        // A command sent without a number only hears back if it failed.
         (None, Ok(None)) => None,
-        (id, Ok(note)) => Some(json!({ "type": "result", "id": id, "ok": true, "note": note }).to_string()),
-        (id, Err(error)) => Some(json!({ "type": "result", "id": id, "ok": false, "error": error }).to_string()),
+        (req, Ok(note)) => Some(json!({ "type": "result", "req": req, "ok": true, "note": note }).to_string()),
+        (req, Err(error)) => Some(json!({ "type": "result", "req": req, "ok": false, "error": error }).to_string()),
     }
 }
 
@@ -391,7 +395,7 @@ fn handle(
         Ok(value) => value,
         Err(_) => return result_message(None, Err("that message was not valid JSON".into())),
     };
-    let id = value.get("id").cloned();
+    let id = value.get("req").cloned();
     if value.get("type").and_then(Value::as_str) == Some("dismiss_notice") {
         *shared.notice.lock().unwrap() = None;
         return result_message(id.as_ref(), Ok(None));
@@ -546,9 +550,9 @@ mod tests {
         assert_eq!(result_message(None, Ok(None)), None);
         let id = json!(4);
         let ok: Value = serde_json::from_str(&result_message(Some(&id), Ok(None)).unwrap()).unwrap();
-        assert_eq!(ok, json!({"type":"result","id":4,"ok":true,"note":null}));
+        assert_eq!(ok, json!({"type":"result","req":4,"ok":true,"note":null}));
         let err: Value = serde_json::from_str(&result_message(None, Err("no".into())).unwrap()).unwrap();
-        assert_eq!(err, json!({"type":"result","id":null,"ok":false,"error":"no"}));
+        assert_eq!(err, json!({"type":"result","req":null,"ok":false,"error":"no"}));
     }
 
     #[test]

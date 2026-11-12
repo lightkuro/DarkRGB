@@ -368,7 +368,7 @@ Built. One WebSocket per client at `/ws`; the engine also serves the UI over HTT
 | text `status` | Frame rate, whether the flash limit held anything back, per-device send counts, audio status, discovered devices. Once a second. |
 | text `live` | Pads being held, a scene waiting for the beat, the tapped tempo, whether the picture is frozen. On every change. |
 | text `library` | The shows on this computer and which is open; the effects, looks and palettes that have been kept. On connect and on change. |
-| text `result` | Outcome of a command that carried an `id`. |
+| text `result` | Outcome of a command that carried a request number, `req`, which it repeats. |
 | binary, first byte 1 | Preview colours: RGB per pixel, 30 times a second. |
 | binary, first byte 2 | Canvas position of every pixel, sent when the layout changes. |
 

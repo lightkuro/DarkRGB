@@ -17,6 +17,10 @@ pub enum DeviceKind {
     /// Exists only in the preview. Nothing is ever sent for it. Used for
     /// the demo lights and for planning a layout before owning hardware.
     Virtual,
+    /// A pixel controller that takes sACN (E1.31).
+    Sacn,
+    /// A pixel controller that takes Art-Net.
+    Artnet,
 }
 
 /// Something that shows pixels: a controller on the network, or a
@@ -51,6 +55,48 @@ pub struct Device {
     /// Firmware version reported by the device, for display.
     #[serde(default)]
     pub version: Option<String>,
+    /// For sACN and Art-Net: the universe its first pixel is in. The
+    /// rest follow, 170 pixels to a universe.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub universe: u16,
+}
+
+fn is_zero(n: &u16) -> bool {
+    *n == 0
+}
+
+/// Whole RGB pixels that fit in one universe of 512 channels.
+pub const PIXELS_PER_UNIVERSE: u32 = 170;
+
+/// How many universes this many pixels need.
+pub fn universes(pixels: u32) -> u32 {
+    pixels.div_ceil(PIXELS_PER_UNIVERSE).max(1)
+}
+
+impl DeviceKind {
+    /// The first and last universe the protocol has, for the kinds that
+    /// have universes at all.
+    pub fn universe_range(self) -> Option<(u16, u16)> {
+        match self {
+            Self::Sacn => Some((1, 63999)),
+            Self::Artnet => Some((0, 32767)),
+            Self::Wled | Self::Virtual => None,
+        }
+    }
+
+    /// Whether `pixels` starting at universe `first` stay inside the
+    /// universes the protocol has. On failure, the range and the last
+    /// universe that would be needed.
+    pub fn universes_fit(self, first: u16, pixels: u32) -> Result<(), (u16, u16, u32)> {
+        let Some((low, high)) = self.universe_range() else {
+            return Ok(());
+        };
+        let last = first as u32 + universes(pixels) - 1;
+        if first < low || last > high as u32 {
+            return Err((low, high, last));
+        }
+        Ok(())
+    }
 }
 
 impl Device {
@@ -70,6 +116,31 @@ impl Device {
             brightness: 1.0,
             mac: None,
             version: None,
+            universe: 0,
+        }
+    }
+
+    /// Puts the first universe where the protocol allows it. Returns
+    /// whether anything changed. For files edited by hand.
+    pub fn mend_universe(&mut self) -> bool {
+        let wanted = match self.kind.universe_range() {
+            None => 0,
+            Some((low, high)) => {
+                let room = (high as u32 + 1)
+                    .saturating_sub(universes(self.pixel_count))
+                    .max(low as u32);
+                (self.universe as u32).clamp(low as u32, room) as u16
+            }
+        };
+        std::mem::replace(&mut self.universe, wanted) != wanted
+    }
+
+    /// A pixel controller that takes sACN or Art-Net, starting at `universe`.
+    pub fn dmx(kind: DeviceKind, name: &str, address: &str, port: u16, pixel_count: u32, universe: u16) -> Self {
+        Self {
+            kind,
+            universe,
+            ..Self::wled(name, address, port, pixel_count)
         }
     }
 
@@ -83,7 +154,7 @@ impl Device {
 
     /// Whether frames should be sent over the network for this device.
     pub fn sends(&self) -> bool {
-        self.kind == DeviceKind::Wled && self.enabled
+        self.kind != DeviceKind::Virtual && self.enabled
     }
 }
 
@@ -213,6 +284,46 @@ mod tests {
 
     fn close(a: [f32; 2], b: [f32; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4
+    }
+
+    #[test]
+    fn universes_hold_170_pixels_and_stay_in_range() {
+        assert_eq!(
+            (
+                universes(0),
+                universes(1),
+                universes(170),
+                universes(171),
+                universes(1000)
+            ),
+            (1, 1, 1, 2, 6)
+        );
+        assert_eq!(DeviceKind::Sacn.universes_fit(1, 170), Ok(()));
+        assert_eq!(DeviceKind::Sacn.universes_fit(0, 1), Err((1, 63999, 0)));
+        assert_eq!(DeviceKind::Sacn.universes_fit(63999, 171), Err((1, 63999, 64000)));
+        assert_eq!(DeviceKind::Artnet.universes_fit(0, 1), Ok(()));
+        assert_eq!(DeviceKind::Artnet.universes_fit(32767, 171), Err((0, 32767, 32768)));
+        // The others have no universes to get wrong.
+        assert_eq!(DeviceKind::Wled.universes_fit(9, 100_000), Ok(()));
+
+        // A file edited by hand is put right.
+        let mut device = Device::dmx(DeviceKind::Sacn, "d", "10.0.0.9", 5568, 400, 0);
+        assert!(device.mend_universe());
+        assert_eq!(device.universe, 1);
+        assert!(!device.mend_universe());
+        device.universe = 63999;
+        assert!(device.mend_universe());
+        assert_eq!(device.universe, 63997, "three universes end at the last one");
+        let mut wled = Device::wled("d", "10.0.0.9", 4048, 10);
+        wled.universe = 5;
+        assert!(wled.mend_universe());
+        assert_eq!(wled.universe, 0);
+        // And a file from before universes existed still opens.
+        let old = serde_json::to_string(&Device::wled("d", "10.0.0.9", 4048, 10)).unwrap();
+        assert!(!old.contains("universe"));
+        assert_eq!(serde_json::from_str::<Device>(&old).unwrap().universe, 0);
+        let kinds = serde_json::to_string(&[DeviceKind::Sacn, DeviceKind::Artnet]).unwrap();
+        assert_eq!(kinds, r#"["sacn","artnet"]"#);
     }
 
     #[test]

@@ -107,6 +107,12 @@ impl Sender {
         })
     }
 
+    /// Sends bytes that are already a whole packet of some other protocol
+    /// from the same socket.
+    pub fn send_raw(&self, addr: SocketAddr, packet: &[u8]) -> io::Result<usize> {
+        self.socket.send_to(packet, addr)
+    }
+
     /// Sends one frame. Returns the number of packets sent.
     pub fn send_frame(&mut self, addr: SocketAddr, frame: &[u8]) -> io::Result<usize> {
         self.seq = if self.seq >= 15 { 1 } else { self.seq + 1 };

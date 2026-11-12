@@ -87,8 +87,9 @@ export interface Hello {
 export interface Device {
   id: number;
   name: string;
-  /** A virtual light exists only in the preview. */
-  kind: "wled" | "virtual";
+  /** A virtual light exists only in the preview. sACN and Art-Net are
+   *  pixel controllers that are sent universes of 170 LEDs. */
+  kind: "wled" | "virtual" | "sacn" | "artnet";
   /** One of the built-in demo lights. */
   demo: boolean;
   address: string;
@@ -99,6 +100,16 @@ export interface Device {
   brightness: number;
   mac: string | null;
   version: string | null;
+  /** For sACN and Art-Net: the universe of the first LED. */
+  universe?: number;
+}
+
+/** LEDs that fit in one universe of sACN or Art-Net. */
+export const PIXELS_PER_UNIVERSE = 170;
+
+/** The universes a pixel controller's LEDs use, first and last. */
+export function universesOf(first: number, pixels: number): [number, number] {
+  return [first, first + Math.max(1, Math.ceil(pixels / PIXELS_PER_UNIVERSE)) - 1];
 }
 
 export type Shape =
@@ -458,7 +469,24 @@ export type Command =
   | { type: "duplicate_layer"; id: number }
   | { type: "set_sound"; layer: number; band?: Band; gain?: number; pulse?: number; manual?: boolean }
   | { type: "remove_device"; id: number }
-  | { type: "update_device"; id: number; name?: string; enabled?: boolean; gamma?: number; brightness?: number }
+  | {
+      type: "update_device";
+      id: number;
+      name?: string;
+      enabled?: boolean;
+      gamma?: number;
+      brightness?: number;
+      address?: string;
+      universe?: number;
+    }
+  | {
+      type: "add_pixels";
+      name: string;
+      protocol: "sacn" | "artnet";
+      address: string;
+      universe: number;
+      shape: { type: "strip"; count: number } | { type: "matrix"; cols: number; rows: number };
+    }
   | {
       type: "update_fixture";
       id: number;
@@ -688,10 +716,10 @@ class Engine {
         this.hello.set(message as unknown as Hello);
         break;
       case "result": {
-        const result = message as unknown as CommandResult & { id: number | null };
-        const resolve = result.id == null ? undefined : this.pending.get(result.id);
-        if (resolve && result.id != null) {
-          this.pending.delete(result.id);
+        const result = message as unknown as CommandResult & { req: number | null };
+        const resolve = result.req == null ? undefined : this.pending.get(result.req);
+        if (resolve && result.req != null) {
+          this.pending.delete(result.req);
           resolve(result);
         } else if (!result.ok && result.error) {
           this.toast("error", result.error);
@@ -722,10 +750,12 @@ class Engine {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return Promise.resolve({ ok: false, error: "Not connected to the engine." });
     }
-    const id = this.nextId++;
+    // The request's number has a field of its own: a command's `id` is
+    // the device or effect it is about.
+    const req = this.nextId++;
     return new Promise((resolve) => {
-      this.pending.set(id, resolve);
-      socket.send(JSON.stringify({ id, ...command }));
+      this.pending.set(req, resolve);
+      socket.send(JSON.stringify({ ...command, req }));
     });
   }
 

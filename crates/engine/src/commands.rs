@@ -7,9 +7,10 @@ use darkrgb_core::layout::MAX_PIXELS;
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::show::{Blend, FADERS, FRAME_RATES, LINK_STRENGTH, MAX_LINKS, PAGES, linkable, mend_links};
 use darkrgb_core::{
-    Action, Band, FlashSettings, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, Link, MidiNote, Mood, Only, Rgb,
-    Shape, Show, Sound, Source, Swatch,
+    Action, Band, Device, DeviceKind, FlashSettings, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, Link, MidiNote,
+    Mood, Only, Rgb, Shape, Show, Sound, Source, Swatch,
 };
+use darkrgb_output::dmx;
 use serde::Deserialize;
 
 use crate::midi::LearnTarget;
@@ -23,6 +24,56 @@ const MAX_SCENES: usize = 200;
 const MAX_DEVICES: usize = 256;
 const MAX_GROUPS: usize = 64;
 const MAX_BINDINGS: usize = 128;
+
+/// The two ways of sending to a commercial pixel controller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelProtocol {
+    Sacn,
+    Artnet,
+}
+
+impl PixelProtocol {
+    fn kind(self) -> DeviceKind {
+        match self {
+            Self::Sacn => DeviceKind::Sacn,
+            Self::Artnet => DeviceKind::Artnet,
+        }
+    }
+
+    fn of(kind: DeviceKind) -> Option<Self> {
+        match kind {
+            DeviceKind::Sacn => Some(Self::Sacn),
+            DeviceKind::Artnet => Some(Self::Artnet),
+            DeviceKind::Wled | DeviceKind::Virtual => None,
+        }
+    }
+
+    fn port(self) -> u16 {
+        match self {
+            Self::Sacn => dmx::SACN_PORT,
+            Self::Artnet => dmx::ARTNET_PORT,
+        }
+    }
+}
+
+/// Checks that `pixels` starting at `first` stay inside the universes the
+/// protocol has.
+fn universes_fit(kind: DeviceKind, first: u16, pixels: u32) -> Result<(), String> {
+    kind.universes_fit(first, pixels).map_err(|(low, high, last)| {
+        format!("the universes must be between {low} and {high}; these lights would use {first} to {last}")
+    })
+}
+
+/// A network address someone typed: a host name or an IPv4 address.
+fn host(text: &str) -> Result<String, String> {
+    let text = text.trim();
+    let plain = text.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    if text.is_empty() || text.len() > 253 || !plain || text.starts_with(['.', '-']) {
+        return Err("the address should look like 192.168.1.50 or a host name".into());
+    }
+    Ok(text.to_string())
+}
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -55,6 +106,19 @@ pub enum Command {
         name: String,
         shape: VirtualShape,
     },
+    /// Adds a pixel controller that takes sACN or Art-Net. Nothing is
+    /// asked of the device: it is sent to from the next frame.
+    AddPixels {
+        name: String,
+        protocol: PixelProtocol,
+        address: String,
+        /// Leave out for the protocol's usual port.
+        #[serde(default)]
+        port: Option<u16>,
+        /// The universe of the first pixel.
+        universe: u16,
+        shape: VirtualShape,
+    },
     RemoveDevice {
         id: u32,
     },
@@ -64,6 +128,11 @@ pub enum Command {
         enabled: Option<bool>,
         gamma: Option<f32>,
         brightness: Option<f32>,
+        /// For sACN and Art-Net devices only.
+        #[serde(default)]
+        address: Option<String>,
+        #[serde(default)]
+        universe: Option<u16>,
     },
     UpdateFixture {
         id: u32,
@@ -856,6 +925,53 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
+        Command::AddPixels {
+            name: light_name,
+            protocol,
+            address,
+            port,
+            universe,
+            shape,
+        } => {
+            let light_name = name(light_name, "The name")?;
+            let address = host(address)?;
+            if show.devices.len() >= MAX_DEVICES {
+                return Err(format!("a show can have at most {MAX_DEVICES} devices"));
+            }
+            if *port == Some(0) {
+                return Err("the port cannot be 0".into());
+            }
+            let (pixels, matrix) = match *shape {
+                VirtualShape::Strip { count } if (1..=MAX_PIXELS).contains(&count) => (count, None),
+                VirtualShape::Strip { .. } => return Err(format!("a strip needs between 1 and {MAX_PIXELS} LEDs")),
+                VirtualShape::Matrix { cols, rows }
+                    if cols >= 2 && rows >= 2 && cols.checked_mul(rows).is_some_and(|n| n <= MAX_PIXELS) =>
+                {
+                    (cols * rows, Some((cols, rows)))
+                }
+                VirtualShape::Matrix { .. } => {
+                    return Err(format!(
+                        "a matrix needs at least 2 by 2 LEDs and at most {MAX_PIXELS} in total"
+                    ));
+                }
+            };
+            let kind = protocol.kind();
+            universes_fit(kind, *universe, pixels)?;
+            let port = port.unwrap_or(protocol.port());
+            if show
+                .devices
+                .iter()
+                .any(|d| d.kind == kind && d.address == address && d.port == port && d.universe == *universe)
+            {
+                return Err(format!("{address} universe {universe} is already in the show"));
+            }
+            show.add_device(
+                Device::dmx(kind, &light_name, &address, port, pixels, *universe),
+                matrix,
+            );
+            Ok(())
+        }
+
         Command::RemoveDevice { id } => {
             if show.device(*id).is_none() {
                 return Err("that device no longer exists".into());
@@ -870,16 +986,31 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             enabled,
             gamma,
             brightness,
+            address,
+            universe,
         } => {
             // Validate everything before changing anything.
             let new_name = new_name.as_deref().map(|n| name(n, "The name")).transpose()?;
             let gamma = gamma.map(|g| finite(g, "Gamma")).transpose()?;
             let brightness = brightness.map(|b| finite(b, "Brightness")).transpose()?;
+            let address = address.as_deref().map(host).transpose()?;
             let device = show
                 .devices
                 .iter_mut()
                 .find(|d| d.id == *id)
                 .ok_or("that device no longer exists")?;
+            if address.is_some() || universe.is_some() {
+                if PixelProtocol::of(device.kind).is_none() {
+                    return Err("only sACN and Art-Net devices have an address and a universe to change".into());
+                }
+                if let Some(u) = universe {
+                    universes_fit(device.kind, *u, device.pixel_count)?;
+                    device.universe = *u;
+                }
+                if let Some(a) = address {
+                    device.address = a;
+                }
+            }
             let mut renamed = None;
             if let Some(n) = new_name {
                 renamed = Some((std::mem::replace(&mut device.name, n.clone()), n));
@@ -1814,6 +1945,91 @@ mod tests {
     }
 
     #[test]
+    fn pixel_controllers_are_added_with_their_universes_checked() {
+        let mut show = Show::default();
+        let add = |protocol: &str, address: &str, universe: u32, shape: &str| -> Command {
+            serde_json::from_str(&format!(
+                r#"{{"type":"add_pixels","name":"Roof","protocol":"{protocol}","address":"{address}","universe":{universe},"shape":{shape}}}"#
+            ))
+            .unwrap()
+        };
+        let strip = |count: u32| format!(r#"{{"type":"strip","count":{count}}}"#);
+        apply(&mut show, &add("sacn", " 10.0.0.9 ", 1, &strip(400))).unwrap();
+        let roof = &show.devices[0];
+        assert_eq!(
+            (
+                roof.kind,
+                roof.address.as_str(),
+                roof.port,
+                roof.universe,
+                roof.pixel_count
+            ),
+            (DeviceKind::Sacn, "10.0.0.9", 5568, 1, 400)
+        );
+        assert!(roof.sends());
+        apply(
+            &mut show,
+            &add("artnet", "lights.local", 0, r#"{"type":"matrix","cols":16,"rows":16}"#),
+        )
+        .unwrap();
+        let wall = &show.devices[1];
+        assert_eq!(
+            (wall.kind, wall.port, wall.universe, wall.pixel_count),
+            (DeviceKind::Artnet, 6454, 0, 256)
+        );
+        assert!(matches!(
+            show.fixtures[1].shape,
+            Shape::Matrix { cols: 16, rows: 16, .. }
+        ));
+
+        // sACN has no universe 0, and neither protocol runs off its end.
+        let before = show.clone();
+        for bad in [
+            add("sacn", "10.0.0.9", 0, &strip(10)),
+            add("sacn", "10.0.0.9", 63999, &strip(171)),
+            add("artnet", "10.0.0.9", 32767, &strip(171)),
+            add("artnet", "10.0.0.9", 40000, &strip(1)),
+            add("sacn", "", 1, &strip(10)),
+            add("sacn", "not a host", 1, &strip(10)),
+            add("sacn", "http://10.0.0.9", 1, &strip(10)),
+            add("sacn", "10.0.0.9", 1, &strip(0)),
+            // The same place twice.
+            add("sacn", "10.0.0.9", 1, &strip(30)),
+        ] {
+            assert!(apply(&mut show, &bad).is_err(), "{bad:?}");
+            assert_eq!(show, before);
+        }
+        // The last universe is still usable.
+        apply(&mut show, &add("sacn", "10.0.0.9", 63999, &strip(170))).unwrap();
+        apply(&mut show, &add("artnet", "10.0.0.9", 32766, &strip(340))).unwrap();
+
+        // The address and the universe can be changed later, for these only.
+        let roof = show.devices[0].id;
+        let change = |id: u32, address: Option<&str>, universe: Option<u16>| Command::UpdateDevice {
+            id,
+            name: None,
+            enabled: None,
+            gamma: None,
+            brightness: None,
+            address: address.map(str::to_string),
+            universe,
+        };
+        apply(&mut show, &change(roof, Some("10.0.0.20"), Some(9))).unwrap();
+        assert_eq!(
+            (show.devices[0].address.as_str(), show.devices[0].universe),
+            ("10.0.0.20", 9)
+        );
+        let before = show.clone();
+        assert!(apply(&mut show, &change(roof, Some("10.0.0.21"), Some(0))).is_err());
+        assert!(apply(&mut show, &change(roof, Some("no good"), Some(3))).is_err());
+        assert_eq!(show, before, "a refused change changes nothing");
+        show.add_device(Device::wled("d", "127.0.0.1", 4048, 10), None);
+        let wled = show.devices.last().unwrap().id;
+        assert!(apply(&mut show, &change(wled, None, Some(3))).is_err());
+        assert!(apply(&mut show, &change(wled, Some("10.0.0.1"), None)).is_err());
+    }
+
+    #[test]
     fn commands_parse_from_what_the_ui_sends() {
         assert_eq!(
             parse(r#"{"type":"add_device","address":"192.168.1.50"}"#),
@@ -1946,6 +2162,8 @@ mod tests {
                 enabled: Some(false),
                 gamma: Some(f32::INFINITY),
                 brightness: None,
+                address: None,
+                universe: None,
             },
         );
         assert!(result.is_err());
@@ -1965,6 +2183,8 @@ mod tests {
                 enabled: None,
                 gamma: Some(99.0),
                 brightness: Some(-3.0),
+                address: None,
+                universe: None,
             },
         )
         .unwrap();
@@ -2004,6 +2224,8 @@ mod tests {
             enabled: None,
             gamma: None,
             brightness: None,
+            address: None,
+            universe: None,
         };
         apply(&mut show, &rename("Desk")).unwrap();
         assert_eq!(show.fixtures[0].name, "Desk");
@@ -2719,7 +2941,7 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 55 {
+            let command = match r.next() % 56 {
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {
@@ -2910,6 +3132,27 @@ mod tests {
                     down: r.flag(),
                 },
                 15 => Command::SetDemo { enabled: r.flag() },
+                55 => Command::AddPixels {
+                    name: r.text(),
+                    protocol: if r.flag() {
+                        PixelProtocol::Sacn
+                    } else {
+                        PixelProtocol::Artnet
+                    },
+                    address: ["10.0.0.9", "", "bad host!", "lights.local", "-x"][r.next() as usize % 5].into(),
+                    port: r.maybe(|r| [0, 5568, 6454, 65535][r.next() as usize % 4]),
+                    universe: [0, 1, 7, 32767, 63999, 65535][r.next() as usize % 6],
+                    shape: if r.flag() {
+                        VirtualShape::Strip {
+                            count: [0, 1, 170, 171, 100_000, 100_001][r.next() as usize % 6],
+                        }
+                    } else {
+                        VirtualShape::Matrix {
+                            cols: [0, 1, 2, 16, 70_000][r.next() as usize % 5],
+                            rows: [0, 1, 2, 16, 70_000][r.next() as usize % 5],
+                        }
+                    },
+                },
                 16 => Command::AddVirtual {
                     name: r.text(),
                     shape: if r.flag() {
@@ -2950,6 +3193,8 @@ mod tests {
                     enabled: r.maybe(Awkward::flag),
                     gamma: r.maybe(Awkward::number),
                     brightness: r.maybe(Awkward::number),
+                    address: r.maybe(|r| ["10.0.0.9", "", "bad host!", "lights.local"][r.next() as usize % 4].into()),
+                    universe: r.maybe(|r| [0, 1, 7, 32767, 63999, 65535][r.next() as usize % 6]),
                 },
                 1 => Command::UpdateFixture {
                     id: fixture,

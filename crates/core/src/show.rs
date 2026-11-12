@@ -1434,6 +1434,9 @@ impl Show {
         for scene in &mut self.scenes {
             tidy(&mut scene.layers, &scene.groups);
         }
+        for device in &mut self.devices {
+            device.mend_universe();
+        }
         if !FRAME_RATES.contains(&self.output.frame_rate) {
             self.output.frame_rate = OutputSettings::default().frame_rate;
         }

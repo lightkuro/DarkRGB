@@ -11,6 +11,7 @@ import {
   Grid3x3,
   GripVertical,
   Minus,
+  Network,
   Plus,
   Radar,
   Search,
@@ -24,6 +25,7 @@ import {
   perFrame,
   select,
   toggleFolded,
+  universesOf,
   useFolded,
   useLive,
   useFull,
@@ -57,7 +59,71 @@ function statusOf(device: Device, stats: DeviceStats | undefined): { tone: strin
   if (stats.frames_dropped > 0 && stats.frames_dropped > stats.frames_sent / 100) {
     return { tone: "bad", text: "The network is refusing frames" };
   }
+  if (device.kind === "sacn" || device.kind === "artnet") {
+    return { tone: "ok", text: `Sending ${PROTOCOLS[device.kind]} to ${device.address}, ${universesText(device)}` };
+  }
   return { tone: "ok", text: `Sending to ${device.address}` };
+}
+
+const PROTOCOLS = { sacn: "sACN", artnet: "Art-Net" } as const;
+
+/** "universe 1" or "universes 1 to 3". */
+function universesText(device: Device): string {
+  const [first, last] = universesOf(device.universe ?? 0, device.pixel_count);
+  return first === last ? `universe ${first}` : `universes ${first} to ${last}`;
+}
+
+/** Where a pixel controller is, to correct without adding it again. */
+function PixelAddress({ device }: { device: Device }) {
+  const [address, setAddress] = useState<string | null>(null);
+  const [universe, setUniverse] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const commit = async () => {
+    const change: { address?: string; universe?: number } = {};
+    if (address !== null && address.trim() !== device.address) change.address = address.trim();
+    if (universe !== null && /^\d{1,5}$/.test(universe.trim()) && Number(universe) !== (device.universe ?? 0)) {
+      change.universe = Number(universe);
+    }
+    setAddress(null);
+    setUniverse(null);
+    if (Object.keys(change).length === 0) return;
+    const result = await engine.request({ type: "update_device", id: device.id, ...change });
+    setError(result.ok ? null : (result.error ?? "Could not change that."));
+  };
+  const keys = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.stopPropagation();
+    if (e.key === "Enter") e.currentTarget.blur();
+  };
+  return (
+    <>
+      <label className="field inline">
+        <span>Address</span>
+        <input
+          type="text"
+          className="address"
+          aria-label="Address"
+          value={address ?? device.address}
+          onChange={(e) => setAddress(e.target.value)}
+          onBlur={() => void commit()}
+          onKeyDown={keys}
+        />
+      </label>
+      <label className="field inline">
+        <span>First universe</span>
+        <input
+          className="number"
+          type="text"
+          inputMode="numeric"
+          aria-label="First universe"
+          value={universe ?? String(device.universe ?? 0)}
+          onChange={(e) => setUniverse(e.target.value)}
+          onBlur={() => void commit()}
+          onKeyDown={keys}
+        />
+      </label>
+      {error && <p className="callout error">{error}</p>}
+    </>
+  );
 }
 
 const updaters = new Map<string, (value: number) => void>();
@@ -210,6 +276,7 @@ function DeviceRow({
               </select>
             </label>
           )}
+          {(device.kind === "sacn" || device.kind === "artnet") && <PixelAddress device={device} />}
           {!virtual && (
             <>
               <Slider
@@ -239,7 +306,13 @@ function DeviceRow({
             </>
           )}
           <div className="device-footer">
-            <span className="hint">{device.version ? `WLED ${device.version}` : ""}</span>
+            <span className="hint">
+              {device.kind === "sacn" || device.kind === "artnet"
+                ? `${PROTOCOLS[device.kind]} · ${universesText(device)}`
+                : device.version
+                  ? `WLED ${device.version}`
+                  : ""}
+            </span>
             <ConfirmButton
               label="Remove this light"
               confirmLabel="Remove?"
@@ -473,6 +546,131 @@ export function FoundDevices() {
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * A pixel controller that takes sACN (E1.31) or Art-Net, as the
+ * controllers made for outdoor light shows do. Nothing can be asked of
+ * such a controller, so its LEDs and universe are typed in.
+ */
+export function AddPixels() {
+  const [open, setOpen] = useState(false);
+  const [protocol, setProtocol] = useState<"sacn" | "artnet">("sacn");
+  const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
+  const [universe, setUniverse] = useState("1");
+  const [kind, setKind] = useState<"strip" | "matrix">("strip");
+  const [count, setCount] = useState("170");
+  const [cols, setCols] = useState("16");
+  const [rows, setRows] = useState("16");
+  const [error, setError] = useState<string | null>(null);
+
+  if (!open) {
+    return (
+      <button type="button" className="text-button" onClick={() => setOpen(true)}>
+        <Network size={13} /> Add an sACN or Art-Net controller
+      </button>
+    );
+  }
+  const whole = (value: string) => /^\d{1,6}$/.test(value);
+  const pixels = kind === "strip" ? Number(count) : Number(cols) * Number(rows);
+  const valid =
+    address.trim() !== "" && /^\d{1,5}$/.test(universe) && (kind === "strip" ? whole(count) : whole(cols) && whole(rows));
+  const [first, last] = universesOf(Number(universe), valid ? pixels : 1);
+  const choose = (next: "sacn" | "artnet") => {
+    // sACN counts universes from 1, Art-Net from 0. Move the usual start
+    // along unless another has been typed.
+    if (universe === (protocol === "sacn" ? "1" : "0")) setUniverse(next === "sacn" ? "1" : "0");
+    setProtocol(next);
+  };
+  const add = async () => {
+    const shape =
+      kind === "strip"
+        ? ({ type: "strip", count: Number(count) } as const)
+        : ({ type: "matrix", cols: Number(cols), rows: Number(rows) } as const);
+    const fallback = `${PROTOCOLS[protocol]} ${kind}`;
+    addingLights();
+    const result = await engine.request({
+      type: "add_pixels",
+      name: name.trim() || fallback,
+      protocol,
+      address: address.trim(),
+      universe: Number(universe),
+      shape,
+    });
+    if (result.ok) {
+      setOpen(false);
+      setName("");
+      setError(null);
+    } else {
+      setError(result.error ?? "Could not add that controller.");
+    }
+  };
+  return (
+    <form
+      className="virtual-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void add();
+      }}
+    >
+      <p className="hint">
+        For pixel controllers that are not WLED, such as the ones made for outdoor light shows. Set the controller
+        to receive {PROTOCOLS[protocol]} sent straight to its address (unicast), with its LEDs in RGB order.
+      </p>
+      <div className="segmented" role="radiogroup" aria-label="Protocol">
+        <button type="button" role="radio" aria-checked={protocol === "sacn"} className={protocol === "sacn" ? "selected" : ""} onClick={() => choose("sacn")}>
+          sACN (E1.31)
+        </button>
+        <button type="button" role="radio" aria-checked={protocol === "artnet"} className={protocol === "artnet" ? "selected" : ""} onClick={() => choose("artnet")}>
+          Art-Net
+        </button>
+      </div>
+      <input type="text" maxLength={80} placeholder="Name (optional)" aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} />
+      <input type="text" maxLength={253} placeholder="Address, such as 192.168.1.50" aria-label="Address" value={address} onChange={(e) => setAddress(e.target.value)} />
+      <div className="segmented" role="radiogroup" aria-label="Shape">
+        <button type="button" role="radio" aria-checked={kind === "strip"} className={kind === "strip" ? "selected" : ""} onClick={() => setKind("strip")}>
+          Strip
+        </button>
+        <button type="button" role="radio" aria-checked={kind === "matrix"} className={kind === "matrix" ? "selected" : ""} onClick={() => setKind("matrix")}>
+          Matrix
+        </button>
+      </div>
+      {kind === "strip" ? (
+        <label className="field inline">
+          <span>Number of LEDs</span>
+          <input className="number" type="text" inputMode="numeric" aria-label="Number of LEDs" value={count} onChange={(e) => setCount(e.target.value)} />
+        </label>
+      ) : (
+        <label className="field inline">
+          <span>Columns × rows</span>
+          <span className="pair">
+            <input className="number" type="text" inputMode="numeric" aria-label="Columns" value={cols} onChange={(e) => setCols(e.target.value)} />
+            ×
+            <input className="number" type="text" inputMode="numeric" aria-label="Rows" value={rows} onChange={(e) => setRows(e.target.value)} />
+          </span>
+        </label>
+      )}
+      <label className="field inline">
+        <span>First universe</span>
+        <input className="number" type="text" inputMode="numeric" aria-label="First universe" value={universe} onChange={(e) => setUniverse(e.target.value)} />
+      </label>
+      {valid && (
+        <p className="hint">
+          170 LEDs fit in a universe, so {pixels} LEDs use {first === last ? `universe ${first}` : `universes ${first} to ${last}`}.
+        </p>
+      )}
+      {error && <p className="callout error">{error}</p>}
+      <div className="form-actions">
+        <button type="button" className="text-button" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+        <button type="submit" className="button small" disabled={!valid}>
+          Add
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -759,6 +957,10 @@ export function DevicePanel() {
           </h2>
           {found.length > 0 ? <FoundDevices /> : <p className="hint">None found by themselves yet.</p>}
           <AddByAddress />
+          <h2>
+            <Network size={13} aria-hidden /> Other pixel controllers
+          </h2>
+          <AddPixels />
           <h2>Without hardware</h2>
           <DemoSwitch />
           {full && <AddVirtual />}
