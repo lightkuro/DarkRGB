@@ -13,6 +13,7 @@ mod e2e_tests;
 pub mod library;
 pub mod live;
 pub mod midi;
+pub mod pairing;
 pub mod render_loop;
 pub mod server;
 
@@ -41,7 +42,9 @@ pub struct Options {
     /// If `port` is taken by another program, use any free port instead of
     /// failing.
     pub any_port_if_busy: bool,
-    /// Let other devices on the network open the UI. No password yet.
+    /// Let other devices on the network open the UI, once they have given
+    /// the pairing code. Also on when the user has switched phone access
+    /// on in Settings.
     pub lan: bool,
     /// Show file to load and save. `None` uses the default location.
     pub show: Option<PathBuf>,
@@ -70,6 +73,8 @@ pub struct Engine {
     /// Where the UI is served, as this computer reaches it.
     pub url: String,
     pub port: u16,
+    /// The code other devices must give, when the network may connect.
+    pub pairing_code: Option<String>,
     stop: Arc<AtomicBool>,
     quit: Arc<Notify>,
     render: Option<std::thread::JoinHandle<()>>,
@@ -128,7 +133,22 @@ impl Engine {
 
         // Bind before anything else starts, so a taken port is reported
         // without side effects.
-        let ip = if options.lan {
+        // Phone access is asked for on the command line or in Settings.
+        // Without a pairing code there is none: it is never open to all.
+        let wanted = shared.library.as_ref().is_some_and(|l| l.remote_wanted());
+        let pairing = if options.lan || wanted {
+            match pairing::Pairing::new() {
+                Ok(pairing) => Some(Arc::new(pairing)),
+                Err(e) => {
+                    log::error!("other devices cannot connect: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let lan = pairing.is_some();
+        let ip = if lan {
             Ipv4Addr::UNSPECIFIED
         } else {
             Ipv4Addr::LOCALHOST
@@ -147,6 +167,8 @@ impl Engine {
             )
         })?;
         let port = listener.local_addr().context("no local address")?.port();
+        *shared.remote.lock().unwrap() = app::Remote { on: lan, wanted, port };
+        let pairing_code = pairing.as_ref().map(|p| p.code().to_string());
 
         let stop = Arc::new(AtomicBool::new(false));
         let render = {
@@ -179,12 +201,13 @@ impl Engine {
         runtime.spawn(refresh_networks(shared.clone()));
         {
             let access = server::Access {
-                lan: options.lan,
+                lan,
                 dev_origin: options.dev_origin.clone(),
+                pairing,
             };
-            let (router, quit) = (server::router(shared.clone(), access), quit.clone());
+            let (service, quit) = (server::service(shared.clone(), access), quit.clone());
             runtime.spawn(async move {
-                let served = axum::serve(listener, router)
+                let served = axum::serve(listener, service)
                     .with_graceful_shutdown(async move { quit.notified().await })
                     .await;
                 if let Err(e) = served {
@@ -197,6 +220,7 @@ impl Engine {
             shared,
             url: format!("http://127.0.0.1:{port}"),
             port,
+            pairing_code,
             stop,
             quit,
             render: Some(render),

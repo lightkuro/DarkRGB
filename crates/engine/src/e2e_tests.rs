@@ -287,7 +287,7 @@ async fn a_client_can_drive_the_show_over_the_websocket() {
     let engine = Engine::start();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = server::router(engine.shared.clone(), Access::default());
+    let router = server::service(engine.shared.clone(), Access::default());
     tokio::spawn(async move { axum::serve(listener, router).await });
 
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws"))
@@ -388,7 +388,7 @@ async fn a_web_page_from_another_site_is_refused() {
     let engine = Engine::start();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = server::router(engine.shared.clone(), Access::default());
+    let router = server::service(engine.shared.clone(), Access::default());
     tokio::spawn(async move { axum::serve(listener, router).await });
 
     let mut request = format!("ws://127.0.0.1:{port}/ws").into_client_request().unwrap();
@@ -724,7 +724,7 @@ async fn a_key_held_by_a_client_that_disappears_is_let_go() {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = server::router(shared.clone(), Access::default());
+    let router = server::service(shared.clone(), Access::default());
     tokio::spawn(async move { axum::serve(listener, router).await });
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws"))
         .await
@@ -783,12 +783,133 @@ async fn post(port: u16, origin: Option<&str>, body: &str) -> (String, String) {
     (status, body)
 }
 
+/// Sends one request as a device elsewhere on the network would: under
+/// the computer's network name, not `127.0.0.1`. Returns the status
+/// line, the headers and the body.
+async fn from_the_network(
+    port: u16,
+    method: &str,
+    path: &str,
+    cookie: Option<&str>,
+    body: &str,
+) -> (String, String, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let cookie = cookie.map(|c| format!("Cookie: {c}\r\n")).unwrap_or_default();
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: studio.local:{port}\r\nOrigin: http://studio.local:{port}\r\n{cookie}\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));
+    let status = head.lines().next().unwrap_or_default().to_string();
+    (status, head.to_string(), body.to_string())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn another_device_is_let_in_only_after_giving_the_code() {
+    use crate::pairing::Pairing;
+    let engine = Engine::start();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let access = Access {
+        lan: true,
+        pairing: Some(Arc::new(Pairing::with("048213", "a-long-random-token"))),
+        ..Access::default()
+    };
+    tokio::spawn(async move { axum::serve(listener, server::service(engine.shared.clone(), access)).await });
+    let socket = |cookie: Option<&str>, host: String| {
+        let mut request = format!("ws://127.0.0.1:{port}/ws").into_client_request().unwrap();
+        let headers = request.headers_mut();
+        headers.insert("Host", host.parse().unwrap());
+        headers.insert("Origin", format!("http://{host}").parse().unwrap());
+        if let Some(cookie) = cookie {
+            headers.insert("Cookie", cookie.parse().unwrap());
+        }
+        tokio_tungstenite::connect_async(request)
+    };
+    let network = format!("studio.local:{port}");
+
+    // The page loads for anyone, and is told it has to ask for the code.
+    let (status, _, body) = from_the_network(port, "GET", "/", None, "").await;
+    assert!(status.contains("200") && body.contains("<html"), "{status}");
+    let (_, _, body) = from_the_network(port, "GET", "/api/access", None, "").await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap(),
+        json!({ "paired": false })
+    );
+    // Until then: no show, no control, no importing.
+    assert!(socket(None, network.clone()).await.is_err());
+    assert!(socket(Some("darkrgb_pair=048213"), network.clone()).await.is_err());
+    let (status, _, _) = from_the_network(port, "POST", "/api/import", None, r#"{"version":1,"name":"x"}"#).await;
+    assert!(status.contains("403"), "{status}");
+
+    // A wrong code is refused and says how many tries are left.
+    let (status, head, body) = from_the_network(port, "POST", "/api/pair", None, r#"{"code":"111111"}"#).await;
+    assert!(status.contains("403"), "{status}");
+    assert!(!head.to_lowercase().contains("set-cookie"));
+    assert!(body.contains("4 more tries"), "{body}");
+
+    // The right one hands over a cookie scripts cannot read.
+    let (status, head, body) = from_the_network(port, "POST", "/api/pair", None, r#"{"code":"048 213"}"#).await;
+    assert!(status.contains("200"), "{status} {body}");
+    let cookie = head
+        .lines()
+        .find_map(|l| {
+            l.to_lowercase()
+                .starts_with("set-cookie:")
+                .then(|| l[11..].trim().to_string())
+        })
+        .expect("a cookie");
+    assert!(
+        cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"),
+        "{cookie}"
+    );
+    let cookie = cookie.split(';').next().unwrap().to_string();
+    let (_, _, body) = from_the_network(port, "GET", "/api/access", Some(&cookie), "").await;
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), json!({ "paired": true }));
+
+    // With it the device gets the show, but not the code, and it cannot
+    // change who is let in.
+    let (mut ws, _) = socket(Some(&cookie), network.clone()).await.unwrap();
+    next_json(&mut ws, "state").await;
+    let status = next_json(&mut ws, "status").await;
+    assert_eq!(
+        (&status["remote"]["local"], &status["remote"]["code"]),
+        (&json!(false), &Value::Null)
+    );
+    ws.send(Message::Text(r#"{"req":5,"type":"set_remote","enabled":false}"#.into()))
+        .await
+        .unwrap();
+    let result = next_json(&mut ws, "result").await;
+    assert_eq!(result["ok"], false);
+
+    // This computer itself is never asked, and is shown the code.
+    let (mut ws, _) = socket(None, format!("127.0.0.1:{port}")).await.unwrap();
+    let status = next_json(&mut ws, "status").await;
+    assert_eq!(
+        (&status["remote"]["local"], &status["remote"]["code"]),
+        (&json!(true), &json!("048213"))
+    );
+
+    // Five wrong codes and the device has to wait, even with the right
+    // one. (Pairing above cleared the earlier wrong try.)
+    for _ in 0..5 {
+        from_the_network(port, "POST", "/api/pair", None, r#"{"code":"000000"}"#).await;
+    }
+    let (status, _, body) = from_the_network(port, "POST", "/api/pair", None, r#"{"code":"048213"}"#).await;
+    assert!(status.contains("429"), "{status} {body}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_show_file_can_be_imported_but_only_by_the_served_page() {
     let engine = Engine::start();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = server::router(engine.shared.clone(), Access::default());
+    let router = server::service(engine.shared.clone(), Access::default());
     tokio::spawn(async move { axum::serve(listener, router).await });
     let own = format!("http://127.0.0.1:{port}");
     let good = r#"{"version":1,"name":"From a file"}"#;

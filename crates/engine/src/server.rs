@@ -8,19 +8,21 @@
 //! - text `status`: frame rate, audio status, discovered devices, once a second.
 //! - text `live`: held keys, a waiting scene and the tapped tempo, on change.
 //! - text `library`: the shows on this computer and which is open, on change.
-//! - text `result`: the outcome of a command that carried an `id`.
+//! - text `result`: the outcome of a command that carried a number, `req`.
 //! - binary: byte 0 says what it is (1 preview colours, 2 pixel positions),
 //!   bytes 4..8 are the layout serial, the payload starts at byte 8.
 //!
 //! Messages from the client are commands (see `commands.rs`), as JSON text.
 
 use std::collections::HashSet;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Router;
+use axum::extract::connect_info::IntoMakeServiceWithConnectInfo;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
 use axum::http::header::{self, HeaderMap, HeaderValue};
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -36,6 +38,7 @@ use tokio::time::MissedTickBehavior;
 
 use crate::app::{APP_NAME, BUILD, Discovered, Shared, VERSION};
 use crate::commands::Command;
+use crate::pairing::{Pairing, Refused};
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "$OUT_DIR/ui"]
@@ -49,6 +52,10 @@ pub struct Access {
     pub lan: bool,
     /// One extra origin allowed to connect, for the UI's development server.
     pub dev_origin: Option<String>,
+    /// What a device other than this computer must show before it may
+    /// control anything. `None` asks nothing, which is right only while
+    /// `lan` is off and nothing but this computer can connect.
+    pub pairing: Option<Arc<Pairing>>,
 }
 
 #[derive(Clone)]
@@ -60,9 +67,17 @@ struct AppState {
 /// Largest show file that can be imported. Far more than any real show.
 const MAX_IMPORT_BYTES: usize = 8 * 1024 * 1024;
 
-pub fn router(shared: Arc<Shared>, access: Access) -> Router {
+/// The server, ready to be given a listener. It is told each caller's
+/// address, which is how this computer is told from another device.
+pub fn service(shared: Arc<Shared>, access: Access) -> IntoMakeServiceWithConnectInfo<Router, SocketAddr> {
+    router(shared, access).into_make_service_with_connect_info::<SocketAddr>()
+}
+
+fn router(shared: Arc<Shared>, access: Access) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
+        .route("/api/access", get(access_handler))
+        .route("/api/pair", post(pair_handler).layer(DefaultBodyLimit::max(1024)))
         .route(
             "/api/import",
             post(import_handler).layer(DefaultBodyLimit::max(MAX_IMPORT_BYTES)),
@@ -75,8 +90,14 @@ pub fn router(shared: Arc<Shared>, access: Access) -> Router {
 /// fit in a WebSocket message, so it comes as the body of a POST. The
 /// same checks on who is asking apply; a page on another site cannot
 /// send this without the browser first asking, and being refused.
-async fn import_handler(State(state): State<AppState>, headers: HeaderMap, body: String) -> Response {
-    if !allowed(&headers, &state.access) || headers.get(header::ORIGIN).is_none() {
+async fn import_handler(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let asked_here = allowed(&headers, &state.access) && headers.get(header::ORIGIN).is_some();
+    if !asked_here || !may_control(&headers, peer, &state.access) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let outcome = state.shared.import_show(&body);
@@ -135,12 +156,108 @@ fn allowed(headers: &HeaderMap, access: &Access) -> bool {
     }
 }
 
-async fn ws_handler(State(state): State<AppState>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
+/// True for a request made on this computer to this computer. The host
+/// name is checked as well as the address: a page on a hostile site can
+/// have this computer's own browser connect to 127.0.0.1 under the
+/// site's name, and that must not count as being here.
+fn is_local(headers: &HeaderMap, peer: SocketAddr) -> bool {
+    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+    peer.ip().is_loopback() && host.is_some_and(|h| is_loopback_name(host_name(h)))
+}
+
+/// Whether the caller may see and change the show: it is this computer,
+/// or it has been paired.
+fn may_control(headers: &HeaderMap, peer: SocketAddr, access: &Access) -> bool {
+    let Some(pairing) = &access.pairing else {
+        return true;
+    };
+    let cookies = headers.get(header::COOKIE).and_then(|c| c.to_str().ok());
+    is_local(headers, peer) || pairing.knows(cookies)
+}
+
+fn json_response(status: StatusCode, body: Value) -> Response {
+    (status, [(header::CONTENT_TYPE, "application/json")], body.to_string()).into_response()
+}
+
+/// Tells the page whether it has to ask for the pairing code first.
+async fn access_handler(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
     if !allowed(&headers, &state.access) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let paired = may_control(&headers, peer, &state.access);
+    json_response(StatusCode::OK, json!({ "paired": paired }))
+}
+
+/// Takes the pairing code typed on another device, and hands that device
+/// the cookie that lets it in.
+async fn pair_handler(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !allowed(&headers, &state.access) || headers.get(header::ORIGIN).is_none() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(pairing) = &state.access.pairing else {
+        return json_response(StatusCode::OK, json!({ "ok": true }));
+    };
+    let typed = serde_json::from_str::<Value>(&body)
+        .ok()
+        .and_then(|v| v.get("code").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_default();
+    match pairing.try_code(&typed, peer.ip(), Instant::now()) {
+        Ok(_) => {
+            log::info!("paired a device at {}", peer.ip());
+            let mut response = json_response(StatusCode::OK, json!({ "ok": true }));
+            if let Ok(cookie) = HeaderValue::from_str(&pairing.cookie()) {
+                response.headers_mut().insert(header::SET_COOKIE, cookie);
+            }
+            response
+        }
+        Err(Refused::Wrong { left }) => json_response(
+            StatusCode::FORBIDDEN,
+            json!({ "ok": false, "error": format!("That is not the code. {left} more {} before a wait.", if left == 1 { "try" } else { "tries" }) }),
+        ),
+        Err(Refused::Wait { seconds }) => {
+            log::warn!("too many wrong pairing codes; {} must wait", peer.ip());
+            json_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({ "ok": false, "wait": seconds, "error": format!("Too many wrong codes. Try again in {seconds} seconds.") }),
+            )
+        }
+    }
+}
+
+async fn ws_handler(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !allowed(&headers, &state.access) || !may_control(&headers, peer, &state.access) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // Only this computer is shown the code, and only it may decide
+    // whether other devices are let in.
+    let here = Here {
+        local: state.access.pairing.is_none() || is_local(&headers, peer),
+        code: state.access.pairing.as_ref().map(|p| p.code().to_string()),
+    };
     ws.max_message_size(64 * 1024)
-        .on_upgrade(move |socket| client(socket, state.shared))
+        .on_upgrade(move |socket| client(socket, state.shared, here))
+}
+
+/// What a connection is allowed to know and do beyond the show itself.
+struct Here {
+    /// The connection is from this computer.
+    local: bool,
+    /// The pairing code, if other devices may connect.
+    code: Option<String>,
 }
 
 async fn static_handler(State(state): State<AppState>, headers: HeaderMap, uri: Uri) -> Response {
@@ -259,7 +376,21 @@ fn already_added(found: &Discovered, device: &darkrgb_core::Device) -> bool {
     }
 }
 
-fn status_message(shared: &Shared) -> String {
+/// Whether other devices may connect, and, for this computer only, the
+/// code they need.
+fn remote_status(shared: &Shared, here: &Here) -> Value {
+    let remote = *shared.remote.lock().unwrap();
+    json!({
+        "on": remote.on,
+        "wanted": remote.wanted,
+        "port": remote.port,
+        "local": here.local,
+        "code": here.code.as_deref().filter(|_| here.local),
+        "available": shared.library.is_some(),
+    })
+}
+
+fn status_message(shared: &Shared, here: &Here) -> String {
     let discovered: Vec<Value> = {
         let show = shared.show.lock().unwrap();
         shared
@@ -286,6 +417,7 @@ fn status_message(shared: &Shared) -> String {
         "notice": &*shared.notice.lock().unwrap(),
         "midi": &*shared.midi.lock().unwrap(),
         "show_file": shared.save_path.lock().unwrap().as_ref().map(|p| p.display().to_string()),
+        "remote": remote_status(shared, here),
     })
     .to_string()
 }
@@ -303,7 +435,7 @@ fn result_message(req: Option<&Value>, outcome: Result<Option<String>, String>) 
     }
 }
 
-async fn client(socket: WebSocket, shared: Arc<Shared>) {
+async fn client(socket: WebSocket, shared: Arc<Shared>, here: Here) {
     let (mut tx, mut rx) = socket.split();
     if tx.send(Message::Text(hello().into())).await.is_err() {
         return;
@@ -361,11 +493,11 @@ async fn client(socket: WebSocket, shared: Arc<Shared>) {
                 (!bytes.is_empty()).then(|| Message::Binary(bytes))
             }
             _ = audio_tick.tick() => Some(Message::Text(audio_message(&shared).into())),
-            _ = status_tick.tick() => Some(Message::Text(status_message(&shared).into())),
+            _ = status_tick.tick() => Some(Message::Text(status_message(&shared, &here).into())),
             Some(text) = result_rx.recv() => Some(Message::Text(text.into())),
             incoming = rx.next() => match incoming {
                 Some(Ok(Message::Text(text))) => {
-                    handle(&shared, text.as_str(), &result_tx, &mut holding).map(|t| Message::Text(t.into()))
+                    handle(&shared, text.as_str(), &result_tx, &mut holding, here.local).map(|t| Message::Text(t.into()))
                 }
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                 Some(Ok(_)) => None,
@@ -390,6 +522,7 @@ fn handle(
     text: &str,
     results: &mpsc::Sender<String>,
     holding: &mut HashSet<u32>,
+    local: bool,
 ) -> Option<String> {
     let value: Value = match serde_json::from_str(text) {
         Ok(value) => value,
@@ -404,6 +537,10 @@ fn handle(
         Ok(command) => command,
         Err(e) => return result_message(id.as_ref(), Err(format!("unknown or malformed command: {e}"))),
     };
+    if matches!(command, Command::SetRemote { .. }) && !local {
+        let refusal = "whether other devices may connect can only be changed on the computer itself";
+        return result_message(id.as_ref(), Err(refusal.into()));
+    }
     if let Command::Trigger { binding, down } = command {
         if down {
             holding.insert(binding);
@@ -494,7 +631,7 @@ mod tests {
     fn lan_mode_accepts_other_host_names_but_still_checks_origin() {
         let lan = Access {
             lan: true,
-            dev_origin: None,
+            ..Access::default()
         };
         assert!(allowed(
             &headers(Some("192.168.1.20:7420"), Some("http://192.168.1.20:7420")),
@@ -507,10 +644,89 @@ mod tests {
     }
 
     #[test]
+    fn another_device_needs_the_pairing_cookie_and_this_computer_does_not() {
+        let pairing = Arc::new(Pairing::with("048213", "secret-token"));
+        let access = Access {
+            lan: true,
+            pairing: Some(pairing.clone()),
+            ..Access::default()
+        };
+        let here: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+        let phone: SocketAddr = "192.168.1.77:50000".parse().unwrap();
+        let with_cookie = |host: &str, cookie: &str| {
+            let mut h = headers(Some(host), Some(&format!("http://{host}")));
+            h.insert(header::COOKIE, cookie.parse().unwrap());
+            h
+        };
+        let local = headers(Some("127.0.0.1:7420"), Some("http://127.0.0.1:7420"));
+        assert!(may_control(&local, here, &access));
+        assert!(is_local(&headers(Some("localhost:7420"), None), here));
+
+        let lan_host = headers(Some("192.168.1.20:7420"), Some("http://192.168.1.20:7420"));
+        assert!(!may_control(&lan_host, phone, &access), "a phone that has not paired");
+        assert!(may_control(
+            &with_cookie("192.168.1.20:7420", "darkrgb_pair=secret-token"),
+            phone,
+            &access
+        ));
+        assert!(!may_control(
+            &with_cookie("192.168.1.20:7420", "darkrgb_pair=048213"),
+            phone,
+            &access
+        ));
+        // A hostile page that points its own name at 127.0.0.1 arrives
+        // from this computer's address, but not under this computer's name.
+        let rebound = headers(Some("evil.example:7420"), Some("http://evil.example:7420"));
+        assert!(
+            allowed(&rebound, &access),
+            "the host and origin checks alone would let it in"
+        );
+        assert!(!is_local(&rebound, here));
+        assert!(!may_control(&rebound, here, &access));
+        // With the network closed there is nothing to pair with.
+        assert!(may_control(&local, here, &Access::default()));
+    }
+
+    #[test]
+    fn only_this_computer_is_told_the_code_or_may_open_the_network() {
+        let shared = Shared::new(darkrgb_core::Show::default(), None, None);
+        *shared.remote.lock().unwrap() = crate::app::Remote {
+            on: true,
+            wanted: true,
+            port: 7420,
+        };
+        let code = Some("048213".to_string());
+        let local = remote_status(
+            &shared,
+            &Here {
+                local: true,
+                code: code.clone(),
+            },
+        );
+        assert_eq!(
+            (&local["code"], &local["on"], &local["port"]),
+            (&json!("048213"), &json!(true), &json!(7420))
+        );
+        let phone = remote_status(&shared, &Here { local: false, code });
+        assert_eq!((&phone["code"], &phone["local"]), (&Value::Null, &json!(false)));
+
+        let shared = Arc::new(shared);
+        let (results, _rx) = mpsc::channel(4);
+        let mut holding = HashSet::new();
+        let ask = r#"{"req":1,"type":"set_remote","enabled":true}"#;
+        let reply = handle(&shared, ask, &results, &mut holding, false).unwrap();
+        assert!(reply.contains("only be changed on the computer itself"), "{reply}");
+        // From this computer it gets as far as needing somewhere to keep
+        // the choice, which this test does not have.
+        let reply = handle(&shared, ask, &results, &mut holding, true).unwrap();
+        assert!(reply.contains("library"), "{reply}");
+    }
+
+    #[test]
     fn the_development_origin_is_allowed_only_when_configured() {
         let dev = Access {
-            lan: false,
             dev_origin: Some("http://localhost:5173".into()),
+            ..Access::default()
         };
         let h = headers(Some("127.0.0.1:7420"), Some("http://localhost:5173"));
         assert!(allowed(&h, &dev));

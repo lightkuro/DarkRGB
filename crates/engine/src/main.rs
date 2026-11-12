@@ -22,7 +22,7 @@ struct Cli {
     port: u16,
 
     /// Let other devices on the network open the UI (a phone as a remote).
-    /// There is no password yet: anyone on the network can control the lights.
+    /// Each has to give the six-digit code printed when the program starts.
     #[arg(long)]
     lan: bool,
 
@@ -106,12 +106,12 @@ fn main() -> anyhow::Result<()> {
     })?;
 
     println!("{APP_NAME} {} is running. Open {}", version_text(), engine.url);
-    if cli.lan {
+    if let Some(code) = &engine.pairing_code {
         println!(
             "Other devices on your network can open it too, at this computer's address, port {}.",
             engine.port
         );
-        println!("There is no password yet: anyone on the network can control the lights.");
+        println!("They will be asked for this code: {} {}", &code[..3], &code[3..]);
     }
     println!("Press Ctrl+C to stop.");
     if !cli.no_open

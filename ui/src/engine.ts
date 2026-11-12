@@ -370,6 +370,20 @@ export interface Status {
   notice: string | null;
   /** Where the show is saved on the computer running the engine. */
   show_file: string | null;
+  /** Whether other devices on the network may connect, as a remote. */
+  remote?: {
+    /** The engine is listening on the network now. */
+    on: boolean;
+    /** What was chosen in Settings, for the next start. */
+    wanted: boolean;
+    port: number;
+    /** This page is open on the engine's own computer. */
+    local: boolean;
+    /** The code other devices are asked for. Only the computer itself is told. */
+    code: string | null;
+    /** False when the choice cannot be kept (started with one show file). */
+    available: boolean;
+  };
   /** MIDI controllers: whether there is MIDI at all, which are heard, the last thing heard. */
   midi?: { available: boolean; ports: string[]; learning: LearnTarget | null; last: string | null };
 }
@@ -458,6 +472,7 @@ export type Command =
   | { type: "add_device"; address: string }
   | { type: "scan_network"; prefix: string }
   | { type: "set_demo"; enabled: boolean }
+  | { type: "set_remote"; enabled: boolean }
   | { type: "add_looks" }
   | { type: "set_scene_auto"; id: number; auto: boolean }
   | {
@@ -632,6 +647,8 @@ class Store<T> {
 
 class Engine {
   readonly connected = new Store(false);
+  /** True while this device has to give the pairing code before it is let in. */
+  readonly needsCode = new Store(false);
   readonly hello = new Store<Hello | null>(null);
   readonly show = new Store<Show | null>(null);
   readonly status = new Store<Status | null>(null);
@@ -666,7 +683,46 @@ class Engine {
   private pending = new Map<number, (result: CommandResult) => void>();
   private nextToast = 1;
 
+  /**
+   * Connects, after asking whether this device is let in. A device other
+   * than the engine's own computer has to give a code first; until it
+   * has, the engine refuses the connection, and a browser cannot tell a
+   * refusal from an engine that is not running.
+   */
   connect(): void {
+    if (this.socket && this.socket.readyState !== WebSocket.CLOSED) return;
+    void fetch("/api/access")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((access: { paired?: boolean } | null) => access?.paired === false)
+      // No answer at all: the engine is not running, or is older. Try anyway.
+      .catch(() => false)
+      .then((needsCode) => {
+        this.needsCode.set(needsCode);
+        if (needsCode) setTimeout(() => this.connect(), 3000);
+        else this.open();
+      });
+  }
+
+  /** Gives the pairing code typed on this device. */
+  async pair(code: string): Promise<CommandResult> {
+    try {
+      const response = await fetch("/api/pair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const result = (await response.json()) as CommandResult;
+      if (result.ok) {
+        this.needsCode.set(false);
+        this.open();
+      }
+      return result;
+    } catch {
+      return { ok: false, error: "Could not reach the computer running darkRGB." };
+    }
+  }
+
+  private open(): void {
     // One connection only, however often this is called.
     if (this.socket && this.socket.readyState !== WebSocket.CLOSED) return;
     const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -922,6 +978,7 @@ export function sameAction(a: Action, b: Action): boolean {
 
 export const useHistory = () => useSyncExternalStore(engine.history.subscribe, engine.history.get);
 export const useConnected = () => useSyncExternalStore(engine.connected.subscribe, engine.connected.get);
+export const useNeedsCode = () => useSyncExternalStore(engine.needsCode.subscribe, engine.needsCode.get);
 export const useHello = () => useSyncExternalStore(engine.hello.subscribe, engine.hello.get);
 export const useShow = () => useSyncExternalStore(engine.show.subscribe, engine.show.get);
 export const useStatus = () => useSyncExternalStore(engine.status.subscribe, engine.status.get);

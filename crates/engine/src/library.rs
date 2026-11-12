@@ -202,6 +202,29 @@ impl Library {
         }
     }
 
+    fn remote_file(&self) -> PathBuf {
+        self.dir.join("remote.txt")
+    }
+
+    /// Whether the user has asked for other devices on the network to be
+    /// let in (with the pairing code) when the program starts.
+    pub fn remote_wanted(&self) -> bool {
+        std::fs::read_to_string(self.remote_file()).is_ok_and(|text| text.trim() == "on")
+    }
+
+    /// Remembers that choice for the next start.
+    pub fn set_remote(&self, wanted: bool) -> std::io::Result<()> {
+        if wanted {
+            std::fs::create_dir_all(&self.dir)?;
+            std::fs::write(self.remote_file(), "on\n")
+        } else {
+            match std::fs::remove_file(self.remote_file()) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            }
+        }
+    }
+
     /// Remembers which show is open, for the next start.
     pub fn set_current(&self, path: &Path) {
         let Some(file) = path.file_name().and_then(|f| f.to_str()) else {

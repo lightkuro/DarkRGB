@@ -88,6 +88,11 @@ pub enum Command {
     ScanNetwork {
         prefix: String,
     },
+    /// Lets other devices on the network connect, from the next start.
+    /// Handled by the app, and only when asked from this computer.
+    SetRemote {
+        enabled: bool,
+    },
     /// Adds or removes the built-in demo lights.
     SetDemo {
         enabled: bool,
@@ -849,7 +854,9 @@ fn checked(show: &mut Show, command: &Command) -> Result<(), String> {
 
 fn change(show: &mut Show, command: &Command) -> Result<(), String> {
     match command {
-        Command::AddDevice { .. } | Command::ScanNetwork { .. } => Err("that command needs the network".into()),
+        Command::AddDevice { .. } | Command::ScanNetwork { .. } | Command::SetRemote { .. } => {
+            Err("that command needs the network".into())
+        }
         Command::Trigger { .. }
         | Command::Perform { .. }
         | Command::Tap

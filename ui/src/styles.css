@@ -2982,6 +2982,44 @@ input.number {
   max-width: 420px;
 }
 
+.offline.pair form {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  width: min(420px, 100%);
+}
+
+.pair-code {
+  width: 100%;
+  max-width: 260px;
+  padding: 12px;
+  font-size: 28px;
+  letter-spacing: 0.2em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.remote-code {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.remote-code .code {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* --------------------------------------------- narrow windows and phones */
 
 @media (max-width: 1180px) {

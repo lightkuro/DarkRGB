@@ -163,6 +163,17 @@ impl History {
     }
 }
 
+/// Whether other devices on the network may open the UI.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Remote {
+    /// The server is listening on the network now.
+    pub on: bool,
+    /// What the user chose in Settings, for the next start.
+    pub wanted: bool,
+    /// The port the UI is served on.
+    pub port: u16,
+}
+
 pub struct Shared {
     pub show: Mutex<Show>,
     /// Bumped on every change to the show. Clients and the saver watch it.
@@ -196,6 +207,8 @@ pub struct Shared {
     pub knob_moves: Mutex<Vec<(KnobTarget, f32)>>,
     /// Something the user should be told once, such as an unreadable file.
     pub notice: Mutex<Option<String>>,
+    /// Whether other devices on the network may connect.
+    pub remote: Mutex<Remote>,
     /// What is happening live: held keys, a tapped tempo, a waiting scene.
     pub live: Mutex<Live>,
     /// Bumped on every change to `live`.
@@ -235,6 +248,7 @@ impl Shared {
             midi: Mutex::new(MidiStatus::default()),
             knob_moves: Mutex::new(Vec::new()),
             notice: Mutex::new(notice),
+            remote: Mutex::new(Remote::default()),
             live: Mutex::new(Live::default()),
             live_rev: watch::Sender::new(1),
             started: Instant::now(),
@@ -292,6 +306,7 @@ impl Shared {
                 kind,
             } => return self.new_show(name.as_deref(), *keep_lights, *kind),
             Command::ExportShow => return self.export_show(),
+            Command::SetRemote { enabled } => return self.set_remote(*enabled),
             Command::OpenShow { file } => return self.open_show(file),
             Command::DuplicateShow { file } => return self.duplicate_show(file),
             Command::DeleteShow { file } => return self.delete_show(file),
@@ -795,6 +810,24 @@ impl Shared {
             group: if pattern.look { None } else { group },
             scene: pattern.look.then_some(pattern.name),
         })
+    }
+
+    /// Remembers whether other devices may connect. The server listens
+    /// where it was told to when it started, so this is for next time.
+    fn set_remote(&self, enabled: bool) -> Result<Option<String>, String> {
+        let library = self.library()?;
+        library
+            .set_remote(enabled)
+            .map_err(|e| format!("could not save that choice: {e}"))?;
+        let mut remote = self.remote.lock().unwrap();
+        remote.wanted = enabled;
+        Ok((remote.on != enabled).then(|| {
+            if enabled {
+                format!("Other devices can connect the next time {APP_NAME} starts.")
+            } else {
+                format!("Other devices are shut out the next time {APP_NAME} starts.")
+            }
+        }))
     }
 
     /// Renames any show in the library. The open one goes the usual way,

@@ -9,7 +9,8 @@ import { ScenesBar } from "./components/ScenesBar";
 import { Settings } from "./components/Settings";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
-import { engine, useConnected, useShow, useStatus, useToasts, useView } from "./engine";
+import { engine, useConnected, useNeedsCode, useShow, useStatus, useToasts, useView } from "./engine";
+import { PairScreen } from "./components/PairScreen";
 import { startKeys } from "./keys";
 
 function Toasts() {
@@ -30,6 +31,7 @@ function Toasts() {
 
 export function App() {
   const connected = useConnected();
+  const needsCode = useNeedsCode();
   const show = useShow();
   const status = useStatus();
   const view = useView();
@@ -65,7 +67,8 @@ export function App() {
       <Library />
       <FlashPrompt />
       <Toasts />
-      {!connected && (
+      {needsCode && <PairScreen />}
+      {!connected && !needsCode && (
         <div className="offline" role="alert">
           <div>
             <h1>{show ? "Lost the connection to the engine" : "Connecting to the engine…"}</h1>

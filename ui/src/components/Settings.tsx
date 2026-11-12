@@ -99,6 +99,70 @@ function General() {
         Nothing in a show is lost by switching. This choice is kept on this device.
       </p>
       <DemoSwitch />
+      <Remote />
+    </>
+  );
+}
+
+/** Letting a phone, or any other device on the network, be a remote. */
+function Remote() {
+  const status = useStatus();
+  const remote = status?.remote;
+  if (!remote) return null;
+  const addresses = (status?.networks ?? []).map((n) => `http://${n.address}:${remote.port}`);
+  const code = remote.code ? `${remote.code.slice(0, 3)} ${remote.code.slice(3)}` : null;
+  return (
+    <>
+      <h3>Phone remote</h3>
+      <div className="field inline">
+        <span>
+          Let other devices connect
+          <span className="hint"> A phone or tablet on the same network can then play the show, after giving a code.</span>
+        </span>
+        <Switch
+          checked={remote.wanted}
+          label="Let other devices connect"
+          disabled={!remote.local || !remote.available}
+          onChange={(enabled) => engine.send({ type: "set_remote", enabled })}
+        />
+      </div>
+      {!remote.local ? (
+        <p className="hint">This device is connected as a remote. Only the computer running darkRGB can change this.</p>
+      ) : !remote.available ? (
+        <p className="hint">
+          Not kept when darkRGB is started with one show file. Start it with <code>--lan</code> to let other
+          devices connect this time.
+        </p>
+      ) : remote.on && code ? (
+        <div className="remote-code">
+          <p>
+            On the other device, open{" "}
+            {addresses.length > 0 ? (
+              addresses.map((a, i) => (
+                <span key={a}>
+                  {i > 0 && " or "}
+                  <strong>{a}</strong>
+                </span>
+              ))
+            ) : (
+              <>this computer's address, port {remote.port},</>
+            )}{" "}
+            and enter this code:
+          </p>
+          <p className="code" aria-label={`Pairing code ${code}`}>
+            {code}
+          </p>
+          <p className="hint">
+            The code is new each time darkRGB starts, and a device that has given it is asked again then.
+            {!remote.wanted && " Other devices are shut out the next time darkRGB starts."}
+          </p>
+        </div>
+      ) : remote.wanted ? (
+        <p className="hint">
+          Close darkRGB and open it again to start. Your computer may ask whether to allow darkRGB on the network;
+          say yes, for private networks.
+        </p>
+      ) : null}
     </>
   );
 }
