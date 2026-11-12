@@ -126,6 +126,11 @@ impl Renderer {
     /// gamma. `cues` carries what was fired by hand.
     pub fn render_with(&mut self, show: &Show, time: f64, dt: f32, audio: &AudioFeatures, cues: &Cues) -> &[Rgb] {
         self.frame.fill(Rgb::BLACK);
+        let recolour: Option<String> = show
+            .live
+            .colours
+            .and_then(|id| show.live.swatches.iter().find(|s| s.id == id))
+            .map(|s| s.value.clone());
         for layer in &show.layers {
             // A folder can switch its layers off and scale their strength.
             let folder = layer.group.and_then(|g| show.layer_groups.iter().find(|x| x.id == g));
@@ -171,6 +176,19 @@ impl Renderer {
             let (linked, own_strength) = linked_settings(layer, &def.info.params, |source| {
                 source.value(&heard, audio, &show.live.faders, time)
             });
+            // A colour pad in force: every palette setting takes its colours.
+            let linked = match &recolour {
+                Some(value) if def.info.params.iter().any(|p| matches!(p.kind, ParamKind::Palette)) => {
+                    let mut params = linked.unwrap_or_else(|| layer.params.clone());
+                    for spec in &def.info.params {
+                        if matches!(spec.kind, ParamKind::Palette) {
+                            params.insert(spec.id.to_string(), ParamValue::Text(value.clone()));
+                        }
+                    }
+                    Some(params)
+                }
+                _ => linked,
+            };
             let opacity = (own_strength * folder_strength).clamp(0.0, 1.0) * (1.0 - 0.7 * lull);
             let dt = dt * (1.0 - 0.5 * lull);
             let Some(first) = state.segments.first() else {
@@ -1084,6 +1102,37 @@ mod tests {
         show.layers[0].links[0].param = "no_such_setting".into();
         show.live.faders[1] = 1.0;
         assert!(brightest(&show) < 0.01);
+    }
+
+    #[test]
+    fn a_colour_pad_in_force_recolours_every_palette() {
+        use crate::show::Swatch;
+        let mut show = Show::default();
+        show.add_device(device(8), None);
+        // The default effect takes its colours from a palette.
+        show.live.swatches.push(Swatch {
+            id: 900,
+            name: "Red".into(),
+            value: "#ff0000,#ff0000".into(),
+        });
+        let only_red = |show: &Show| {
+            let (_, frame) = render(show);
+            frame.iter().all(|px| px.g == 0.0 && px.b == 0.0) && frame.iter().any(|px| px.r > 0.0)
+        };
+        assert!(!only_red(&show), "its own colours to begin with");
+        show.live.colours = Some(900);
+        assert!(only_red(&show));
+        // The stored setting is untouched, and a swatch that is gone does nothing.
+        assert!(!show.layers[0].params.contains_key("palette"));
+        show.live.colours = Some(901);
+        assert!(!only_red(&show));
+        // An effect with a colour of its own, not a palette, keeps it.
+        let mut plain = solid_show("#00ff00");
+        plain.add_device(device(2), None);
+        plain.live.swatches = show.live.swatches.clone();
+        plain.live.colours = Some(900);
+        let (_, frame) = render(&plain);
+        assert!(frame[0].g > 0.9 && frame[0].r < 0.1);
     }
 
     #[test]

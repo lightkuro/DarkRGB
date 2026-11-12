@@ -450,6 +450,9 @@ impl Live {
                     }
                 }
                 Action::Blackout => out.master.blackout = !out.master.blackout,
+                Action::Colours { id } => {
+                    out.live.colours = if out.live.colours == Some(id) { None } else { Some(id) };
+                }
                 // Scenes were dealt with above; freezing is the frame loop's.
                 Action::Scene { .. }
                 | Action::TapTempo

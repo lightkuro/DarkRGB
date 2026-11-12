@@ -12,6 +12,7 @@ import {
   Clapperboard,
   Folder,
   Lightbulb,
+  Palette,
   Pencil,
   Plus,
   Power,
@@ -25,11 +26,14 @@ import {
 import { useCallback, useState, type ReactNode } from "react";
 import {
   engine,
+  onPage,
   perFrame,
+  readPalette,
   sameAction,
   settingsPage,
   useCurrentScene,
   useHello,
+  useLibrary,
   useLive,
   useShow,
   type Action,
@@ -64,6 +68,36 @@ function fadersInUse(show: Show, hello: Hello): { n: number; moves: string[] }[]
     }
   }
   return [...moves.entries()].sort((a, b) => a[0] - b[0]).map(([n, list]) => ({ n, moves: list }));
+}
+
+/** The kinds of pad that have an order and a page of their own. */
+const PAD_KINDS = ["layer", "layer_group", "light_group", "colours"];
+
+/** A square to drag in: across moves fader 1, up moves fader 2. */
+function XYPad({ x, y }: { x: number; y: number }) {
+  const move = (e: React.PointerEvent<HTMLDivElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const clamp = (v: number) => Math.min(1, Math.max(0, v));
+    setFader[0]!(clamp((e.clientX - box.left) / box.width));
+    setFader[1]!(clamp(1 - (e.clientY - box.top) / box.height));
+  };
+  return (
+    <div
+      className="xy-pad"
+      role="group"
+      aria-label="Faders 1 and 2 together: across is fader 1, up is fader 2"
+      title="Drag: across moves fader 1, up moves fader 2"
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        move(e);
+      }}
+      onPointerMove={(e) => {
+        if (e.buttons > 0) move(e);
+      }}
+    >
+      <span className="xy-dot" style={{ left: `${x * 100}%`, top: `${(1 - y) * 100}%` }} />
+    </div>
+  );
 }
 
 /** A layer by id, in what is playing or in any scene. */
@@ -105,6 +139,16 @@ function describe(action: Action, show: Show, hello: Hello): { name: string; ico
       return { name: "Previous scene", icon: <SkipBack size={15} /> };
     case "freeze":
       return { name: "Freeze", icon: <Snowflake size={15} /> };
+    case "colours": {
+      const found = show.live.swatches?.find((s) => s.id === action.id);
+      const palette = found ? readPalette(found.value, hello.palettes) : undefined;
+      const stops = palette ? (palette.cyclic ? [...palette.stops, palette.stops[0]] : palette.stops) : [];
+      return {
+        name: found?.name ?? "?",
+        icon: <Palette size={15} />,
+        colour: stops.length ? `linear-gradient(90deg, ${stops.join(", ")})` : undefined,
+      };
+    }
   }
 }
 
@@ -123,6 +167,8 @@ function isOn(action: Action, show: Show, frozen: boolean): boolean | undefined 
       return show.layer_groups.find((g) => g.id === action.id)?.enabled;
     case "light_group":
       return show.light_groups.find((g) => g.id === action.id)?.enabled;
+    case "colours":
+      return show.live.swatches?.some((s) => s.id === action.id) ? show.live.colours === action.id : undefined;
     case "blackout":
       return show.master.blackout;
     case "freeze":
@@ -233,7 +279,7 @@ function PadEditor({ action, show, hello, movable }: { action: Action; show: Sho
   const { name } = describe(action, show, hello);
   const choices = behaviours(action);
   // Only pads for effects, folders and groups have an order of their own.
-  const ordered = show.bindings.filter((b) => ["layer", "layer_group", "light_group"].includes(b.action.type));
+  const ordered = show.bindings.filter((b) => PAD_KINDS.includes(b.action.type));
   const at = binding ? ordered.findIndex((b) => b.id === binding.id) : -1;
   const move = (by: number) => {
     const next = [...ordered];
@@ -247,6 +293,32 @@ function PadEditor({ action, show, hello, movable }: { action: Action; show: Sho
       <strong className="pad-editor-name">{name}</strong>
       <KeyAssign action={action} label="Key" keepPad />
       {binding && <MidiPad binding={binding} />}
+      {binding && movable && (
+        <div className="field">
+          <span className="field-head">
+            <span>Page</span>
+          </span>
+          <div className="segmented" role="radiogroup" aria-label={`The page ${name} is on`}>
+            {[0, 1, 2, 3, 4].map((page) => (
+              <button
+                key={page}
+                type="button"
+                role="radio"
+                aria-checked={(binding.page ?? 0) === page}
+                className={(binding.page ?? 0) === page ? "selected" : ""}
+                title={
+                  page === 0
+                    ? "On every page"
+                    : `Only on page ${page}. Its key can then do something else on the other pages.`
+                }
+                onClick={() => engine.send({ type: "set_pad_page", id: binding.id, page })}
+              >
+                {page === 0 ? "Every" : page}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {/* A pad with no key yet can still be told what a press does. */}
       {!binding && choices.length > 0 && (
         <div className="segmented" role="radiogroup" aria-label={`What a press does for ${name}`}>
@@ -302,6 +374,20 @@ function AddPad({ show, hello, onAdded }: { show: Show; hello: Hello; onAdded: (
     { title: "Groups of lights", actions: show.light_groups.map((g) => ({ type: "light_group", id: g.id }) as Action) },
   ].map((group) => ({ ...group, actions: group.actions.filter((a) => !has(a)) }));
 
+  // Palettes that have no colour pad yet: the built-in ones and the kept ones.
+  const [colours, setColours] = useState(false);
+  const library = useLibrary();
+  const colourChoices = [
+    ...hello.palettes.map((p) => ({ name: p.name, value: p.id })),
+    ...library.palettes.map((p) => ({ name: p.name, value: p.value })),
+  ]
+    .filter((c) => !show.live.swatches?.some((s) => s.value === c.value))
+    .map((c) => {
+      const palette = readPalette(c.value, hello.palettes);
+      const stops = palette ? (palette.cyclic ? [...palette.stops, palette.stops[0]] : palette.stops) : [];
+      return { ...c, css: `linear-gradient(90deg, ${stops.join(", ")})` };
+    });
+
   const add = async (action: Action) => {
     setOpen(null);
     const result = await engine.request({ type: "bind", key: null, label: "", action, mode: "toggle" });
@@ -343,6 +429,26 @@ function AddPad({ show, hello, onAdded }: { show: Show; hello: Hello; onAdded: (
           <button type="button" role="menuitem" onClick={() => quick("pulse")}>
             Colour pulse <span className="hint">a burst on each press</span>
           </button>
+          <button type="button" role="menuitem" onClick={() => setColours(!colours)}>
+            Colours… <span className="hint">a pad that recolours everything that is playing</span>
+          </button>
+          {colours &&
+            colourChoices.map((choice) => (
+              <button
+                key={choice.value}
+                type="button"
+                role="menuitem"
+                className="colour-choice"
+                onClick={() => {
+                  setOpen(null);
+                  setColours(false);
+                  engine.send({ type: "add_colour_pad", name: choice.name, value: choice.value });
+                }}
+              >
+                <span className="swatch" style={{ background: choice.css }} />
+                {choice.name}
+              </button>
+            ))}
           <button type="button" role="menuitem" onClick={() => quick("lightning")}>
             Lightning{" "}
             <span className="hint">
@@ -390,7 +496,12 @@ export function LivePads() {
   const [selected, setSelected] = useState<Action | null>(null);
   if (!show || !hello) return null;
 
-  const pads = show.bindings.filter((b) => ["layer", "layer_group", "light_group"].includes(b.action.type));
+  const page = show.live.page ?? 1;
+  const allPads = show.bindings.filter((b) => PAD_KINDS.includes(b.action.type));
+  const pads = allPads.filter((b) => onPage(b, page));
+  const paged = allPads.some((b) => b.page);
+  const inUse = fadersInUse(show, hello);
+  const xy = inUse.some((f) => f.n === 1) && inUse.some((f) => f.n === 2);
   const isSelected = (action: Action) => customizing && selected !== null && sameAction(selected, action);
   const edit = (action: Action) => ({
     editing: customizing,
@@ -402,7 +513,7 @@ export function LivePads() {
     selected !== null &&
     (BUILT_IN.some((a) => sameAction(a, selected)) ||
       (selected.type === "scene" && show.scenes.some((s) => s.id === selected.id)) ||
-      pads.some((b) => sameAction(b.action, selected)));
+      allPads.some((b) => sameAction(b.action, selected)));
   const limited = show.flash.limit > 0;
 
   return (
@@ -425,9 +536,27 @@ export function LivePads() {
             {selectedExists ? "Press a key to assign it, or pick another pad." : "Pick a pad to set it up."}
           </span>
         )}
+        {(paged || customizing) && (
+          <div className="segmented pages" role="radiogroup" aria-label="Page of pads">
+            {[1, 2, 3, 4].map((n) => (
+              <button
+                key={n}
+                type="button"
+                role="radio"
+                aria-checked={page === n}
+                className={page === n ? "selected" : ""}
+                title={`Page ${n} of the pads`}
+                onClick={() => engine.send({ type: "set_page", page: n })}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        )}
         <span className="spacer" />
         <div className="live-faders">
-          {fadersInUse(show, hello).map(({ n, moves }) => (
+          {xy && <XYPad x={show.live.faders[0] ?? 0} y={show.live.faders[1] ?? 0} />}
+          {inUse.map(({ n, moves }) => (
             <div key={n} className="live-fader" title={`Moves ${moves.join("; ")}`}>
               <Slider
                 label={`Fader ${n}`}
@@ -489,7 +618,7 @@ export function LivePads() {
           action={selected}
           show={show}
           hello={hello}
-          movable={["layer", "layer_group", "light_group"].includes(selected.type)}
+          movable={PAD_KINDS.includes(selected.type)}
         />
       )}
 

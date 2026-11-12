@@ -6,7 +6,7 @@
 // keyboard layout. What is printed on the key is stored once, when the
 // key is assigned, for display.
 
-import { engine, type Binding } from "./engine";
+import { engine, onPage, type Binding } from "./engine";
 
 /** The answer to "which key?": its place, and what is printed on it. */
 export interface PickedKey {
@@ -117,7 +117,9 @@ function onKeyDown(event: KeyboardEvent): void {
     }
   }
   if (event.ctrlKey || event.metaKey || event.altKey || typing(event.target)) return;
-  const bindings = engine.show.get()?.bindings.filter((b) => b.key === event.code) ?? [];
+  // Only pads on the page that is showing answer to their keys.
+  const page = engine.show.get()?.live.page ?? 1;
+  const bindings = engine.show.get()?.bindings.filter((b) => b.key === event.code && onPage(b, page)) ?? [];
   if (bindings.length === 0) return;
   // The key belongs to the show now: no scrolling on Space, no clicking
   // whatever button happens to have focus.

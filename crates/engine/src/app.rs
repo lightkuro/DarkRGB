@@ -628,14 +628,19 @@ impl Shared {
             // Something else is being learnt: this is not for playing.
             (_, Some(_)) => {}
             (MidiEvent::Note(note, down), None) => {
-                let pad = self
-                    .show
-                    .lock()
-                    .unwrap()
-                    .bindings
-                    .iter()
-                    .find(|b| b.midi == Some(note))
-                    .map(|b| b.id);
+                // The pad with this note on the page that is showing. A note
+                // let go still reaches a pad whose page has been left.
+                let pad = {
+                    let show = self.show.lock().unwrap();
+                    let page = show.live.page;
+                    let with_note = |b: &&darkrgb_core::Binding| b.midi == Some(note);
+                    show.bindings
+                        .iter()
+                        .filter(with_note)
+                        .find(|b| b.showing(page))
+                        .or_else(|| show.bindings.iter().filter(with_note).find(|_| !down))
+                        .map(|b| b.id)
+                };
                 if let Some(pad) = pad {
                     let _ = self.trigger(pad, down);
                 }
@@ -926,7 +931,11 @@ impl Shared {
                 self.bump_live();
                 Ok(None)
             }
-            Action::Layer { .. } | Action::LayerGroup { .. } | Action::LightGroup { .. } | Action::Blackout => {
+            Action::Layer { .. }
+            | Action::LayerGroup { .. }
+            | Action::LightGroup { .. }
+            | Action::Blackout
+            | Action::Colours { .. } => {
                 self.flip(action);
                 Ok(None)
             }
@@ -953,6 +962,10 @@ impl Shared {
                 show.master.blackout = !show.master.blackout;
                 Some(())
             }
+            // The same pad again gives the effects their own colours back.
+            Action::Colours { id } => show.live.swatches.iter().any(|s| s.id == id).then(|| {
+                show.live.colours = if show.live.colours == Some(id) { None } else { Some(id) };
+            }),
             Action::Scene { .. }
             | Action::TapTempo
             | Action::Hit

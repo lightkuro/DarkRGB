@@ -325,6 +325,10 @@ pub enum Action {
     PrevScene,
     /// Stops the picture where it is.
     Freeze,
+    /// Gives everything that is playing the colours of a swatch.
+    Colours {
+        id: u32,
+    },
 }
 
 impl Action {
@@ -337,6 +341,7 @@ impl Action {
                 | Action::LightGroup { .. }
                 | Action::Blackout
                 | Action::Freeze
+                | Action::Colours { .. }
         )
     }
 
@@ -393,6 +398,35 @@ pub struct Binding {
     /// The pad or key on a MIDI controller that plays this pad.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub midi: Option<MidiNote>,
+    /// The page of pads it is on, 1 to [`PAGES`]; 0 is every page. A key
+    /// or a controller's pad plays it only while its page is showing, so
+    /// the same key can do something else on another page.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub page: u8,
+}
+
+/// How many pages of pads there are.
+pub const PAGES: u8 = 4;
+
+fn first_page() -> u8 {
+    1
+}
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+impl Binding {
+    /// Whether two pads can be showing at the same time, so that a key
+    /// could not tell them apart.
+    pub fn shares_a_page_with(&self, page: u8) -> bool {
+        self.page == 0 || page == 0 || self.page == page
+    }
+
+    /// Whether the pad is live on the page that is showing.
+    pub fn showing(&self, page: u8) -> bool {
+        self.page == 0 || self.page == page
+    }
 }
 
 /// A pad or key on a MIDI controller: its channel (0..15) and note (0..127).
@@ -457,6 +491,26 @@ pub struct LiveSettings {
     /// Knobs and faders of a MIDI controller, and what each moves.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub knobs: Vec<Knob>,
+    /// The page of pads that is showing, 1 to [`PAGES`].
+    #[serde(default = "first_page")]
+    pub page: u8,
+    /// Colours that a pad can give to everything that is playing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub swatches: Vec<Swatch>,
+    /// The swatch in force, if any: every palette is replaced by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colours: Option<u32>,
+}
+
+/// A palette with a pad of its own. While it is in force, every effect
+/// that takes its colours from a palette takes them from this one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Swatch {
+    pub id: u32,
+    pub name: String,
+    /// A palette setting's value: a built-in palette's id, or the user's
+    /// own colours written out.
+    pub value: String,
 }
 
 /// What the lights do when the music stops: after a while they change to
@@ -494,6 +548,9 @@ impl Default for LiveSettings {
             faders: [0.0; FADERS],
             idle: Idle::default(),
             knobs: Vec::new(),
+            page: 1,
+            swatches: Vec::new(),
+            colours: None,
         }
     }
 }
@@ -1017,12 +1074,13 @@ impl Show {
             .chain(self.scenes.iter().flat_map(|s| &s.groups))
             .map(|g| g.id)
             .collect();
-        let (scenes, light_groups) = (&self.scenes, &self.light_groups);
+        let (scenes, light_groups, swatches) = (&self.scenes, &self.light_groups, &self.live.swatches);
         self.bindings.retain(|b| match b.action {
             Action::Scene { id } => scenes.iter().any(|s| s.id == id),
             Action::Layer { id } => layers.contains(&id),
             Action::LayerGroup { id } => folders.contains(&id),
             Action::LightGroup { id } => light_groups.iter().any(|g| g.id == id),
+            Action::Colours { id } => swatches.iter().any(|s| s.id == id),
             Action::Blackout
             | Action::TapTempo
             | Action::Hit
@@ -1030,6 +1088,18 @@ impl Show {
             | Action::PrevScene
             | Action::Freeze => true,
         });
+        // A swatch lives as long as its pad does.
+        let bindings = &self.bindings;
+        self.live
+            .swatches
+            .retain(|s| bindings.iter().any(|b| b.action == Action::Colours { id: s.id }));
+        if self
+            .live
+            .colours
+            .is_some_and(|id| !self.live.swatches.iter().any(|s| s.id == id))
+        {
+            self.live.colours = None;
+        }
     }
 
     /// The key tied to an action, if there is one.
@@ -1049,7 +1119,14 @@ impl Show {
     pub fn add_pad(&mut self, key: Option<&str>, label: &str, action: Action, mode: KeyMode) -> u32 {
         let mode = action.allowed(mode);
         if let Some(key) = key {
-            for other in self.bindings.iter_mut().filter(|b| b.key.as_deref() == Some(key)) {
+            // The key is taken from any pad that could be showing at the
+            // same time as this one.
+            let page = self.bindings.iter().find(|b| b.action == action).map_or(0, |b| b.page);
+            for other in self
+                .bindings
+                .iter_mut()
+                .filter(|b| b.key.as_deref() == Some(key) && b.action != action && b.shares_a_page_with(page))
+            {
                 other.key = None;
                 other.label.clear();
             }
@@ -1069,6 +1146,7 @@ impl Show {
             action,
             mode,
             midi: None,
+            page: 0,
         });
         id
     }
@@ -1319,14 +1397,28 @@ impl Show {
         } else {
             default_idle_after()
         };
-        // MIDI: numbers in range, one pad per note, one knob per thing.
-        let mut notes: Vec<MidiNote> = Vec::new();
+        // Pages in range; then one pad per key and per MIDI note among
+        // pads that can be showing together.
+        self.live.page = self.live.page.clamp(1, PAGES);
+        let mut keys: Vec<(String, u8)> = Vec::new();
+        let mut notes: Vec<(MidiNote, u8)> = Vec::new();
         for binding in &mut self.bindings {
+            binding.page = binding.page.min(PAGES);
+            let page = binding.page;
+            let clash = |other: u8| other == 0 || page == 0 || other == page;
+            if let Some(key) = &binding.key {
+                if keys.iter().any(|(k, p)| k == key && clash(*p)) {
+                    binding.key = None;
+                    binding.label.clear();
+                } else {
+                    keys.push((key.clone(), page));
+                }
+            }
             if let Some(note) = binding.midi {
-                if note.channel > 15 || note.note > 127 || notes.contains(&note) {
+                if note.channel > 15 || note.note > 127 || notes.iter().any(|(n, p)| *n == note && clash(*p)) {
                     binding.midi = None;
                 } else {
-                    notes.push(note);
+                    notes.push((note, page));
                 }
             }
         }

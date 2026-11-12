@@ -149,7 +149,8 @@ export type Action =
   | { type: "hit" }
   | { type: "next_scene" }
   | { type: "prev_scene" }
-  | { type: "freeze" };
+  | { type: "freeze" }
+  | { type: "colours"; id: number };
 
 /**
  * What a press does: act on each press, act only while held down, or set
@@ -168,6 +169,13 @@ export interface Binding {
   mode: KeyMode;
   /** The pad or key on a MIDI controller that plays this pad. */
   midi?: MidiNote;
+  /** The page of pads it is on, 1 to 4. Left out when it is on every page. */
+  page?: number;
+}
+
+/** Whether a pad is live on the page that is showing. */
+export function onPage(binding: Binding, page: number): boolean {
+  return !binding.page || binding.page === page;
 }
 
 /** A pad or key on a MIDI controller: channel 0 to 15, note 0 to 127. */
@@ -271,6 +279,12 @@ export interface Show {
     idle: { scene: number | null; after: number };
     /** Knobs and faders of a MIDI controller, and what each moves. Left out when there are none. */
     knobs?: { channel: number; cc: number; target: KnobTarget }[];
+    /** The page of pads that is showing, 1 to 4. */
+    page: number;
+    /** Colours that a pad can give to everything that is playing. */
+    swatches?: { id: number; name: string; value: string }[];
+    /** The swatch in force, if any. */
+    colours?: number;
   };
   output: {
     frame_rate: number;
@@ -517,6 +531,9 @@ export type Command =
   | { type: "set_link"; layer: number; param: string; source: Source; amount: number }
   | { type: "remove_link"; layer: number; param: string }
   | { type: "set_fader"; n: number; value: number }
+  | { type: "add_colour_pad"; name: string; value: string }
+  | { type: "set_pad_page"; id: number; page: number }
+  | { type: "set_page"; page: number }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "midi_learn"; target: LearnTarget | null }

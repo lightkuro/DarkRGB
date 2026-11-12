@@ -282,6 +282,8 @@ export function actionName(action: Action, show: Show, effectName: (id: string) 
   switch (action.type) {
     case "scene":
       return `Scene: ${show.scenes.find((s) => s.id === action.id)?.name ?? "?"}`;
+    case "colours":
+      return `Colours: ${show.live.swatches?.find((s) => s.id === action.id)?.name ?? "?"}`;
     case "layer": {
       const layer =
         show.layers.find((l) => l.id === action.id) ??

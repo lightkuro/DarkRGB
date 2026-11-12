@@ -8,7 +8,7 @@ import { cancelPick, keyLabel, pickKey } from "../keys";
 
 /** Actions with something to flip. */
 export function isSwitch(action: Action): boolean {
-  return ["layer", "layer_group", "light_group", "blackout", "freeze"].includes(action.type);
+  return ["layer", "layer_group", "light_group", "blackout", "freeze", "colours"].includes(action.type);
 }
 
 /** What a press can do for an action, with the words for each choice. */
@@ -99,7 +99,16 @@ export function KeyAssign({
     setPicking(false);
     setRefused(false);
     if (!picked) return;
-    const taken = engine.show.get()?.bindings.find((b) => b.key === picked.key && !sameAction(b.action, action));
+    const own = engine.show.get()?.bindings.find((b) => sameAction(b.action, action));
+    const taken = engine
+      .show.get()
+      ?.bindings.find(
+        (b) =>
+          b.key === picked.key &&
+          !sameAction(b.action, action) &&
+          // A key on another page is not in the way.
+          (!b.page || !own?.page || b.page === own.page),
+      );
     const result = await engine.request({
       type: "bind",
       key: picked.key,

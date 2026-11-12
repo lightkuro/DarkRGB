@@ -5,10 +5,10 @@ use darkrgb_core::color;
 use darkrgb_core::effects;
 use darkrgb_core::layout::MAX_PIXELS;
 use darkrgb_core::params::{ParamKind, ParamValue};
-use darkrgb_core::show::{Blend, FADERS, FRAME_RATES, LINK_STRENGTH, MAX_LINKS, linkable, mend_links};
+use darkrgb_core::show::{Blend, FADERS, FRAME_RATES, LINK_STRENGTH, MAX_LINKS, PAGES, linkable, mend_links};
 use darkrgb_core::{
     Action, Band, FlashSettings, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, Link, MidiNote, Mood, Only, Rgb,
-    Shape, Show, Sound, Source,
+    Shape, Show, Sound, Source, Swatch,
 };
 use serde::Deserialize;
 
@@ -377,6 +377,21 @@ pub enum Command {
     MidiLearn {
         target: Option<LearnTarget>,
     },
+    /// Adds a pad that gives everything that is playing these colours:
+    /// a built-in palette's id, or colours written out.
+    AddColourPad {
+        name: String,
+        value: String,
+    },
+    /// Puts a pad on one page of pads (1 to 4), or on every page (0).
+    SetPadPage {
+        id: u32,
+        page: u8,
+    },
+    /// Shows another page of pads.
+    SetPage {
+        page: u8,
+    },
     /// Takes back the last change to the show. Handled by the app.
     Undo,
     /// Puts back what `Undo` took back. Handled by the app.
@@ -585,6 +600,7 @@ pub(crate) fn undoable(command: &Command) -> bool {
             | Command::SetLive { .. }
             | Command::SetAudio { .. }
             | Command::SetOutput { .. }
+            | Command::SetPage { .. }
     )
 }
 
@@ -1306,6 +1322,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 Action::Layer { id } => show.layers.iter().any(|l| l.id == id),
                 Action::LayerGroup { id } => show.layer_groups.iter().any(|g| g.id == id),
                 Action::LightGroup { id } => show.light_groups.iter().any(|g| g.id == id),
+                Action::Colours { id } => show.live.swatches.iter().any(|s| s.id == id),
                 Action::Blackout
                 | Action::TapTempo
                 | Action::Hit
@@ -1372,6 +1389,8 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             if show.bindings.len() == before {
                 return Err("that key is no longer set up".into());
             }
+            // A colour pad takes its swatch with it.
+            show.prune_bindings();
             Ok(())
         }
 
@@ -1549,6 +1568,31 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
+        Command::AddColourPad { name: pad_name, value } => {
+            let pad_name = name(pad_name, "The name")?;
+            let value = if color::palettes().iter().any(|p| p.id == value) {
+                value.clone()
+            } else {
+                color::parse_custom(value)
+                    .map(|own| color::write_custom(&own))
+                    .ok_or("those are not colours: pick a palette, or give 2 to 8 colours")?
+            };
+            if show.bindings.len() >= MAX_BINDINGS {
+                return Err(format!("a show can have at most {MAX_BINDINGS} pads"));
+            }
+            if show.live.swatches.iter().any(|s| s.value == value) {
+                return Err("there is a pad for those colours already".into());
+            }
+            let id = show.alloc_id();
+            show.live.swatches.push(Swatch {
+                id,
+                name: pad_name,
+                value,
+            });
+            show.add_pad(None, "", Action::Colours { id }, KeyMode::Toggle);
+            Ok(())
+        }
+
         Command::SetPadMidi { id, midi } => {
             if let Some(note) = midi
                 && (note.channel > 15 || note.note > 127)
@@ -1558,13 +1602,46 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             if !show.bindings.iter().any(|b| b.id == *id) {
                 return Err("that pad is no longer set up".into());
             }
+            let page = show.bindings.iter().find(|b| b.id == *id).map_or(0, |b| b.page);
             for binding in &mut show.bindings {
                 if binding.id == *id {
                     binding.midi = *midi;
-                } else if midi.is_some() && binding.midi == *midi {
+                } else if midi.is_some() && binding.midi == *midi && binding.shares_a_page_with(page) {
                     binding.midi = None;
                 }
             }
+            Ok(())
+        }
+
+        Command::SetPadPage { id, page } => {
+            if *page > PAGES {
+                return Err(format!("there are {PAGES} pages of pads"));
+            }
+            let at = show
+                .bindings
+                .iter()
+                .position(|b| b.id == *id)
+                .ok_or("that pad is no longer set up")?;
+            show.bindings[at].page = *page;
+            // Where it now shares a page with a pad that has the same key
+            // or note, the pad that moved gives its up.
+            let (key, midi) = (show.bindings[at].key.clone(), show.bindings[at].midi);
+            let taken = |other: &darkrgb_core::Binding| other.id != *id && other.shares_a_page_with(*page);
+            if key.is_some() && show.bindings.iter().any(|b| taken(b) && b.key == key) {
+                show.bindings[at].key = None;
+                show.bindings[at].label.clear();
+            }
+            if midi.is_some() && show.bindings.iter().any(|b| taken(b) && b.midi == midi) {
+                show.bindings[at].midi = None;
+            }
+            Ok(())
+        }
+
+        Command::SetPage { page } => {
+            if !(1..=PAGES).contains(page) {
+                return Err(format!("there are {PAGES} pages of pads"));
+            }
+            show.live.page = *page;
             Ok(())
         }
 
@@ -2613,7 +2690,7 @@ mod tests {
             let folder = r.id(show.layer_groups.iter().map(|g| g.id).collect());
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
-            let command = match r.next() % 51 {
+            let command = match r.next() % 54 {
                 20 => Command::ArrangeLayers {
                     // Usually every layer once, shuffled and refiled; sometimes not.
                     order: {
@@ -2749,6 +2826,17 @@ mod tests {
                 47 => Command::SetIdle {
                     scene: r.maybe(|_| scene),
                     after: r.maybe(Awkward::number),
+                },
+                51 => Command::AddColourPad {
+                    name: r.text(),
+                    value: ["neon", "#ff0000,#00ff00", "nope", "#12"][r.next() as usize % 4].into(),
+                },
+                52 => Command::SetPadPage {
+                    id: binding,
+                    page: r.next() as u8 % 6,
+                },
+                53 => Command::SetPage {
+                    page: r.next() as u8 % 6,
                 },
                 48 => Command::SetPadMidi {
                     id: binding,
@@ -2925,10 +3013,16 @@ mod tests {
                 "{command:?} left a pad doing something its thing cannot"
             );
             for (i, b) in show.bindings.iter().enumerate() {
-                let clash = show.bindings[..i]
-                    .iter()
-                    .any(|x| (b.key.is_some() && x.key == b.key) || x.action == b.action);
+                // A key or a MIDI note may be used again on another page,
+                // never by two pads that can be showing together.
+                let clash = show.bindings[..i].iter().any(|x| {
+                    let together = x.shares_a_page_with(b.page);
+                    (together && b.key.is_some() && x.key == b.key)
+                        || (together && b.midi.is_some() && x.midi == b.midi)
+                        || x.action == b.action
+                });
                 assert!(!clash, "{command:?} left two keys for one thing, or one key for two");
+                assert!(b.page <= PAGES, "{command:?}");
             }
             // Nothing dangles: every folder, group and key points at
             // something, and a folder's effects sit together. Mending a
@@ -3031,6 +3125,87 @@ mod tests {
             ParamValue::Text("#ff0000,#00ff00,#0000ff|loop".into()),
             "a refused value changes nothing"
         );
+    }
+
+    #[test]
+    fn colour_pads_and_pages_of_pads() {
+        let mut show = show_with_device();
+        let colours = |show: &mut Show, name: &str, value: &str| {
+            apply(
+                show,
+                &Command::AddColourPad {
+                    name: name.into(),
+                    value: value.into(),
+                },
+            )
+        };
+        colours(&mut show, "Neon", "neon").unwrap();
+        colours(&mut show, "Flag", "#FF0000,#ffffff").unwrap();
+        assert_eq!(show.live.swatches.len(), 2);
+        assert_eq!(
+            show.live.swatches[1].value, "#ff0000,#ffffff",
+            "tidied like any palette"
+        );
+        assert!(
+            colours(&mut show, "Again", "neon").is_err(),
+            "one pad for one set of colours"
+        );
+        assert!(colours(&mut show, "Bad", "no-such").is_err());
+        let pad = |show: &Show, n: usize| {
+            let id = show.live.swatches[n].id;
+            show.binding_for(Action::Colours { id }).unwrap().id
+        };
+        let (neon, flag) = (pad(&show, 0), pad(&show, 1));
+        // Removing the pad removes the colours it stood for, in force or not.
+        show.live.colours = Some(show.live.swatches[0].id);
+        apply(&mut show, &Command::Unbind { id: neon }).unwrap();
+        assert_eq!((show.live.swatches.len(), show.live.colours), (1, None));
+
+        // Pages: the same key can be given to pads on different pages.
+        let layer = show.layers[0].id;
+        let bind = |show: &mut Show, action| {
+            apply(
+                show,
+                &Command::Bind {
+                    key: Some("KeyQ".into()),
+                    label: "q".into(),
+                    action,
+                    mode: KeyMode::Toggle,
+                },
+            )
+        };
+        let page = |show: &mut Show, id, page| apply(show, &Command::SetPadPage { id, page });
+        let swatch = show.live.swatches[0].id;
+        bind(&mut show, Action::Layer { id: layer }).unwrap();
+        let effect_pad = show.binding_for(Action::Layer { id: layer }).unwrap().id;
+        page(&mut show, effect_pad, 1).unwrap();
+        page(&mut show, flag, 2).unwrap();
+        bind(&mut show, Action::Colours { id: swatch }).unwrap();
+        let key = |show: &Show, id: u32| show.bindings.iter().find(|b| b.id == id).unwrap().key.clone();
+        assert_eq!(key(&show, effect_pad).as_deref(), Some("KeyQ"), "page 1 keeps its Q");
+        assert_eq!(
+            key(&show, flag).as_deref(),
+            Some("KeyQ"),
+            "and page 2 has a Q of its own"
+        );
+        // Moved onto the same page, the pad that moved gives the key up.
+        page(&mut show, flag, 1).unwrap();
+        assert_eq!((key(&show, effect_pad).is_some(), key(&show, flag)), (true, None));
+        // A pad on every page shares a page with all of them.
+        page(&mut show, flag, 2).unwrap();
+        bind(&mut show, Action::Colours { id: swatch }).unwrap();
+        page(&mut show, flag, 0).unwrap();
+        assert_eq!(key(&show, flag), None);
+        assert!(page(&mut show, flag, 9).is_err());
+        assert!(page(&mut show, 9999, 1).is_err());
+        // Which page is showing.
+        apply(&mut show, &Command::SetPage { page: 3 }).unwrap();
+        assert_eq!(show.live.page, 3);
+        assert!(apply(&mut show, &Command::SetPage { page: 0 }).is_err());
+        assert!(apply(&mut show, &Command::SetPage { page: 5 }).is_err());
+        let mut mended = show.clone();
+        mended.repair();
+        assert_eq!(mended, show);
     }
 
     #[test]
