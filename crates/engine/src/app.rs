@@ -2004,6 +2004,11 @@ mod tests {
             angle: None,
             spin: None,
             turns: None,
+            mirror: None,
+            repeat: None,
+            kaleido: None,
+            spread: None,
+            hue: None,
         })
         .unwrap();
         run(Command::SetLink {
@@ -2011,6 +2016,7 @@ mod tests {
             param: "speed".into(),
             source: Source::Bass,
             amount: 0.3,
+            smooth: None,
         })
         .unwrap();
         run(Command::RenameLayer {
@@ -2094,7 +2100,8 @@ mod tests {
                 vec![Link {
                     param: "speed".into(),
                     source: Source::Bass,
-                    amount: 0.3
+                    amount: 0.3,
+                    smooth: 0.0,
                 }]
             );
             assert!(used.targets.is_empty(), "no lights are named");

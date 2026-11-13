@@ -8,7 +8,7 @@
 use crate::audio::Band;
 use crate::effects;
 use crate::params::{ParamValue, Params};
-use crate::show::{Blend, Kind, LINK_STRENGTH, Layer, Link, Mood, Only, Show, Sound, Source};
+use crate::show::{Blend, Kind, LINK_STRENGTH, Layer, Link, Mirror, Mood, Only, Show, Sound, Source};
 
 pub struct LookLayer {
     pub effect: &'static str,
@@ -455,6 +455,11 @@ impl Show {
                 angle: 0.0,
                 spin: 0.0,
                 turns: false,
+                mirror: Mirror::Off,
+                repeat: 1,
+                kaleido: 0,
+                spread: 0.0,
+                hue: 0.0,
                 links: part
                     .links
                     .iter()
@@ -462,6 +467,7 @@ impl Show {
                         param: (*param).to_string(),
                         source: *source,
                         amount: *amount,
+                        smooth: 0.0,
                     })
                     .collect(),
             });

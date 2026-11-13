@@ -9,7 +9,7 @@ use crate::effects;
 use crate::layout::{Fixture, Shape};
 use crate::params::{ParamKind, ParamReader, ParamSpec, ParamValue, Params};
 use crate::show::{Blend, Layer, Show};
-use crate::show::{LINK_ANGLE, LINK_STRENGTH, Source};
+use crate::show::{LINK_ANGLE, LINK_HUE, LINK_STRENGTH, Link, Mirror};
 
 /// A hit fired by hand for one layer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,6 +51,117 @@ struct LayerState {
     segments: Vec<Segment>,
     /// How far the layer's spin has carried the pattern round, in degrees.
     spun: f32,
+    /// Where each of the layer's links stands, for the ones that are
+    /// smoothed: a needle that rises quickly and settles back slowly.
+    link_values: Vec<f32>,
+}
+
+/// What a layer does to a pattern after turning it: wrap it round the
+/// middle as a kaleidoscope, shift it along, repeat it, mirror it. Each
+/// step takes a place in the pattern and gives another, still within it,
+/// so no effect needs to know.
+#[derive(Clone, Copy)]
+struct Fold {
+    mirror: Mirror,
+    repeat: f32,
+    kaleido: u8,
+    /// How far along the pattern this light starts, from the layer's spread.
+    shift: f32,
+    /// Width over height of the lights, for a round kaleidoscope.
+    aspect: f32,
+    flat: bool,
+}
+
+impl Fold {
+    fn does_something(&self) -> bool {
+        self.mirror != Mirror::Off || self.repeat > 1.0 || self.wraps() || self.shift != 0.0
+    }
+
+    /// Whether the pattern is wrapped round the middle. A line of lights
+    /// has no middle to wrap round.
+    fn wraps(&self) -> bool {
+        self.kaleido >= 2 && !self.flat
+    }
+
+    fn apply(&self, mut x: f32, mut y: f32) -> (f32, f32) {
+        if self.wraps() {
+            // Across the pattern runs out from the middle; down the
+            // pattern runs round one wedge and back again in the next.
+            let (dx, dy) = ((x - 0.5) * self.aspect, y - 0.5);
+            let far = (0.5 * self.aspect).hypot(0.5);
+            let wedge = std::f32::consts::TAU / self.kaleido as f32;
+            let round = dy.atan2(dx).rem_euclid(wedge);
+            let within = if round > wedge * 0.5 { wedge - round } else { round };
+            x = (dx.hypot(dy) / far).min(1.0);
+            y = within / (wedge * 0.5);
+        }
+        if self.shift != 0.0 {
+            x = (x + self.shift).rem_euclid(1.0);
+        }
+        if self.repeat > 1.0 {
+            let along = x * self.repeat;
+            // The very last light ends the last copy; it does not start another.
+            x = if along >= self.repeat { 1.0 } else { along.fract() };
+        }
+        let fold = |v: f32| 1.0 - (2.0 * v - 1.0).abs();
+        match self.mirror {
+            Mirror::Off => {}
+            Mirror::Across => x = fold(x),
+            Mirror::Down => y = fold(y),
+            Mirror::Both => (x, y) = (fold(x), fold(y)),
+        }
+        (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))
+    }
+}
+
+/// Every colour shifted round the colour wheel by an angle. How strong
+/// and how pure a colour is stay as they were, so red becomes an equally
+/// full green, and grey stays grey.
+#[derive(Clone, Copy)]
+struct HueTurn(f32);
+
+impl HueTurn {
+    fn new(degrees: f32) -> Option<Self> {
+        let degrees = degrees.rem_euclid(360.0);
+        if !(1e-3..360.0 - 1e-3).contains(&degrees) {
+            return None;
+        }
+        // In sixths of the wheel: red, yellow, green, cyan, blue, magenta.
+        Some(Self(degrees / 60.0))
+    }
+
+    fn apply(&self, c: Rgb) -> Rgb {
+        let high = c.r.max(c.g).max(c.b);
+        let low = c.r.min(c.g).min(c.b);
+        let chroma = high - low;
+        if chroma <= 1e-6 || !chroma.is_finite() {
+            return c;
+        }
+        let at = if high == c.r {
+            ((c.g - c.b) / chroma).rem_euclid(6.0)
+        } else if high == c.g {
+            (c.b - c.r) / chroma + 2.0
+        } else {
+            (c.r - c.g) / chroma + 4.0
+        };
+        let at = (at + self.0).rem_euclid(6.0);
+        let part = |offset: f32| {
+            let k = (offset + at).rem_euclid(6.0);
+            high - chroma * k.min(4.0 - k).clamp(0.0, 1.0)
+        };
+        Rgb::new(part(5.0), part(3.0), part(1.0))
+    }
+}
+
+/// How a smoothed link's needle moves towards what its source reads now:
+/// quickly when rising, a fifth as quickly when falling.
+fn settle(needle: f32, reading: f32, smooth: f32, dt: f32) -> f32 {
+    if smooth <= 0.0 || !needle.is_finite() {
+        return reading;
+    }
+    let fall = 0.05 + smooth * smooth * 2.0;
+    let seconds = if reading > needle { fall * 0.2 } else { fall };
+    needle + (reading - needle) * (1.0 - (-dt / seconds).exp())
 }
 
 /// A pattern turned by some angle inside a box of a given shape.
@@ -162,6 +273,7 @@ impl Renderer {
                         effect: (def.make)(),
                         segments: Vec::new(),
                         spun: 0.0,
+                        link_values: Vec::new(),
                     },
                 );
             }
@@ -228,13 +340,23 @@ impl Renderer {
                 0.0
             };
             // Settings that follow the music or a fader, moved for this frame.
-            let (linked, own_strength, swing) = linked_settings(layer, &def.info.params, |source| {
-                source.value(&heard, audio, &show.live.faders, time)
+            let needles = &mut state.link_values;
+            needles.resize(layer.links.len(), 0.0);
+            let Moved {
+                params: linked,
+                strength: own_strength,
+                swing,
+                hue,
+            } = linked_settings(layer, &def.info.params, |i, link| {
+                let reading = link.source.value(&heard, audio, &show.live.faders, time);
+                needles[i] = settle(needles[i], reading, link.smooth, dt);
+                needles[i]
             });
             // The pattern's angle: where it is set, how far it has spun,
             // and how far a link is pushing it.
             state.spun = (state.spun + layer.spin * dt).rem_euclid(360.0);
             let angle = layer.angle + state.spun + swing;
+            let hue = HueTurn::new(layer.hue + hue);
             // A colour pad in force: every palette setting takes its colours.
             let linked = match &recolour {
                 Some(value) if def.info.params.iter().any(|p| matches!(p.kind, ParamKind::Palette)) => {
@@ -272,7 +394,7 @@ impl Renderer {
             // part of the sound is. Zero leaves the effect as it is.
             let pulse = layer.sound.pulse.clamp(0.0, 1.0);
             let follow = 1.0 - pulse + pulse * heard.level;
-            for segment in &state.segments {
+            for (nth, segment) in state.segments.iter().enumerate() {
                 // Each light, drawn by itself, has its own shape.
                 ctx.aspect = segment.aspect;
                 ctx.flat = segment.flat;
@@ -283,12 +405,38 @@ impl Renderer {
                 if let Some(turn) = &turn {
                     ctx.aspect = turn.aspect();
                 }
+                let fold = Fold {
+                    mirror: layer.mirror,
+                    repeat: layer.repeat.clamp(1, 8) as f32,
+                    kaleido: layer.kaleido.min(12),
+                    // From one light to the next, when each has the pattern to itself.
+                    shift: if layer.each {
+                        (nth as f32 * layer.spread).rem_euclid(1.0)
+                    } else {
+                        0.0
+                    },
+                    aspect: ctx.aspect,
+                    flat: segment.flat,
+                };
+                let fold = fold.does_something().then_some(fold);
+                // Wrapped round the middle, the pattern is as wide as it is high.
+                if fold.is_some_and(|f| f.wraps()) {
+                    ctx.aspect = 1.0;
+                }
                 for t in &segment.targets {
                     let (x, y) = match &turn {
                         Some(turn) => turn.apply(t.x, t.y),
                         None => (t.x, t.y),
                     };
-                    let src = state.effect.shade(x, y, &ctx).clamp().scale(follow);
+                    let (x, y) = match &fold {
+                        Some(fold) => fold.apply(x, y),
+                        None => (x, y),
+                    };
+                    let mut src = state.effect.shade(x, y, &ctx).clamp();
+                    if let Some(hue) = &hue {
+                        src = hue.apply(src).clamp();
+                    }
+                    let src = src.scale(follow);
                     let dst = &mut self.frame[t.index as usize];
                     *dst = match layer.blend {
                         Blend::Normal => dst.lerp(src, opacity),
@@ -399,12 +547,17 @@ impl Renderer {
 /// The layer's settings as its links leave them for this frame: the
 /// effect's settings if any moved, the strength, and how many degrees the
 /// pattern is pushed round (half a turn at most, either way).
-fn linked_settings(layer: &Layer, specs: &[ParamSpec], value_of: impl Fn(Source) -> f32) -> (Option<Params>, f32, f32) {
+fn linked_settings(layer: &Layer, specs: &[ParamSpec], mut value_of: impl FnMut(usize, &Link) -> f32) -> Moved {
     let mut strength = layer.opacity;
     let mut swing = 0.0;
+    let mut hue = 0.0;
     let mut params: Option<Params> = None;
-    for link in &layer.links {
-        let push = value_of(link.source) * link.amount.clamp(-1.0, 1.0);
+    for (i, link) in layer.links.iter().enumerate() {
+        let push = value_of(i, link) * link.amount.clamp(-1.0, 1.0);
+        if link.param == LINK_HUE {
+            hue += push * 180.0;
+            continue;
+        }
         if link.param == LINK_STRENGTH {
             strength = (strength + push).clamp(0.0, 1.0);
             continue;
@@ -425,7 +578,23 @@ fn linked_settings(layer: &Layer, specs: &[ParamSpec], value_of: impl Fn(Source)
             .get_or_insert_with(|| layer.params.clone())
             .insert(link.param.clone(), ParamValue::Number(moved));
     }
-    (params, strength, swing)
+    Moved {
+        params,
+        strength,
+        swing,
+        hue,
+    }
+}
+
+/// A layer's settings as its links leave them for one frame.
+struct Moved {
+    /// The effect's own settings, if a link moved any.
+    params: Option<Params>,
+    strength: f32,
+    /// Degrees the pattern is pushed round.
+    swing: f32,
+    /// Degrees the colours are pushed round the colour wheel.
+    hue: f32,
 }
 
 fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Segment> {
@@ -579,6 +748,7 @@ mod tests {
     use super::*;
     use crate::layout::Device;
     use crate::params::ParamValue;
+    use crate::show::Source;
 
     fn device(pixels: u32) -> Device {
         Device {
@@ -735,6 +905,7 @@ mod tests {
             param: LINK_ANGLE.into(),
             source: Source::Fader { n: 1 },
             amount: 0.5,
+            smooth: 0.0,
         });
         show.live.faders[0] = 1.0;
         assert_eq!(sides(&show), "??rb");
@@ -751,6 +922,175 @@ mod tests {
         show.layers[0].angle = 90.0;
         let (_, after) = render(&show);
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_pattern_can_be_mirrored_repeated_and_spread_from_light_to_light() {
+        // Red on the left, blue on the right, along a row of eight lights.
+        let colours = |show: &Show| -> String {
+            let (_, frame) = render(show);
+            frame.iter().map(|c| if c.r > 0.5 { 'r' } else { 'b' }).collect()
+        };
+        let mut show = Show::default();
+        show.layers.clear();
+        let layer = show.add_layer("picture");
+        show.layer_mut(layer)
+            .unwrap()
+            .params
+            .insert("picture".into(), ParamValue::Text("2x1:/wAAAAD/".into()));
+        show.add_device(device(8), None);
+        assert_eq!(colours(&show), "rrrrbbbb");
+        // Mirrored: the whole pattern from the edge to the middle, and back.
+        show.layer_mut(layer).unwrap().mirror = Mirror::Across;
+        assert_eq!(colours(&show), "rrbbbbrr");
+        show.layer_mut(layer).unwrap().mirror = Mirror::Off;
+        // Twice across.
+        show.layer_mut(layer).unwrap().repeat = 2;
+        assert_eq!(colours(&show), "rrbbrrbb");
+        show.layer_mut(layer).unwrap().repeat = 4;
+        assert_eq!(colours(&show), "rbrbrbrb");
+        // Repeated and mirrored: each copy is folded.
+        show.layer_mut(layer).unwrap().repeat = 2;
+        show.layer_mut(layer).unwrap().mirror = Mirror::Across;
+        assert_eq!(colours(&show), "rbbrrbbr");
+
+        // Spread: three lights each with the pattern to itself, the second
+        // and third shifted along by a quarter and a half of it.
+        let mut show = Show::default();
+        show.layers.clear();
+        let layer = show.add_layer("picture");
+        show.layer_mut(layer)
+            .unwrap()
+            .params
+            .insert("picture".into(), ParamValue::Text("2x1:/wAAAAD/".into()));
+        for _ in 0..3 {
+            show.add_device(device(4), None);
+        }
+        show.layer_mut(layer).unwrap().each = true;
+        assert_eq!(colours(&show), "rrbbrrbbrrbb");
+        show.layer_mut(layer).unwrap().spread = 0.25;
+        assert_eq!(colours(&show), "rrbbrbbrbbrr");
+        // Drawn once across all the lights (which lie one under another
+        // here) there is nothing to spread over.
+        show.layer_mut(layer).unwrap().each = false;
+        assert_eq!(colours(&show), "rrbbrrbbrrbb");
+    }
+
+    #[test]
+    fn a_kaleidoscope_is_the_same_in_every_wedge_and_mirrored_between_them() {
+        let (mut show, layer) = picture_show(0.0);
+        show.fixtures[0].shape = Shape::Matrix {
+            cols: 16,
+            rows: 16,
+            serpentine: false,
+        };
+        show.devices[0].pixel_count = 256;
+        // A pattern with no symmetry of its own: fire.
+        show.layer_mut(layer).unwrap().effect = "plasma".into();
+        show.layer_mut(layer).unwrap().params.clear();
+        show.layer_mut(layer).unwrap().kaleido = 4;
+        let (_, frame) = render(&show);
+        let at = |col: usize, row: usize| frame[row * 16 + col].to_bytes();
+        for (col, row) in [(1, 2), (3, 6), (5, 5), (0, 7), (6, 1)] {
+            // Four wedges: a quarter turn brings the picture onto itself,
+            // and so does a flip from left to right.
+            assert_eq!(at(col, row), at(15 - row, col), "a quarter turn at {col},{row}");
+            assert_eq!(at(col, row), at(15 - col, row), "a flip at {col},{row}");
+            assert_eq!(at(col, row), at(col, 15 - row), "a flip the other way at {col},{row}");
+        }
+        // And it is a picture, not one flat colour.
+        assert!(frame.iter().any(|c| c.to_bytes() != frame[0].to_bytes()));
+        // A strip has no middle to wrap round: left as it was.
+        let mut strip = solid_show("#ffffff");
+        strip.layers[0].effect = "picture".into();
+        strip.layers[0]
+            .params
+            .insert("picture".into(), ParamValue::Text("2x1:/wAAAAD/".into()));
+        strip.add_device(device(4), None);
+        let (_, before) = render(&strip);
+        strip.layers[0].kaleido = 6;
+        assert_eq!(render(&strip).1, before);
+    }
+
+    #[test]
+    fn a_hue_shift_turns_every_colour_and_leaves_grey_alone() {
+        let mut show = solid_show("#ff0000");
+        show.add_device(device(1), None);
+        let colour = |show: &Show| render(show).1[0];
+        // A third of the way round the wheel, red is green; two thirds, blue.
+        // Each is as full as the red was: nothing is washed out or dimmed.
+        show.layers[0].hue = 120.0;
+        assert_eq!(colour(&show).to_bytes(), [0, 255, 0]);
+        show.layers[0].hue = 240.0;
+        assert_eq!(colour(&show).to_bytes(), [0, 0, 255]);
+        show.layers[0].hue = 60.0;
+        assert_eq!(colour(&show).to_bytes(), [255, 255, 0]);
+        show.layers[0].hue = 300.0;
+        assert_eq!(colour(&show).to_bytes(), [255, 0, 255]);
+        show.layers[0].hue = 360.0;
+        assert_eq!(
+            colour(&show).to_bytes(),
+            [255, 0, 0],
+            "all the way round is where it began"
+        );
+        // White and grey have no hue to turn.
+        let mut show = solid_show("#808080");
+        show.add_device(device(1), None);
+        show.layers[0].hue = 77.0;
+        let c = colour(&show).to_bytes();
+        assert!(c.iter().all(|v| (*v as i32 - 128).abs() <= 2), "{c:?}");
+        // A link can push the hue: a fader at full with an amount of two
+        // thirds turns red to green.
+        let mut show = solid_show("#ff0000");
+        show.add_device(device(1), None);
+        show.layers[0].links.push(Link {
+            param: LINK_HUE.into(),
+            source: Source::Fader { n: 1 },
+            amount: 2.0 / 3.0,
+            smooth: 0.0,
+        });
+        show.live.faders[0] = 1.0;
+        assert!(colour(&show).g > 0.6);
+    }
+
+    #[test]
+    fn a_smoothed_link_rises_quickly_and_settles_back_slowly() {
+        let mut show = solid_show("#ffffff");
+        show.add_device(device(1), None);
+        show.layers[0].opacity = 0.0;
+        show.layers[0].links.push(Link {
+            param: LINK_STRENGTH.into(),
+            source: Source::Fader { n: 1 },
+            amount: 1.0,
+            smooth: 0.6,
+        });
+        let mut r = Renderer::new();
+        r.sync(&show);
+        let mut step = |show: &Show, frames: u32| {
+            let mut last = 0.0;
+            for _ in 0..frames {
+                last = r.render(show, 0.0, 1.0 / 60.0, &AudioFeatures::default())[0].r;
+            }
+            last
+        };
+        show.live.faders[0] = 1.0;
+        let after_tenth = step(&show, 6);
+        assert!(
+            (0.3..0.95).contains(&after_tenth),
+            "most of the way in a tenth of a second: {after_tenth}"
+        );
+        assert!(step(&show, 60) > 0.99);
+        show.live.faders[0] = 0.0;
+        let falling = step(&show, 6);
+        assert!(
+            falling > 0.8,
+            "still high a tenth of a second after the source dropped: {falling}"
+        );
+        assert!(step(&show, 300) < 0.02, "and down in the end");
+        // Not smoothed, it follows at once.
+        show.layers[0].links[0].smooth = 0.0;
+        show.live.faders[0] = 1.0;
+        assert!(step(&show, 1) > 0.99);
     }
 
     #[test]
@@ -1264,6 +1604,7 @@ mod tests {
             param: LINK_STRENGTH.into(),
             source: Source::Level,
             amount: 0.8,
+            smooth: 0.0,
         });
         let at = |show: &Show, level: f32| {
             let mut r = Renderer::new();
@@ -1303,6 +1644,7 @@ mod tests {
             param: "floor".into(),
             source: Source::Fader { n: 2 },
             amount: 1.0,
+            smooth: 0.0,
         });
         let brightest = |show: &Show| {
             let mut r = Renderer::new();

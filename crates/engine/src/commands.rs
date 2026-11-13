@@ -7,7 +7,7 @@ use darkrgb_core::layout::{MAX_PATH_POINTS, MAX_PIXELS};
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::picture::{MAX_SIDE, Picture};
 use darkrgb_core::show::{
-    Blend, FADERS, FRAME_RATES, LINK_ANGLE, LINK_STRENGTH, MAX_LINKS, PAGES, linkable, mend_links,
+    Blend, FADERS, FRAME_RATES, LINK_ANGLE, LINK_HUE, LINK_STRENGTH, MAX_LINKS, Mirror, PAGES, linkable, mend_links,
 };
 use darkrgb_core::timeline::{Clip, ClipKind, MAX_CLIPS, MAX_LENGTH, MIN_CLIP};
 use darkrgb_core::{
@@ -286,6 +286,20 @@ pub enum Command {
         /// Turn with each light, or stay upright in the room.
         #[serde(default)]
         turns: Option<bool>,
+        #[serde(default)]
+        mirror: Option<Mirror>,
+        /// Copies of the pattern side by side, 1 to 8.
+        #[serde(default)]
+        repeat: Option<u8>,
+        /// Wedges of a kaleidoscope: 0 for none, or 2 to 12.
+        #[serde(default)]
+        kaleido: Option<u8>,
+        /// How far the pattern shifts from one light to the next, 0..1.
+        #[serde(default)]
+        spread: Option<f32>,
+        /// Degrees every colour is shifted round the colour wheel.
+        #[serde(default)]
+        hue: Option<f32>,
     },
     /// Gives a layer a label. An empty name goes back to the effect's own.
     RenameLayer {
@@ -554,6 +568,10 @@ pub enum Command {
         source: Source,
         /// -1..1: how far it moves, as a share of the slider's range.
         amount: f32,
+        /// How much the source is smoothed, 0..1. Left out, a link keeps
+        /// the smoothing it has.
+        #[serde(default)]
+        smooth: Option<f32>,
     },
     /// Lets a slider go back to staying where it is put.
     RemoveLink {
@@ -858,6 +876,9 @@ pub(crate) fn set_up(show: &mut Show, kind: Kind) -> Result<(), String> {
             show.live.launch = Launch::Beat;
             // Whoever runs a dance floor has chosen strobes.
             show.flash = FlashSettings::off();
+            // And decides for themselves when the lights hold back: a show
+            // being played by hand is not dimmed because the song went quiet.
+            show.audio.dynamics = 0.0;
             for pad in [QuickPad::Flash, QuickPad::Strobe, QuickPad::Pulse, QuickPad::Lightning] {
                 let (effect, _, _) = pad.parts();
                 let there = show.layers.iter().any(|l| {
@@ -1474,9 +1495,22 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             angle,
             spin,
             turns,
+            mirror,
+            repeat,
+            kaleido,
+            spread,
+            hue,
         } => {
             let angle = angle.map(|a| finite(a, "The angle")).transpose()?;
             let spin = spin.map(|s| finite(s, "The spin")).transpose()?;
+            let spread = spread.map(|s| finite(s, "The spread")).transpose()?;
+            let hue = hue.map(|h| finite(h, "The hue")).transpose()?;
+            if repeat.is_some_and(|r| !(1..=8).contains(&r)) {
+                return Err("a pattern can be repeated up to 8 times".into());
+            }
+            if kaleido.is_some_and(|k| k == 1 || k > 12) {
+                return Err("a kaleidoscope has between 2 and 12 wedges, or none".into());
+            }
             if let Some(effect) = effect
                 && effects::find(effect).is_none()
             {
@@ -1501,7 +1535,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 layer.params.clear();
                 layer
                     .links
-                    .retain(|l| l.param == LINK_STRENGTH || l.param == LINK_ANGLE);
+                    .retain(|l| [LINK_STRENGTH, LINK_ANGLE, LINK_HUE].contains(&l.param.as_str()));
             }
             if let Some(o) = opacity {
                 layer.opacity = o.clamp(0.0, 1.0);
@@ -1532,6 +1566,21 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(t) = turns {
                 layer.turns = *t;
+            }
+            if let Some(m) = mirror {
+                layer.mirror = *m;
+            }
+            if let Some(r) = repeat {
+                layer.repeat = *r;
+            }
+            if let Some(k) = kaleido {
+                layer.kaleido = *k;
+            }
+            if let Some(s) = spread {
+                layer.spread = s.clamp(0.0, 1.0);
+            }
+            if let Some(h) = hue {
+                layer.hue = h.rem_euclid(360.0);
             }
             Ok(())
         }
@@ -1966,12 +2015,16 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             param,
             source,
             amount,
+            smooth,
         } => {
             let amount = finite(*amount, "The amount")?.clamp(-1.0, 1.0);
+            let smooth = smooth.map(|s| finite(s, "The smoothing")).transpose()?;
+            let length = |beats: f32| Ok::<f32, String>(finite(beats, "The length of the wave")?.clamp(0.25, 64.0));
             let source = match *source {
-                Source::Wave { beats } => Source::Wave {
-                    beats: finite(beats, "The length of the wave")?.clamp(0.25, 64.0),
-                },
+                Source::Wave { beats } => Source::Wave { beats: length(beats)? },
+                Source::Ramp { beats } => Source::Ramp { beats: length(beats)? },
+                Source::Square { beats } => Source::Square { beats: length(beats)? },
+                Source::Random { beats } => Source::Random { beats: length(beats)? },
                 Source::Fader { n } if !(1..=FADERS as u8).contains(&n) => {
                     return Err(format!("there are {FADERS} faders"));
                 }
@@ -1985,6 +2038,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 Some(link) => {
                     link.source = source;
                     link.amount = amount;
+                    if let Some(smooth) = smooth {
+                        link.smooth = smooth.clamp(0.0, 1.0);
+                    }
                 }
                 None => {
                     if layer.links.len() >= MAX_LINKS {
@@ -1996,6 +2052,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                         param: param.clone(),
                         source,
                         amount,
+                        smooth: smooth.unwrap_or(0.0).clamp(0.0, 1.0),
                     });
                 }
             }
@@ -2438,6 +2495,69 @@ mod tests {
     }
 
     #[test]
+    fn a_pattern_can_be_mirrored_repeated_wrapped_spread_and_recoloured() {
+        let mut show = Show::default();
+        let layer = show.layers[0].id;
+        let send = |show: &mut Show, json: &str| {
+            let command: Command =
+                serde_json::from_str(&format!(r#"{{"type":"update_layer","id":{layer},{json}}}"#)).unwrap();
+            apply(show, &command)
+        };
+        send(
+            &mut show,
+            r#""mirror":"both","repeat":3,"kaleido":6,"spread":0.25,"hue":-90"#,
+        )
+        .unwrap();
+        let l = &show.layers[0];
+        assert_eq!(
+            (l.mirror, l.repeat, l.kaleido, l.spread, l.hue),
+            (Mirror::Both, 3, 6, 0.25, 270.0)
+        );
+        // Out of range is refused or brought in, and changes nothing else.
+        let before = show.clone();
+        for bad in [r#""repeat":0"#, r#""repeat":9"#, r#""kaleido":1"#, r#""kaleido":13"#] {
+            assert!(send(&mut show, bad).is_err(), "{bad}");
+            assert_eq!(show, before);
+        }
+        send(&mut show, r#""spread":7,"hue":725"#).unwrap();
+        assert_eq!((show.layers[0].spread, show.layers[0].hue), (1.0, 5.0));
+        // Back to plain, none of it is written to the file.
+        send(&mut show, r#""mirror":"off","repeat":1,"kaleido":0,"spread":0,"hue":0"#).unwrap();
+        let text = serde_json::to_string(&show.layers[0]).unwrap();
+        for word in ["mirror", "repeat", "kaleido", "spread", "hue"] {
+            assert!(!text.contains(word), "{word} in {text}");
+        }
+
+        // A hue can follow something; a link can be smoothed; the new
+        // waves are kept to a sane length.
+        let link = |show: &mut Show, source: Source, smooth: Option<f32>| {
+            apply(
+                show,
+                &Command::SetLink {
+                    layer,
+                    param: "hue".into(),
+                    source,
+                    amount: 0.5,
+                    smooth,
+                },
+            )
+        };
+        link(&mut show, Source::Ramp { beats: 1000.0 }, Some(0.4)).unwrap();
+        let l = &show.layers[0].links[0];
+        assert_eq!((l.source, l.smooth), (Source::Ramp { beats: 64.0 }, 0.4));
+        // Changing the source alone keeps the smoothing.
+        link(&mut show, Source::Random { beats: 0.0 }, None).unwrap();
+        let l = &show.layers[0].links[0];
+        assert_eq!((l.source, l.smooth), (Source::Random { beats: 0.25 }, 0.4));
+        link(&mut show, Source::Square { beats: 2.0 }, Some(9.0)).unwrap();
+        assert_eq!(show.layers[0].links[0].smooth, 1.0);
+        assert!(link(&mut show, Source::Bass, Some(f32::NAN)).is_err());
+        // The hue's link survives a change of effect, as the strength's does.
+        send(&mut show, r#""effect":"fire""#).unwrap();
+        assert_eq!(show.layers[0].links.len(), 1);
+    }
+
+    #[test]
     fn a_pattern_can_be_turned_and_set_spinning() {
         let mut show = Show::default();
         let layer = show.layers[0].id;
@@ -2453,6 +2573,11 @@ mod tests {
             angle,
             spin,
             turns,
+            mirror: None,
+            repeat: None,
+            kaleido: None,
+            spread: None,
+            hue: None,
         };
         apply(&mut show, &turn(Some(45.0), Some(20.0), Some(true))).unwrap();
         let l = &show.layers[0];
@@ -2483,6 +2608,7 @@ mod tests {
                 param: "angle".into(),
                 source: Source::Bass,
                 amount: 0.5,
+                smooth: None,
             },
         )
         .unwrap();
@@ -2721,6 +2847,11 @@ mod tests {
             angle: None,
             spin: None,
             turns: None,
+            mirror: None,
+            repeat: None,
+            kaleido: None,
+            spread: None,
+            hue: None,
         };
         // Same effect: settings stay.
         apply(&mut show, &update("flow")).unwrap();
@@ -3118,6 +3249,11 @@ mod tests {
                     angle: None,
                     spin: None,
                     turns: None,
+                    mirror: None,
+                    repeat: None,
+                    kaleido: None,
+                    spread: None,
+                    hue: None,
                 },
             )
         };
@@ -3443,6 +3579,11 @@ mod tests {
             angle: None,
             spin: None,
             turns: None,
+            mirror: None,
+            repeat: None,
+            kaleido: None,
+            spread: None,
+            hue: None,
         };
         assert!(apply(&mut show, &target(vec![9999])).is_err());
         apply(&mut show, &target(vec![fixture, fixture])).unwrap();
@@ -3685,15 +3826,17 @@ mod tests {
                 43 => Command::SetLink {
                     layer,
                     param: ["opacity", "speed", "palette", "floor", "decay", "nope"][r.next() as usize % 6].into(),
-                    source: match r.next() % 6 {
+                    source: match r.next() % 7 {
                         0 => Source::Level,
                         1 => Source::Beat,
                         2 => Source::Energy,
                         3 => Source::Wave { beats: r.number() },
                         4 => Source::Fader { n: r.next() as u8 },
+                        5 => Source::Random { beats: r.number() },
                         _ => Source::Bass,
                     },
                     amount: r.number(),
+                    smooth: r.maybe(Awkward::number),
                 },
                 44 => Command::RemoveLink {
                     layer,
@@ -3852,6 +3995,12 @@ mod tests {
                     angle: r.maybe(Awkward::number),
                     spin: r.maybe(Awkward::number),
                     turns: r.maybe(Awkward::flag),
+                    mirror: r
+                        .maybe(|r| [Mirror::Off, Mirror::Across, Mirror::Down, Mirror::Both][r.next() as usize % 4]),
+                    repeat: r.maybe(|r| [0, 1, 2, 8, 9, 255][r.next() as usize % 6]),
+                    kaleido: r.maybe(|r| [0, 1, 2, 12, 13, 255][r.next() as usize % 6]),
+                    spread: r.maybe(Awkward::number),
+                    hue: r.maybe(Awkward::number),
                 },
                 5 => Command::RemoveDevice { id: device },
                 6 | 7 => Command::SetParam {
@@ -4132,6 +4281,7 @@ mod tests {
                     param: param.into(),
                     source,
                     amount,
+                    smooth: None,
                 },
             )
         };
@@ -4157,7 +4307,8 @@ mod tests {
                     layer: 9999,
                     param: "speed".into(),
                     source: Source::Bass,
-                    amount: 0.5
+                    amount: 0.5,
+                    smooth: None,
                 }
             )
             .is_err()
@@ -4196,6 +4347,11 @@ mod tests {
                 angle: None,
                 spin: None,
                 turns: None,
+                mirror: None,
+                repeat: None,
+                kaleido: None,
+                spread: None,
+                hue: None,
             },
         )
         .unwrap();
@@ -4232,6 +4388,7 @@ mod tests {
                 param: format!("made_up_{i}"),
                 source: Source::Bass,
                 amount: 0.1,
+                smooth: 0.0,
             })
             .collect();
         assert!(
@@ -4241,7 +4398,8 @@ mod tests {
                     layer,
                     param: "speed".into(),
                     source: Source::Bass,
-                    amount: 0.5
+                    amount: 0.5,
+                    smooth: None,
                 }
             )
             .is_err()

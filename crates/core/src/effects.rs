@@ -235,8 +235,23 @@ impl Effect for Energy {
 
 // ------------------------------------------------------------ Beat pulse
 
+/// The choices for a length of time that can be counted in beats.
+const PACES: [&str; 4] = ["Its own time", "Half a beat", "A beat", "Two beats"];
+
+/// A length of time: the effect's own, in seconds, or so many beats when
+/// that was asked for and there is a tempo to count them by.
+fn paced(choice: usize, own_seconds: f32, ctx: &FrameCtx) -> f32 {
+    let beats = [0.0, 0.5, 1.0, 2.0][choice.min(3)];
+    if beats > 0.0 && ctx.audio.bpm > 0.0 {
+        beats * 60.0 / ctx.audio.bpm
+    } else {
+        own_seconds
+    }
+}
+
 struct BeatPulse {
     palette: Pal,
+    pace: usize,
     decay: f32,
     floor: f32,
     trigger: usize,
@@ -259,6 +274,7 @@ impl BeatPulse {
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "candy"),
                     ParamSpec::float("decay", "Fade time (s)", 0.05, 1.5, 0.35),
+                    ParamSpec::choice("pace", "Fades over", &PACES),
                     ParamSpec::float("floor", "Resting brightness", 0.0, 0.5, 0.04).advanced(),
                     ParamSpec::choice("trigger", "Flash on", &["Beat", "Any hit"]).advanced(),
                 ],
@@ -266,6 +282,7 @@ impl BeatPulse {
             make: || {
                 Box::new(BeatPulse {
                     palette: Pal::Borrowed(palette("candy")),
+                    pace: 0,
                     decay: 0.35,
                     floor: 0.04,
                     trigger: 0,
@@ -283,6 +300,7 @@ impl Effect for BeatPulse {
     fn configure(&mut self, p: &ParamReader) {
         self.palette = p.palette("palette");
         self.decay = p.float("decay");
+        self.pace = p.choice("pace");
         self.floor = p.float("floor");
         self.trigger = p.choice("trigger");
     }
@@ -308,7 +326,9 @@ impl Effect for BeatPulse {
             // Golden-ratio steps never repeat a colour twice in a row.
             self.hue = (self.hue + 0.618_034).fract();
         } else {
-            self.envelope *= (-ctx.dt / self.decay.max(0.01) * 3.0).exp();
+            // Counted in beats, a flash is gone just as the next is due.
+            let fade = paced(self.pace, self.decay, ctx);
+            self.envelope *= (-ctx.dt / fade.max(0.01) * 3.0).exp();
         }
     }
 
@@ -331,6 +351,7 @@ struct Bar {
 
 struct Sweep {
     palette: Pal,
+    pace: usize,
     time: f32,
     width: f32,
     direction: usize,
@@ -354,6 +375,7 @@ impl Sweep {
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("time", "Crossing time (s)", 0.1, 2.0, 0.45),
+                    ParamSpec::choice("pace", "A crossing takes", &PACES),
                     ParamSpec::choice(
                         "direction",
                         "Direction",
@@ -366,6 +388,7 @@ impl Sweep {
             make: || {
                 Box::new(Sweep {
                     palette: Pal::Borrowed(palette("neon")),
+                    pace: 0,
                     time: 0.45,
                     width: 0.14,
                     direction: 0,
@@ -384,14 +407,16 @@ impl Effect for Sweep {
     fn configure(&mut self, p: &ParamReader) {
         self.palette = p.palette("palette");
         self.time = p.float("time");
+        self.pace = p.choice("pace");
         self.width = p.float("width");
         self.direction = p.choice("direction");
         self.any_hit = p.choice("trigger") == 1;
     }
 
     fn update(&mut self, ctx: &FrameCtx) {
+        let crossing = paced(self.pace, self.time, ctx);
         for bar in &mut self.bars {
-            bar.at += ctx.dt / self.time.max(0.05);
+            bar.at += ctx.dt / crossing.max(0.05);
         }
         // A bar is done once its tail has left the far side.
         self.bars.retain(|b| b.at < 1.0 + self.width * 3.0);
@@ -1309,6 +1334,58 @@ mod tests {
             }
         }
         max
+    }
+
+    #[test]
+    fn a_sweep_and_a_pulse_can_take_their_time_from_the_tempo() {
+        // A sweep asked to cross in one beat: at 120 that is half a
+        // second, at 60 a whole one, whatever its own time says.
+        let crossed = |bpm: f32, pace: &str| {
+            let def = find("sweep").unwrap();
+            let mut params = Params::new();
+            params.insert("pace".into(), crate::params::ParamValue::Text(pace.into()));
+            params.insert(
+                "direction".into(),
+                crate::params::ParamValue::Text("Left to right".into()),
+            );
+            let mut fx = (def.make)();
+            let mut seconds = 0.0;
+            for frame in 0..240u32 {
+                let audio = AudioFeatures {
+                    bpm,
+                    // One beat, on the first frame, sets a bar going.
+                    beat_count: 1,
+                    active: true,
+                    ..AudioFeatures::default()
+                };
+                let c = ctx(frame as f64 / 60.0, audio, true);
+                fx.configure(&ParamReader::new(&def.info.params, &params));
+                fx.update(&c);
+                // Where the bar is: the brightest place along the strip.
+                let at = (0..100)
+                    .map(|i| i as f32 / 99.0)
+                    .max_by(|a, b| {
+                        let l = |x: f32| {
+                            let p = fx.shade(x, 0.5, &c);
+                            p.r + p.g + p.b
+                        };
+                        l(*a).total_cmp(&l(*b))
+                    })
+                    .unwrap();
+                if at >= 0.9 {
+                    seconds = frame as f32 / 60.0;
+                    break;
+                }
+            }
+            seconds
+        };
+        let (fast, slow) = (crossed(120.0, "A beat"), crossed(60.0, "A beat"));
+        assert!((0.35..0.6).contains(&fast), "{fast}");
+        assert!((0.75..1.1).contains(&slow), "{slow}");
+        // On its own time the tempo makes no difference.
+        assert_eq!(crossed(120.0, "Its own time"), crossed(60.0, "Its own time"));
+        // And with no tempo, a pace in beats falls back to the effect's own time.
+        assert_eq!(crossed(0.0, "A beat"), crossed(120.0, "Its own time"));
     }
 
     #[test]

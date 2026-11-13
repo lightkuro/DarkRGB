@@ -6,6 +6,7 @@
 // top reveals the rest.
 
 import {
+  RotateCw,
   AudioLines,
   Bookmark,
   BoxSelect,
@@ -57,7 +58,7 @@ import {
   type Show,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
-import { ANGLE, LinkedSlider, STRENGTH } from "./Links";
+import { ANGLE, HUE, LinkedSlider, STRENGTH } from "./Links";
 import { ConfirmButton, IconButton, NameField, Slider, Switch, useDismiss } from "./ui";
 import { PictureField } from "./PictureField";
 
@@ -468,31 +469,55 @@ export function EffectPicker({
 }
 
 /**
- * Turning the pattern: an angle, a spin, and whether it turns with a
- * matrix that has itself been turned on the stage. A single strip has
- * only one direction, so none of this changes what it shows.
+ * What can be done to any pattern, whatever the effect: turn it, set it
+ * spinning, mirror it, repeat it, wrap it round the middle, spread it
+ * from light to light, and shift its colours. A single strip has only
+ * one direction, so turning and wrapping change nothing on it.
  */
 function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matrices: boolean }) {
   const angle = layer.angle ?? 0;
   const spin = layer.spin ?? 0;
-  const linked = layer.links?.some((l) => l.param === ANGLE) ?? false;
+  const mirror = layer.mirror ?? "off";
+  const repeat = layer.repeat ?? 1;
+  const kaleido = layer.kaleido ?? 0;
+  const spread = layer.spread ?? 0;
+  const hue = layer.hue ?? 0;
+  const linked = (param: string) => layer.links?.some((l) => l.param === param) ?? false;
+  const update = (change: Partial<Extract<Parameters<typeof engine.send>[0], { type: "update_layer" }>>) =>
+    engine.send({ type: "update_layer", id: layer.id, ...change });
+  const slide = (key: string, make: (value: number) => Parameters<typeof engine.quiet>[0]) =>
+    numberSender(`${layer.id}:${key}`, make);
   // The simple layout shows what is set, and offers the angle once there
   // is a matrix for it to show on.
-  if (!full && !matrices && angle === 0 && spin === 0 && !linked) return null;
+  const showAngle = full || matrices || angle !== 0 || linked(ANGLE);
+  // Turned by an eighth of a turn at a time: upright, cornerwise, sideways.
+  const step = (by: number) => update({ angle: (((Math.round(angle / 45) + by) * 45) % 360 + 360) % 360 });
   return (
     <>
-      <LinkedSlider
-        layer={layer}
-        param={ANGLE}
-        offer={full}
-        label="Angle"
-        min={0}
-        max={360}
-        step={1}
-        value={angle}
-        format={(v) => `${Math.round(v) % 360}°`}
-        onChange={numberSender(`${layer.id}:angle`, (value) => ({ type: "update_layer", id: layer.id, angle: value }))}
-      />
+      {showAngle && (
+        <div className="angle-row">
+          <LinkedSlider
+            layer={layer}
+            param={ANGLE}
+            offer={full}
+            label="Angle"
+            min={0}
+            max={360}
+            step={full ? 1 : 45}
+            value={angle}
+            format={(v) => `${Math.round(v) % 360}°`}
+            onChange={slide("angle", (value) => ({ type: "update_layer", id: layer.id, angle: value }))}
+          />
+          <div className="tool-group angle-steps">
+            <button type="button" className="tool" aria-label="Turn the pattern 45 degrees anticlockwise" title="Turn 45° anticlockwise" onClick={() => step(-1)}>
+              <RotateCcw size={14} /> 45°
+            </button>
+            <button type="button" className="tool" aria-label="Turn the pattern 45 degrees clockwise" title="Turn 45° clockwise" onClick={() => step(1)}>
+              <RotateCw size={14} /> 45°
+            </button>
+          </div>
+        </div>
+      )}
       {(full || spin !== 0) && (
         <Slider
           label="Spin"
@@ -501,7 +526,7 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
           step={1}
           value={spin}
           format={(v) => (v === 0 ? "Still" : `${Math.abs(Math.round(v))}° a second${v < 0 ? ", backwards" : ""}`)}
-          onChange={numberSender(`${layer.id}:spin`, (value) => ({ type: "update_layer", id: layer.id, spin: value }))}
+          onChange={slide("spin", (value) => ({ type: "update_layer", id: layer.id, spin: value }))}
         />
       )}
       {layer.each && (full || layer.turns) && (
@@ -510,12 +535,76 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
             Turn with each light
             <span className="hint"> Off, the pattern stays the right way up however a matrix is hung.</span>
           </span>
-          <Switch
-            checked={layer.turns ?? false}
-            label="Turn the pattern with each light"
-            onChange={(turns) => engine.send({ type: "update_layer", id: layer.id, turns })}
-          />
+          <Switch checked={layer.turns ?? false} label="Turn the pattern with each light" onChange={(turns) => update({ turns })} />
         </div>
+      )}
+      {(full || mirror !== "off") && (
+        <div className="field">
+          <span className="field-head">
+            <span>Mirror</span>
+          </span>
+          <div className="segmented" role="radiogroup" aria-label="Mirror">
+            {(
+              [
+                ["off", "Off"],
+                ["across", "Left and right"],
+                ["down", "Up and down"],
+                ["both", "Both"],
+              ] as const
+            ).map(([id, name]) => (
+              <button key={id} type="button" role="radio" aria-checked={mirror === id} className={mirror === id ? "selected" : ""} onClick={() => update({ mirror: id })}>
+                {name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {(full || repeat > 1) && (
+        <Slider
+          label="Repeat"
+          min={1}
+          max={8}
+          step={1}
+          value={repeat}
+          format={(v) => (v <= 1 ? "Once" : `${Math.round(v)} times`)}
+          onChange={slide("repeat", (value) => ({ type: "update_layer", id: layer.id, repeat: Math.round(value) }))}
+        />
+      )}
+      {(full || kaleido > 0) && (
+        <Slider
+          label="Kaleidoscope"
+          min={1}
+          max={12}
+          step={1}
+          value={kaleido === 0 ? 1 : kaleido}
+          format={(v) => (v <= 1 ? "Off" : `${Math.round(v)} wedges`)}
+          onChange={slide("kaleido", (value) => ({ type: "update_layer", id: layer.id, kaleido: value <= 1 ? 0 : Math.round(value) }))}
+        />
+      )}
+      {layer.each && (full || spread > 0) && (
+        <Slider
+          label="Spread from light to light"
+          min={0}
+          max={1}
+          step={0.01}
+          value={spread}
+          format={(v) => (v === 0 ? "None" : `${Math.round(v * 100)}%`)}
+          onChange={slide("spread", (value) => ({ type: "update_layer", id: layer.id, spread: value }))}
+        />
+      )}
+      {(full || hue !== 0 || linked(HUE)) && (
+        <LinkedSlider
+          layer={layer}
+          param={HUE}
+          offer={full}
+          label="Colour shift"
+          min={0}
+          max={360}
+          step={1}
+          value={hue}
+          format={(v) => (Math.round(v) % 360 === 0 ? "None" : `${Math.round(v)}°`)}
+          onChange={slide("hue", (value) => ({ type: "update_layer", id: layer.id, hue: value }))}
+        />
       )}
     </>
   );

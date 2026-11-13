@@ -3050,6 +3050,15 @@ input.number {
   fill: var(--accent);
 }
 
+.angle-row {
+  display: grid;
+  gap: 6px;
+}
+
+.angle-steps {
+  justify-self: start;
+}
+
 /* ---------------------------------------------------------------- beat */
 
 .beat-bar {

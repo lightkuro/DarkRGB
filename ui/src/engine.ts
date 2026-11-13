@@ -50,7 +50,7 @@ export type Kind = "room" | "display" | "club" | "custom";
 /** Something a setting can follow. Each runs from 0 to 1. */
 export type Source =
   | { type: "level" | "bass" | "mid" | "treble" | "beat" | "hit" | "energy" }
-  | { type: "wave"; beats: number }
+  | { type: "wave" | "ramp" | "square" | "random"; beats: number }
   | { type: "fader"; n: number };
 
 /** One setting of an effect that moves by itself. */
@@ -60,7 +60,12 @@ export interface Link {
   source: Source;
   /** -1 to 1: how far it moves, as a share of the slider's range. */
   amount: number;
+  /** 0 to 1: how much the source is smoothed first. Left out when not at all. */
+  smooth?: number;
 }
+
+/** A pattern folded into mirror images of itself. */
+export type Mirror = "off" | "across" | "down" | "both";
 
 /** A kind of light an effect can be kept to. */
 export type Only = "any" | "strips" | "matrices";
@@ -253,6 +258,16 @@ export interface Layer {
   spin?: number;
   /** Drawn on each light, the pattern turns with a turned matrix instead of staying upright. */
   turns?: boolean;
+  /** Folded into mirror images. Left out when not. */
+  mirror?: Mirror;
+  /** Copies side by side, 1 to 8. Left out when 1. */
+  repeat?: number;
+  /** Wedges of a kaleidoscope, 2 to 12. Left out when off. */
+  kaleido?: number;
+  /** How far the pattern shifts from one light to the next, 0 to 1. */
+  spread?: number;
+  /** Degrees every colour is shifted round the colour wheel. */
+  hue?: number;
 }
 
 export interface Scene {
@@ -643,11 +658,16 @@ export type Command =
       angle?: number;
       spin?: number;
       turns?: boolean;
+      mirror?: Mirror;
+      repeat?: number;
+      kaleido?: number;
+      spread?: number;
+      hue?: number;
     }
   | { type: "set_path"; fixture: number; points: [number, number][]; closed: boolean }
   | { type: "set_param"; layer: number; param: string; value: ParamValue }
   | { type: "reset_params"; layer: number }
-  | { type: "set_link"; layer: number; param: string; source: Source; amount: number }
+  | { type: "set_link"; layer: number; param: string; source: Source; amount: number; smooth?: number }
   | { type: "remove_link"; layer: number; param: string }
   | { type: "set_fader"; n: number; value: number }
   | { type: "add_colour_pad"; name: string; value: string }

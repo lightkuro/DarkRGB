@@ -11,6 +11,8 @@ import { Slider } from "./ui";
 export const STRENGTH = "opacity";
 /** The name a link uses for the angle a layer's pattern is turned to. */
 export const ANGLE = "angle";
+/** The name a link uses for the hue a layer's colours are shifted by. */
+export const HUE = "hue";
 
 const SOURCES: { id: string; name: string; source: Source }[] = [
   { id: "level", name: "Loudness", source: { type: "level" } },
@@ -21,6 +23,9 @@ const SOURCES: { id: string; name: string; source: Source }[] = [
   { id: "hit", name: "Hits", source: { type: "hit" } },
   { id: "energy", name: "The song's energy", source: { type: "energy" } },
   { id: "wave", name: "A slow wave", source: { type: "wave", beats: 8 } },
+  { id: "ramp", name: "A climb, then back to the start", source: { type: "ramp", beats: 4 } },
+  { id: "square", name: "On, then off", source: { type: "square", beats: 2 } },
+  { id: "random", name: "A new level by chance", source: { type: "random", beats: 1 } },
   { id: "fader1", name: "Fader 1", source: { type: "fader", n: 1 } },
   { id: "fader2", name: "Fader 2", source: { type: "fader", n: 2 } },
   { id: "fader3", name: "Fader 3", source: { type: "fader", n: 3 } },
@@ -51,9 +56,17 @@ function sourceValue(source: Source, audio: AudioFeatures, faders: number[]): nu
       return audio.onset;
     case "energy":
       return audio.active ? audio.intensity : 0;
-    case "wave": {
+    case "wave":
+    case "ramp":
+    case "square":
+    case "random": {
       const turns =
         audio.bpm > 0 ? (audio.beat_count + audio.beat_phase) / source.beats : (performance.now() / 500) / source.beats;
+      const within = turns - Math.floor(turns);
+      if (source.type === "ramp") return within;
+      if (source.type === "square") return within < 0.5 ? 1 : 0;
+      // The engine draws its own lots; the mark only shows that it jumps.
+      if (source.type === "random") return (Math.sin(Math.floor(turns) * 12.9898) * 43758.5453) % 1 < 0 ? 0.3 : 0.8;
       return 0.5 - 0.5 * Math.cos(turns * Math.PI * 2);
     }
     case "fader":
@@ -95,6 +108,15 @@ function Editor({ layer, param, label, link }: { layer: Layer; param: string; la
     });
     senders.set(`${layer.id}:${param}`, sendAmount);
   }
+  // Smoothed, a setting rises quickly with its source and settles back slowly.
+  let sendSmooth = senders.get(`${layer.id}:${param}:smooth`);
+  if (!sendSmooth) {
+    sendSmooth = perFrame((smooth: number) => {
+      const now = engine.show.get()?.layers.find((l) => l.id === layer.id)?.links?.find((l) => l.param === param);
+      if (now) engine.quiet({ type: "set_link", layer: layer.id, param, source: now.source, amount: now.amount, smooth });
+    });
+    senders.set(`${layer.id}:${param}:smooth`, sendSmooth);
+  }
   return (
     <div className="link-editor" role="group" aria-label={`What ${label} follows`}>
       <label className="field inline">
@@ -104,9 +126,11 @@ function Editor({ layer, param, label, link }: { layer: Layer; param: string; la
           onChange={(e) => {
             const picked = SOURCES.find((s) => s.id === e.target.value);
             if (!picked) return engine.send({ type: "remove_link", layer: layer.id, param });
-            // A wave keeps its length when it is picked again.
+            // Something timed keeps its length when another timed thing is picked.
             const source =
-              picked.source.type === "wave" && link?.source.type === "wave" ? link.source : picked.source;
+              "beats" in picked.source && link && "beats" in link.source
+                ? { ...picked.source, beats: link.source.beats }
+                : picked.source;
             set(source, link?.amount ?? 0.5);
           }}
         >
@@ -118,18 +142,18 @@ function Editor({ layer, param, label, link }: { layer: Layer; param: string; la
           ))}
         </select>
       </label>
-      {link?.source.type === "wave" && (
-        <div className="segmented" role="radiogroup" aria-label="Length of the wave">
-          {[2, 4, 8, 16, 32].map((beats) => (
+      {link && "beats" in link.source && (
+        <div className="segmented" role="radiogroup" aria-label="How long one round takes">
+          {(link.source.type === "wave" ? [2, 4, 8, 16, 32] : [0.5, 1, 2, 4, 8]).map((beats) => (
             <button
               key={beats}
               type="button"
               role="radio"
-              aria-checked={link.source.type === "wave" && link.source.beats === beats}
-              className={link.source.type === "wave" && link.source.beats === beats ? "selected" : ""}
-              onClick={() => set({ type: "wave", beats }, link.amount)}
+              aria-checked={"beats" in link.source && link.source.beats === beats}
+              className={"beats" in link.source && link.source.beats === beats ? "selected" : ""}
+              onClick={() => "beats" in link.source && set({ ...link.source, beats }, link.amount)}
             >
-              {beats} beats
+              {beats === 0.5 ? "½ beat" : beats === 1 ? "1 beat" : `${beats} beats`}
             </button>
           ))}
         </div>
@@ -144,6 +168,15 @@ function Editor({ layer, param, label, link }: { layer: Layer; param: string; la
             value={link.amount}
             format={(v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}% of its range`}
             onChange={sendAmount}
+          />
+          <Slider
+            label="Smoothing"
+            min={0}
+            max={1}
+            step={0.01}
+            value={link.smooth ?? 0}
+            format={(v) => (v === 0 ? "None" : v < 0.35 ? "A little" : v < 0.7 ? "Smooth" : "Very smooth")}
+            onChange={(smooth) => sendSmooth!(smooth)}
           />
           <p className="hint">
             {label} moves from where its slider is set, {link.amount < 0 ? "down" : "up"} as{" "}

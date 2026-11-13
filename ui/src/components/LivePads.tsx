@@ -62,7 +62,8 @@ function fadersInUse(show: Show, hello: Hello): { n: number; moves: string[] }[]
     const effect = hello.effects.find((e) => e.id === layer.effect);
     for (const link of layer.links ?? []) {
       if (link.source.type !== "fader") continue;
-      const what = link.param === "opacity" ? "strength" : (effect?.params.find((p) => p.id === link.param)?.label ?? link.param);
+      const own: Record<string, string> = { opacity: "strength", angle: "angle", hue: "colour shift" };
+      const what = own[link.param] ?? effect?.params.find((p) => p.id === link.param)?.label ?? link.param;
       const line = `${layer.name ?? effect?.name ?? layer.effect}: ${what.toLowerCase()}`;
       const list = moves.get(link.source.n) ?? [];
       if (!list.includes(line)) list.push(line);

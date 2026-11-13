@@ -146,7 +146,23 @@ pub enum Source {
     Fader {
         n: u8,
     },
+    /// A steady climb from nothing to full, then straight back to
+    /// nothing, once every so many beats.
+    Ramp {
+        beats: f32,
+    },
+    /// Full for the first half of every so many beats, nothing for the rest.
+    Square {
+        beats: f32,
+    },
+    /// A new level, picked by chance, every so many beats.
+    Random {
+        beats: f32,
+    },
 }
+
+/// The name a link uses for the hue all a layer's colours are shifted by.
+pub const LINK_HUE: &str = "hue";
 
 /// How many faders the Live view has for links to follow.
 pub const FADERS: usize = 4;
@@ -177,7 +193,7 @@ impl Source {
                     0.0
                 }
             }
-            Source::Wave { beats } => {
+            Source::Wave { beats } | Source::Ramp { beats } | Source::Square { beats } | Source::Random { beats } => {
                 let period = if beats.is_finite() {
                     beats.clamp(0.25, 64.0)
                 } else {
@@ -190,7 +206,14 @@ impl Source {
                 } else {
                     time * 2.0 / period
                 };
-                (0.5 - 0.5 * (turns * std::f64::consts::TAU).cos()) as f32
+                let within = turns.rem_euclid(1.0);
+                match self {
+                    Source::Ramp { .. } => within as f32,
+                    Source::Square { .. } => f32::from(within < 0.5),
+                    // The same level all through one period, another the next.
+                    Source::Random { .. } => crate::effect::hash2(turns.floor() as i64 as u32, 0x51ED),
+                    _ => (0.5 - 0.5 * (turns * std::f64::consts::TAU).cos()) as f32,
+                }
             }
             Source::Fader { n } => faders.get((n as usize).wrapping_sub(1)).copied().unwrap_or(0.0),
         };
@@ -207,6 +230,38 @@ pub struct Link {
     pub source: Source,
     /// -1..1. Negative moves the setting down as the source rises.
     pub amount: f32,
+    /// How much the source is smoothed before it moves the setting, 0..1.
+    /// At 0 the setting jumps with every hit; higher, it rises quickly and
+    /// settles back slowly, like a level meter's needle.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub smooth: f32,
+}
+
+/// A pattern folded so that one half is the mirror image of the other.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mirror {
+    #[default]
+    Off,
+    /// Left and right halves mirror each other.
+    Across,
+    /// Top and bottom halves mirror each other.
+    Down,
+    Both,
+}
+
+impl Mirror {
+    fn is_off(&self) -> bool {
+        *self == Mirror::Off
+    }
+}
+
+fn is_one(v: &u8) -> bool {
+    *v <= 1
+}
+
+fn is_none(v: &u8) -> bool {
+    *v == 0
 }
 
 /// One effect running on some or all fixtures.
@@ -259,6 +314,29 @@ pub struct Layer {
     /// on, the pattern turns with the light instead.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub turns: bool,
+    /// The pattern folded into mirror images of itself.
+    #[serde(default, skip_serializing_if = "Mirror::is_off")]
+    pub mirror: Mirror,
+    /// How many times the pattern is repeated side by side, 1 to 8.
+    #[serde(default = "once", skip_serializing_if = "is_one")]
+    pub repeat: u8,
+    /// A kaleidoscope: the pattern wrapped round the middle in this many
+    /// wedges, each the mirror of its neighbours. 0 is off; 2 to 12.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub kaleido: u8,
+    /// Drawn on each light by itself, the pattern is shifted along by
+    /// this much from one light to the next, 0..1, so a movement travels
+    /// from light to light instead of happening on all of them at once.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub spread: f32,
+    /// Degrees every colour of the layer is shifted round the colour
+    /// wheel, 0..360.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub hue: f32,
+}
+
+fn once() -> u8 {
+    1
 }
 
 fn is_nought(v: &f32) -> bool {
@@ -855,6 +933,7 @@ fn first_id() -> u32 {
 pub fn linkable(effect: &str, param: &str) -> bool {
     param == LINK_STRENGTH
         || param == LINK_ANGLE
+        || param == LINK_HUE
         || effects::find(effect).is_some_and(|def| {
             def.info
                 .params
@@ -883,8 +962,13 @@ pub fn mend_links(layer: &mut Layer) {
         } else {
             0.0
         };
+        link.smooth = if link.smooth.is_finite() {
+            link.smooth.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         match &mut link.source {
-            Source::Wave { beats } => {
+            Source::Wave { beats } | Source::Ramp { beats } | Source::Square { beats } | Source::Random { beats } => {
                 *beats = if beats.is_finite() {
                     beats.clamp(0.25, 64.0)
                 } else {
@@ -1030,6 +1114,11 @@ impl Show {
                 angle: 0.0,
                 spin: 0.0,
                 turns: false,
+                mirror: Mirror::Off,
+                repeat: 1,
+                kaleido: 0,
+                spread: 0.0,
+                hue: 0.0,
                 links: Vec::new(),
             },
         );
@@ -2141,6 +2230,22 @@ mod tests {
         let free = |time: f64| Source::Wave { beats: 8.0 }.value(&quiet, &quiet, &faders, time);
         assert!(free(0.0) < 0.01 && (free(2.0) - 1.0).abs() < 0.01 && free(4.0) < 0.01);
         // Nonsense in, something sane out.
+        // A ramp climbs through its period; a square is on for the first
+        // half; a random level holds through a period and then changes.
+        let at = |source: Source, time: f64| source.value(&quiet, &quiet, &faders, time);
+        let ramp = Source::Ramp { beats: 4.0 };
+        assert!((at(ramp, 0.5) - 0.25).abs() < 1e-6 && (at(ramp, 1.5) - 0.75).abs() < 1e-6);
+        assert!(at(ramp, 2.01) < 0.02, "and drops back to nothing");
+        let square = Source::Square { beats: 4.0 };
+        assert_eq!((at(square, 0.4), at(square, 1.4), at(square, 2.4)), (1.0, 0.0, 1.0));
+        let random = Source::Random { beats: 2.0 };
+        assert_eq!(at(random, 0.1), at(random, 0.9), "held through one period");
+        let levels: Vec<f32> = (0..8).map(|n| at(random, n as f64 + 0.5)).collect();
+        assert!(
+            levels.windows(2).filter(|w| (w[0] - w[1]).abs() > 0.05).count() >= 5,
+            "{levels:?}"
+        );
+        assert!(levels.iter().all(|v| (0.0..=1.0).contains(v)));
         let odd = Source::Wave { beats: f32::NAN }.value(&quiet, &quiet, &faders, 1.0);
         assert!((0.0..=1.0).contains(&odd));
     }
@@ -2154,6 +2259,7 @@ mod tests {
             param: param.into(),
             source,
             amount,
+            smooth: 0.0,
         };
         layer.links = vec![
             link("floor", Source::Fader { n: 200 }, 7.0),

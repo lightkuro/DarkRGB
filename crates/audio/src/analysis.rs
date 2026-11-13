@@ -494,7 +494,14 @@ impl Analyzer {
         self.out.drop *= fade;
         self.steps_since_section = self.steps_since_section.saturating_add(1);
         if !active {
-            // Silence is not a quiet section of a song; start afresh after it.
+            // A pause inside a song (the breath before a drop) is waited
+            // out with everything as it was, so that what comes after it
+            // is still measured against what came before.
+            if self.quiet_steps as f32 <= self.step_rate * COAST_SILENCE_S {
+                return;
+            }
+            // A long silence is not a quiet section of a song; the next
+            // song starts afresh.
             self.sections = [SectionMeter::default(); 2];
             self.out.intensity = 1.0;
             self.settled = 1.0;
@@ -513,6 +520,10 @@ impl Analyzer {
         if (self.steps_since_section as f32) < self.step_rate * SECTION_GAP_S {
             self.settled = intensity;
             self.away_steps = 0;
+            // The rest of the climb is this same change, not a second one.
+            for meter in &mut self.sections {
+                meter.high_before = meter.high;
+            }
             return;
         }
         // Louder than anything remembered: a new section even though the
@@ -1282,13 +1293,25 @@ mod tests {
     #[test]
     fn silence_starts_the_song_afresh() {
         let mut samples = song(&[(10.0, 0.5)], 1.0);
-        samples.extend(vec![0.0; 3 * SR as usize]);
+        samples.extend(vec![0.0; 7 * SR as usize]);
         samples.extend(song(&[(8.0, 0.05)], 1.0));
         let trace = follow_song(&samples);
-        assert_eq!(trace[11].0, 1.0, "nothing is held back in silence");
-        // A quiet song after a pause is its own measure, not a breakdown of the last.
-        assert!(trace[19].0 > 0.85, "{trace:?}");
+        assert_eq!(trace[16].0, 1.0, "nothing is held back once the song is over");
+        // A quiet song after a long silence is its own measure, not a breakdown of the last.
+        assert!(trace[23].0 > 0.85, "{trace:?}");
         assert_eq!(trace.last().unwrap().1, 0);
+    }
+
+    #[test]
+    fn a_pause_before_a_drop_does_not_hide_the_drop() {
+        // A quiet build, a second and a half of nothing, then the drop.
+        let mut samples = song(&[(12.0, 0.08)], 1.0);
+        samples.extend(vec![0.0; SR as usize * 3 / 2]);
+        samples.extend(song(&[(10.0, 0.5)], 1.0));
+        let trace = follow_song(&samples);
+        // Within three seconds of the music coming back, a new and louder section.
+        assert!(trace[13..17].iter().any(|(_, _, drop)| *drop > 0.8), "{trace:?}");
+        assert_eq!(trace.last().unwrap().1, 1, "{trace:?}");
     }
 
     #[test]
