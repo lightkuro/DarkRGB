@@ -177,16 +177,20 @@ export function SceneHead() {
   );
 }
 
-/** The effect whose picture stands for a scene: the one on top. */
-function faceOf(scene: Scene): string {
-  return scene.layers[scene.layers.length - 1]?.effect ?? "";
+/**
+ * The effect whose picture stands for a set of effects: the lowest one
+ * that shows strongly, which is the body of the look. What lies over it
+ * is usually decoration.
+ */
+function faceOf(layers: { effect: string; opacity?: number }[]): string {
+  return (layers.find((l) => (l.opacity ?? 1) >= 0.5) ?? layers[layers.length - 1])?.effect ?? "";
 }
 
 function SceneRow({ show, scene, playing, editing }: { show: Show; scene: Scene; playing: boolean; editing: boolean }) {
   const sets = show.scene_sets ?? [];
   return (
     <li className={`manage-row${playing ? " playing" : ""}`}>
-      <EffectThumb effect={faceOf(scene)} playing={false} className="small" />
+      <EffectThumb effect={faceOf(scene.layers)} playing={false} className="small" />
       <span className="manage-name">
         <strong>{scene.name}</strong>
         <span className="hint">
@@ -417,7 +421,7 @@ export function SceneManager() {
                   <ul className="preset-grid">
                     {kept.map((pattern) => (
                       <li key={pattern.id} className="preset">
-                        <EffectThumb effect={pattern.layers[pattern.layers.length - 1]?.effect ?? ""} playing={false} />
+                        <EffectThumb effect={faceOf(pattern.layers)} playing={false} />
                         <span className="preset-words">
                           <strong>{pattern.name}</strong>
                           <span className="hint">A look of {pattern.layers.length} effects you kept.</span>

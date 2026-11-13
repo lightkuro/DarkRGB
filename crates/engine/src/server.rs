@@ -436,8 +436,9 @@ fn hello() -> String {
             "name": l.name,
             "description": l.description,
             "mood": l.mood,
-            // The effect whose moving picture stands for the look: its top one.
-            "effect": l.layers.last().map(|layer| layer.effect),
+            // The effect whose moving picture stands for the look: the lowest
+            // one that shows strongly, which is its body.
+            "effect": l.layers.iter().find(|layer| layer.opacity >= 0.5).or(l.layers.last()).map(|layer| layer.effect),
         })).collect::<Vec<_>>(),
         "kinds": Kind::ALL.iter().map(|k| json!({
             "id": k,

@@ -29,11 +29,12 @@ Or start blank. The kind of show only decides what it begins with; everything ca
 
 ## Status
 
-Version 0.8.0, in development. Audio-reactive mode and live control are both complete enough to run a show
-with: fifteen starter scenes, thirty effects, pads, keys and MIDI controllers, autopilot, any slider tied to
-the music, and undo. The timeline plays, records and edits, and has not yet been used for a whole show by
-anyone. This version rebuilt the beat clock, added tools that work on any pattern, and made the outputs
-kinder to hardware.
+Version 0.9.0, in development. Audio-reactive mode and live control are both complete enough to run a show
+with: twenty-five ready-made scenes, thirty effects, pads, keys and MIDI controllers, autopilot, any slider
+tied to the music, and undo. The timeline plays, records and edits, and has not yet been used for a whole
+show by anyone. This version is about finding your way round: help built in, effects chosen from moving
+tiles, a scene manager with sets of scenes, changing a scene without playing it, and lights that can be
+planned on screen and connected to hardware later.
 
 **Nothing here has yet met real LEDs or real music.** Every check so far used simulated devices and a
 synthetic test song. An outside review of 0.6.0 put that first among its concerns; see
@@ -62,6 +63,9 @@ yours to manage. The limit judges the whole picture and is a safeguard, not a gu
 
 What works today:
 
+- Help built in: the **?** at the top has a quick start and a guide to each part.
+- Plan first, wire later: virtual lights are laid out, grouped and given scenes, then connected to real
+  hardware one by one, keeping everything.
 - Opens as one window. Finds WLED devices on the network, adds them by address, or scans the network for them.
   Pixel controllers that take sACN or Art-Net are added by address and universe.
 - Demo lights and virtual lights that exist only on screen, for trying effects and planning layouts without
@@ -89,6 +93,9 @@ What works today:
   with as much smoothing as you like.
 - Colours from built-in palettes or palettes of your own.
 - Quiet parts of a song are dimmer and calmer and drops hit harder; a setting says how much.
+- Effects are chosen from tiles with a moving preview of each, in sections, with a search box.
+- A scene manager: twenty-five ready-made scenes, sets of scenes for different occasions, and changing a
+  scene out of sight while the lights play another.
 - Scenes, master brightness and blackout. Autopilot changes scene every few bars and when the song changes,
   choosing calm scenes for quiet parts and big ones for drops. When the music stops, the lights can wait in a
   scene of your choosing.
@@ -132,6 +139,26 @@ A strip bent into an arch over a matrix hung as a diamond, and the shape editor:
 ![An arch of lights over a diamond-mounted matrix whose words stay level](docs/images/shapes.png)
 
 ![The shape editor with a star drawn from ten corners](docs/images/shape.png)
+
+Choosing an effect: tiles with a moving picture of each, and the one pointed at described at the top:
+
+![The effect picker: tiles in sections, with Ripple described and moving at the top](docs/images/picker.png)
+
+The scene manager, with scenes filed in two sets, and the ready-made scenes to add:
+
+![The scene manager listing a show's scenes, each filed in Dinner, Party or every set](docs/images/scene-manager.png)
+
+![Ready-made scenes, each with a picture, a description and an Add button](docs/images/scene-presets.png)
+
+Changing a scene out of sight: the panel and the stage show Kaleidoscope while the lights play Pulse:
+
+![A scene being changed without being played, marked "not on the lights"](docs/images/blind.png)
+
+A light planned on screen being connected to hardware, and the help window:
+
+![A virtual strip's settings with the form that connects it to a WLED device](docs/images/connect.png)
+
+![The help window open on the quick start](docs/images/help.png)
 
 The beat in the Live view: four boxes for the bar, the tempo, and the corrections beside it:
 

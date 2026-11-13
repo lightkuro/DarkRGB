@@ -1,6 +1,38 @@
 # What's new
 
-## 0.8.0 (in development)
+## 0.9.0 (in development)
+
+Easier to find your way round: scenes you can see and manage, effects you can browse, lights you can plan
+before they exist, and help built in.
+
+- Help. The **?** at the top opens a quick start and a guide to each part of darkRGB, with a search box.
+- Plan your lights before the hardware exists. Add virtual strips and matrices (now in the simple layout
+  too), lay them out, group them and build scenes. When the real thing is up, open the light and choose
+  **Connect to real hardware**: it keeps its place, shape, group, name and everything that plays on it.
+  A single strip takes the number of LEDs the device really has.
+- Effects are chosen from tiles, each with a small moving picture of the effect. Point at one, or press
+  its ⓘ, to see it larger and read what it does. Sections fold, show six until asked for all, and there
+  is a search box.
+- The right panel now says which scene it holds: playing, changed since it was saved, or not a scene yet.
+  **Save changes** and **Save as a new scene** are there.
+- Change a scene without playing it. The scene opens in the panel and on the stage while your lights go on
+  with what they were playing. **Done** keeps the changes; **Put it on the lights** plays it.
+- A scene manager (**Manage scenes**, bottom left): every scene in the show, ten new ready-made scenes
+  (twenty-five in all) to add one at a time, looks you kept from other shows, and new empty scenes.
+- Sets of scenes. File scenes in named sets, such as Dinner and Party, and choose the set in use. The
+  scene buttons, the next and previous keys and autopilot keep to it.
+- The list of effects can be shown **By lights**: under the lights and groups each effect plays on.
+- Groups of lights are easier to make: a labelled **New group** button in both layouts, and "Name these as
+  a group" when an effect plays on several single lights.
+- Folders of effects are easier to find: a labelled **New folder** button in both layouts. A folder can
+  now point everything in it at the same lights in one go.
+- Things close where they opened. The button that opens a list or a form stays where it is and closes it
+  again, and the heading of an open effect or light stays in view while its settings scroll.
+- "Lights lead the beat" is off unless you set it, and its text says what it can and cannot move: only
+  things timed to the beat, never a reaction to a sound.
+- Fixed: starting a live show opened its Live folder's settings by itself.
+
+## 0.8.0
 
 A beat that holds, tools that work on any pattern, and outputs that look after the hardware. Most of this
 round answers an outside review of 0.6.0; see [docs/roadmap.md](docs/roadmap.md).

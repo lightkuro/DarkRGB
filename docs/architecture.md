@@ -1,6 +1,6 @@
 # Architecture
 
-Decided on 2026-11-10, and kept up to date since; this describes version 0.8.0. The engine, the app window,
+Decided on 2026-11-10, and kept up to date since; this describes version 0.9.0. The engine, the app window,
 the UI, live mode, MIDI, the timeline and the device simulator exist. Sections say which parts are built. Items marked **(to verify)** are
 assumptions that the checks in [roadmap.md](roadmap.md) test.
 
@@ -193,6 +193,19 @@ What is live and not saved lives in `crates/engine/src/live.rs`, as pure logic w
   and also restarts the count. A section change within 4 seconds of a scene change is ignored, so one
   transition in the music gives one change of scene.
 
+**Changing a scene out of sight.** `EditScene` loads a scene into the show's working stack, which is what
+every editing control already works on, and keeps what the lights were playing in `Live::on_air`.
+`Live::overlay` puts the on-air stack back into the copy of the show the lights are drawn from, so the
+lights do not change. The frame loop draws the working stack with a second renderer for the preview only.
+A scene asked for meanwhile (a pad, autopilot) replaces the on-air stack, not the one being changed.
+`FinishEdit` writes the working stack into the scene, then either drops the on-air stack (the scene plays)
+or puts it back as the working stack.
+
+**Sets of scenes.** A scene may be filed in one `SceneSet`; the show has one set in use, or none
+(`live.scene_set`). `Show::in_use` says whether a scene is on offer: its set is the one in use, or it is
+in no set, or no set is in use. The scene buttons, next and previous, and autopilot ask it. Keys bound to
+a scene work whatever set is in use.
+
 A scene change can **fade**: the frame loop keeps the outgoing show and its renderer alive, renders both, and
 mixes them until the fade is over. The incoming scene starts with a fresh renderer; the fade hides the
 restart.
@@ -272,6 +285,14 @@ strength can be linked under the name `opacity`, its angle under `angle` and its
 Timed sources (`Wave`, `Ramp`, `Square`, `Random`) count in beats. A link's `smooth` makes its reading
 settle instead of jump: quick to rise and a fifth as quick to fall (`settle`), which is what makes a
 brightness tied to the bass look like a glow and not a flicker.
+
+### Pictures of effects
+
+The list effects are chosen from shows each one moving. `core::preview::effect(id)` runs the effect with
+its usual settings on a 32 by 32 matrix against made-up music (`preview::music`: 120 BPM, a kick on every
+beat, a snare on two and four, hats between) and keeps 24 frames, one bar, so a preview that keeps time
+loops cleanly. The engine serves them at `/api/preview/{effect}`, made on first request and kept. The
+window draws a still (the brightest frame) until a tile is pointed at. Nothing here touches the show.
 
 ### Tools for any pattern
 
@@ -409,6 +430,14 @@ all of it.
   [WLED E1.31](https://kno.wled.ge/interfaces/e1.31-dmx/) A device has a colour order. On exit, sACN
   receivers get the stream-terminated packet three times for each universe. Not built: multicast, a start
   channel inside a universe, sACN priority and synchronisation.
+
+### From a plan to hardware
+
+`Connect { device, to }` points a device already in the show at other hardware and changes nothing else:
+its id, fixtures, place, group, name, settings and whatever plays on it stay (`commands::rewire`). A WLED
+device is asked what it is first (in `app.rs`, since that needs the network); a lone strip then takes the
+real number of LEDs, and any other difference is returned as a note. The same hardware cannot be two
+lights. `to: nothing` makes a light preview-only again.
 
 ### What every device gets
 
