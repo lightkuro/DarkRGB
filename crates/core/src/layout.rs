@@ -59,10 +59,100 @@ pub struct Device {
     /// rest follow, 170 pixels to a universe.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub universe: u16,
+    /// The order the controller wants a pixel's three colours in. WLED
+    /// is always sent red, green, blue and sorts it out itself.
+    #[serde(default, skip_serializing_if = "ColourOrder::is_rgb")]
+    pub order: ColourOrder,
+    /// The most current the lights may draw, in milliamps, by the
+    /// estimate in [`estimated_milliamps`]. Zero is no limit.
+    #[serde(default, skip_serializing_if = "is_zero32")]
+    pub max_milliamps: u32,
+    /// Frames are held back this long before they are sent, to line a
+    /// quick device up with a slow one.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub delay_ms: u16,
+    /// Dim levels that fall between two steps are made by showing each
+    /// some of the time, so slow fades near black do not move in jumps.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dither: bool,
 }
 
 fn is_zero(n: &u16) -> bool {
     *n == 0
+}
+fn is_zero32(n: &u32) -> bool {
+    *n == 0
+}
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// The longest a device's frames can be held back.
+pub const MAX_DEVICE_DELAY_MS: u16 = 1000;
+/// The highest current limit that can be set: 500 amps.
+pub const MAX_MILLIAMPS: u32 = 500_000;
+
+/// What one colour of one pixel draws at full, and what a pixel draws
+/// when dark. These are the figures for the common 5 volt strips
+/// (WS2812 and its relatives): 60 mA for a pixel at full white.
+pub const MILLIAMPS_PER_CHANNEL: f32 = 20.0;
+pub const MILLIAMPS_IDLE: f32 = 1.0;
+
+/// The current a frame of 8-bit colours would draw, by the figures above.
+pub fn estimated_milliamps(bytes: &[u8]) -> f32 {
+    let lit: u64 = bytes.iter().map(|b| *b as u64).sum();
+    lit as f32 * (MILLIAMPS_PER_CHANNEL / 255.0) + (bytes.len() / 3) as f32 * MILLIAMPS_IDLE
+}
+
+/// Dims a frame, all of it alike, until it draws no more than `limit`
+/// milliamps. Returns whether it had to. Zero is no limit.
+pub fn limit_current(bytes: &mut [u8], limit: u32) -> bool {
+    if limit == 0 {
+        return false;
+    }
+    let lit: u64 = bytes.iter().map(|b| *b as u64).sum();
+    let drawn = lit as f32 * (MILLIAMPS_PER_CHANNEL / 255.0);
+    let room = (limit as f32 - (bytes.len() / 3) as f32 * MILLIAMPS_IDLE).max(0.0);
+    if drawn <= room {
+        return false;
+    }
+    // Rounded down, so the result is never over.
+    let scale = ((room / drawn) * 65536.0) as u64;
+    for b in bytes.iter_mut() {
+        *b = ((*b as u64 * scale) >> 16) as u8;
+    }
+    true
+}
+
+/// The order a controller wants a pixel's colours in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColourOrder {
+    #[default]
+    Rgb,
+    Grb,
+    Brg,
+    Rbg,
+    Gbr,
+    Bgr,
+}
+
+impl ColourOrder {
+    pub fn is_rgb(&self) -> bool {
+        *self == Self::Rgb
+    }
+
+    /// Where red, green and blue go among a pixel's three bytes.
+    pub fn places(self) -> [usize; 3] {
+        match self {
+            Self::Rgb => [0, 1, 2],
+            Self::Grb => [1, 0, 2],
+            Self::Brg => [1, 2, 0],
+            Self::Rbg => [0, 2, 1],
+            Self::Gbr => [2, 0, 1],
+            Self::Bgr => [2, 1, 0],
+        }
+    }
 }
 
 /// Whole RGB pixels that fit in one universe of 512 channels.
@@ -117,7 +207,24 @@ impl Device {
             mac: None,
             version: None,
             universe: 0,
+            order: ColourOrder::Rgb,
+            max_milliamps: 0,
+            delay_ms: 0,
+            dither: false,
         }
+    }
+
+    /// Puts the settings a file edited by hand may have got wrong back in
+    /// range. Returns whether anything changed.
+    pub fn mend_output(&mut self) -> bool {
+        let before = (self.order, self.max_milliamps, self.delay_ms);
+        // WLED is told red, green, blue and has its own setting for the rest.
+        if !matches!(self.kind, DeviceKind::Sacn | DeviceKind::Artnet) {
+            self.order = ColourOrder::Rgb;
+        }
+        self.max_milliamps = self.max_milliamps.min(MAX_MILLIAMPS);
+        self.delay_ms = self.delay_ms.min(MAX_DEVICE_DELAY_MS);
+        before != (self.order, self.max_milliamps, self.delay_ms)
     }
 
     /// Puts the first universe where the protocol allows it. Returns

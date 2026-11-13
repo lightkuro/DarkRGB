@@ -3,7 +3,7 @@
 
 use darkrgb_core::color;
 use darkrgb_core::effects;
-use darkrgb_core::layout::{MAX_PATH_POINTS, MAX_PIXELS};
+use darkrgb_core::layout::{ColourOrder, MAX_DEVICE_DELAY_MS, MAX_MILLIAMPS, MAX_PATH_POINTS, MAX_PIXELS};
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::picture::{MAX_SIDE, Picture};
 use darkrgb_core::show::{
@@ -237,6 +237,18 @@ pub enum Command {
         address: Option<String>,
         #[serde(default)]
         universe: Option<u16>,
+        /// The order its colours go in. For sACN and Art-Net devices only.
+        #[serde(default)]
+        order: Option<ColourOrder>,
+        /// The most current its lights may draw. Zero is no limit.
+        #[serde(default)]
+        max_milliamps: Option<u32>,
+        /// How long its frames are held back.
+        #[serde(default)]
+        delay_ms: Option<u16>,
+        /// Whether dim levels are made up over time.
+        #[serde(default)]
+        dither: Option<bool>,
     },
     UpdateFixture {
         id: u32,
@@ -1249,6 +1261,10 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             brightness,
             address,
             universe,
+            order,
+            max_milliamps,
+            delay_ms,
+            dither,
         } => {
             // Validate everything before changing anything.
             let new_name = new_name.as_deref().map(|n| name(n, "The name")).transpose()?;
@@ -1260,17 +1276,31 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 .iter_mut()
                 .find(|d| d.id == *id)
                 .ok_or("that device no longer exists")?;
-            if address.is_some() || universe.is_some() {
-                if PixelProtocol::of(device.kind).is_none() {
-                    return Err("only sACN and Art-Net devices have an address and a universe to change".into());
-                }
-                if let Some(u) = universe {
-                    universes_fit(device.kind, *u, device.pixel_count)?;
-                    device.universe = *u;
-                }
-                if let Some(a) = address {
-                    device.address = a;
-                }
+            let pixel_controller = PixelProtocol::of(device.kind).is_some();
+            if (address.is_some() || universe.is_some()) && !pixel_controller {
+                return Err("only sACN and Art-Net devices have an address and a universe to change".into());
+            }
+            if order.is_some() && !pixel_controller {
+                return Err("only sACN and Art-Net devices have a colour order to set here: WLED has its own".into());
+            }
+            if let Some(u) = universe {
+                universes_fit(device.kind, *u, device.pixel_count)?;
+                device.universe = *u;
+            }
+            if let Some(a) = address {
+                device.address = a;
+            }
+            if let Some(o) = order {
+                device.order = *o;
+            }
+            if let Some(m) = max_milliamps {
+                device.max_milliamps = (*m).min(MAX_MILLIAMPS);
+            }
+            if let Some(d) = delay_ms {
+                device.delay_ms = (*d).min(MAX_DEVICE_DELAY_MS);
+            }
+            if let Some(d) = dither {
+                device.dither = *d;
             }
             let mut renamed = None;
             if let Some(n) = new_name {
@@ -2717,6 +2747,10 @@ mod tests {
             brightness: None,
             address: address.map(str::to_string),
             universe,
+            order: None,
+            max_milliamps: None,
+            delay_ms: None,
+            dither: None,
         };
         apply(&mut show, &change(roof, Some("10.0.0.20"), Some(9))).unwrap();
         assert_eq!(
@@ -2731,6 +2765,66 @@ mod tests {
         let wled = show.devices.last().unwrap().id;
         assert!(apply(&mut show, &change(wled, None, Some(3))).is_err());
         assert!(apply(&mut show, &change(wled, Some("10.0.0.1"), None)).is_err());
+    }
+
+    #[test]
+    fn a_device_can_be_given_a_colour_order_a_current_limit_a_delay_and_smoother_dimming() {
+        let mut show = Show::default();
+        apply(
+            &mut show,
+            &parse(
+                r#"{"type":"add_pixels","name":"Roof","protocol":"sacn","address":"10.0.0.20","universe":1,"shape":{"type":"strip","count":300}}"#,
+            ),
+        )
+        .unwrap();
+        let roof = show.devices[0].id;
+        apply(
+            &mut show,
+            &parse(&format!(
+                r#"{{"type":"update_device","id":{roof},"order":"grb","max_milliamps":4000,"delay_ms":80,"dither":true}}"#
+            )),
+        )
+        .unwrap();
+        let d = &show.devices[0];
+        assert_eq!(
+            (d.order, d.max_milliamps, d.delay_ms, d.dither),
+            (ColourOrder::Grb, 4000, 80, true)
+        );
+        // What is out of range is brought in.
+        apply(
+            &mut show,
+            &parse(&format!(
+                r#"{{"type":"update_device","id":{roof},"max_milliamps":4000000000,"delay_ms":60000}}"#
+            )),
+        )
+        .unwrap();
+        let d = &show.devices[0];
+        assert_eq!((d.max_milliamps, d.delay_ms), (MAX_MILLIAMPS, MAX_DEVICE_DELAY_MS));
+        // The settings travel with the show, and a show from before them opens.
+        let saved = serde_json::to_string(&show).unwrap();
+        assert_eq!(serde_json::from_str::<Show>(&saved).unwrap(), show);
+        let plain = serde_json::to_string(&Device::wled("d", "127.0.0.1", 4048, 10)).unwrap();
+        assert!(!plain.contains("order") && !plain.contains("milliamps") && !plain.contains("dither"));
+        // WLED keeps its own colour order; the rest it can have.
+        show.add_device(Device::wled("d", "127.0.0.1", 4048, 10), None);
+        let wled = show.devices[1].id;
+        let before = show.clone();
+        let refused = apply(
+            &mut show,
+            &parse(&format!(
+                r#"{{"type":"update_device","id":{wled},"order":"grb","delay_ms":50}}"#
+            )),
+        );
+        assert!(refused.is_err());
+        assert_eq!(show, before, "a refused change changes nothing");
+        apply(
+            &mut show,
+            &parse(&format!(
+                r#"{{"type":"update_device","id":{wled},"delay_ms":50,"max_milliamps":900}}"#
+            )),
+        )
+        .unwrap();
+        assert_eq!((show.devices[1].delay_ms, show.devices[1].max_milliamps), (50, 900));
     }
 
     #[test]
@@ -2876,6 +2970,10 @@ mod tests {
                 brightness: None,
                 address: None,
                 universe: None,
+                order: None,
+                max_milliamps: None,
+                delay_ms: None,
+                dither: None,
             },
         );
         assert!(result.is_err());
@@ -2897,6 +2995,10 @@ mod tests {
                 brightness: Some(-3.0),
                 address: None,
                 universe: None,
+                order: None,
+                max_milliamps: None,
+                delay_ms: None,
+                dither: None,
             },
         )
         .unwrap();
@@ -2938,6 +3040,10 @@ mod tests {
             brightness: None,
             address: None,
             universe: None,
+            order: None,
+            max_milliamps: None,
+            delay_ms: None,
+            dither: None,
         };
         apply(&mut show, &rename("Desk")).unwrap();
         assert_eq!(show.fixtures[0].name, "Desk");
@@ -3967,6 +4073,10 @@ mod tests {
                     brightness: r.maybe(Awkward::number),
                     address: r.maybe(|r| ["10.0.0.9", "", "bad host!", "lights.local"][r.next() as usize % 4].into()),
                     universe: r.maybe(|r| [0, 1, 7, 32767, 63999, 65535][r.next() as usize % 6]),
+                    order: r.maybe(|r| [ColourOrder::Rgb, ColourOrder::Grb, ColourOrder::Bgr][r.next() as usize % 3]),
+                    max_milliamps: r.maybe(|r| [0, 1, 2500, u32::MAX][r.next() as usize % 4]),
+                    delay_ms: r.maybe(|r| [0, 40, 1000, u16::MAX][r.next() as usize % 4]),
+                    dither: r.maybe(Awkward::flag),
                 },
                 1 => Command::UpdateFixture {
                     id: fixture,

@@ -60,7 +60,67 @@ fn message(kind: u8, layout_serial: u32, payload_len: usize) -> Vec<u8> {
     out
 }
 
+/// Runs the frame loop until told to stop, and starts it again if it
+/// ever fails. A show left running for an evening, or for a month in a
+/// window, must not go dark for good because of one bad frame.
 pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
+    let mut restarts = 0u32;
+    keep_running(
+        &stop,
+        || frames(&shared, &stop),
+        |what| {
+            restarts += 1;
+            log::error!("the frame loop failed ({what}); starting it again (restart {restarts})");
+            shared.mend_locks();
+            shared.stats.lock().unwrap().restarts = restarts;
+            *shared.notice.lock().unwrap() = Some(
+                "The lights stopped for a moment because of a fault in darkRGB, and were started again. \
+                 If it keeps happening, the diagnostics file in Settings says what went wrong."
+                    .into(),
+            );
+        },
+    );
+}
+
+/// The shortest and longest waits before starting again.
+const RESTART_WAIT: Duration = Duration::from_millis(200);
+const RESTART_WAIT_MAX: Duration = Duration::from_secs(5);
+
+/// Calls `body` until it returns, calling it again each time it panics.
+/// `failed` is told what went wrong. Failures in quick succession are
+/// spaced further and further apart, so a fault that happens on every
+/// frame does not spin the processor.
+fn keep_running(stop: &AtomicBool, mut body: impl FnMut(), mut failed: impl FnMut(&str)) {
+    let mut wait = RESTART_WAIT;
+    loop {
+        let began = Instant::now();
+        let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut body)) else {
+            return;
+        };
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let what = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("no reason given");
+        failed(what);
+        // A run that lasted a while was a rare fault; one that did not
+        // is likely to fail again at once.
+        wait = if began.elapsed() > Duration::from_secs(30) {
+            RESTART_WAIT
+        } else {
+            (wait * 2).min(RESTART_WAIT_MAX)
+        };
+        let until = Instant::now() + wait;
+        while Instant::now() < until && !stop.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+fn frames(shared: &Arc<Shared>, stop: &AtomicBool) {
     let mut outputs = match Outputs::new() {
         Ok(outputs) => outputs,
         Err(e) => {
@@ -284,11 +344,46 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
         }
         deadline += period;
     }
+    // Stopping: leave the lights dark, not holding the last frame.
+    outputs.go_dark(&show);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loop_that_fails_is_started_again_until_it_is_told_to_stop() {
+        let stop = AtomicBool::new(false);
+        let (mut runs, mut reasons) = (0, Vec::new());
+        // Fails twice, each in its own way, then runs to its end.
+        keep_running(
+            &stop,
+            || {
+                runs += 1;
+                match runs {
+                    1 => panic!("first fault"),
+                    2 => panic!("{} fault", "second"),
+                    _ => {}
+                }
+            },
+            |what| reasons.push(what.to_string()),
+        );
+        assert_eq!(runs, 3);
+        assert_eq!(reasons, ["first fault", "second fault"]);
+        // A failure while stopping is the end, not a reason to start again.
+        let mut runs = 0;
+        keep_running(
+            &stop,
+            || {
+                runs += 1;
+                stop.store(true, Ordering::Relaxed);
+                panic!("on the way out");
+            },
+            |_| unreachable!(),
+        );
+        assert_eq!(runs, 1);
+    }
 
     #[test]
     fn delayed_sound_is_what_was_heard_that_long_ago() {

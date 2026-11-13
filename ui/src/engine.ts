@@ -107,7 +107,17 @@ export interface Device {
   version: string | null;
   /** For sACN and Art-Net: the universe of the first LED. */
   universe?: number;
+  /** For sACN and Art-Net: the order a pixel's colours are sent in. */
+  order?: ColourOrder;
+  /** The most current the lights may draw, in milliamps. 0 or absent: no limit. */
+  max_milliamps?: number;
+  /** Frames are held back this many milliseconds before they are sent. */
+  delay_ms?: number;
+  /** Dim levels between two steps are made up over time. */
+  dither?: boolean;
 }
+
+export type ColourOrder = "rgb" | "grb" | "brg" | "rbg" | "gbr" | "bgr";
 
 /** LEDs that fit in one universe of sACN or Art-Net. */
 export const PIXELS_PER_UNIVERSE = 170;
@@ -397,6 +407,10 @@ export interface DeviceStats {
   frames_sent: number;
   frames_dropped: number;
   resolved: boolean;
+  /** What the last frame would draw, by estimate, in milliamps. */
+  milliamps?: number;
+  /** The last frame was dimmed to keep to the current limit. */
+  limited?: boolean;
 }
 
 export interface Discovered {
@@ -416,6 +430,8 @@ export interface Status {
     late_frames: number;
     /** The flash limit held the picture back in the last second. */
     flash_limited: boolean;
+    /** Times the frame loop has failed and been started again. */
+    restarts?: number;
     devices: Record<string, DeviceStats>;
   };
   audio: {
@@ -572,6 +588,10 @@ export type Command =
       brightness?: number;
       address?: string;
       universe?: number;
+      order?: ColourOrder;
+      max_milliamps?: number;
+      delay_ms?: number;
+      dither?: boolean;
     }
   | {
       type: "add_pixels";

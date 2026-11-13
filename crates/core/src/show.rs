@@ -1584,6 +1584,7 @@ impl Show {
         }
         for device in &mut self.devices {
             device.mend_universe();
+            device.mend_output();
         }
         for fixture in &mut self.fixtures {
             fixture.mend_path();

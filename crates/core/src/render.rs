@@ -223,7 +223,14 @@ pub struct Renderer {
     layers: HashMap<u32, LayerState>,
     frame: Vec<Rgb>,
     scratch: Vec<Rgb>,
+    /// Counts frames, for what is spread over several of them.
+    tick: u32,
 }
+
+/// Where each of four frames in a round falls between two steps of
+/// brightness, in 256ths: evenly spread, and not in order, so that a
+/// half step is on every other frame instead of two on and two off.
+const DITHER_TURNS: [u8; 4] = [32, 160, 96, 224];
 
 impl Renderer {
     pub fn new() -> Self {
@@ -293,6 +300,7 @@ impl Renderer {
     /// gamma. `cues` carries what was fired by hand.
     pub fn render_with(&mut self, show: &Show, time: f64, dt: f32, audio: &AudioFeatures, cues: &Cues) -> &[Rgb] {
         self.frame.fill(Rgb::BLACK);
+        self.tick = self.tick.wrapping_add(1);
         let recolour: Option<String> = show
             .live
             .colours
@@ -509,16 +517,19 @@ impl Renderer {
     }
 
     /// The last rendered frame as the bytes to send to one device: 8-bit
-    /// RGB in the device's own pixel order, with its gamma and brightness
-    /// limit applied. Pixels no fixture covers are black.
-    pub fn device_bytes(&self, show: &Show, device_id: u32, out: &mut Vec<u8>) {
+    /// colours in the device's own pixel order and colour order, with its
+    /// gamma and brightness limit applied, and dimmed as a whole if it
+    /// would draw more current than the device is allowed. Pixels no
+    /// fixture covers are black. Returns whether the current limit dimmed it.
+    pub fn device_bytes(&self, show: &Show, device_id: u32, out: &mut Vec<u8>) -> bool {
         out.clear();
         let Some(device) = show.device(device_id) else {
-            return;
+            return false;
         };
         let pixels = device.pixel_count as usize;
         out.resize(pixels * 3, 0);
         let curve = OutputCurve::new(device.gamma, device.brightness);
+        let [r, g, b] = device.order.places();
         let mut offset = 0usize;
         for fixture in &show.fixtures {
             let count = fixture.pixel_count() as usize;
@@ -529,13 +540,25 @@ impl Renderer {
                         break;
                     }
                     let px = self.frame.get(offset + i).copied().unwrap_or(Rgb::BLACK);
-                    out[at * 3] = curve.apply(px.r);
-                    out[at * 3 + 1] = curve.apply(px.g);
-                    out[at * 3 + 2] = curve.apply(px.b);
+                    let slot = &mut out[at * 3..at * 3 + 3];
+                    if device.dither {
+                        // Neighbours take their turns at different times,
+                        // so the eye sees neither a flicker nor a crawl.
+                        let stagger = (at as u32).wrapping_mul(2_654_435_761) >> 30;
+                        let turn = DITHER_TURNS[(self.tick.wrapping_add(stagger) & 3) as usize];
+                        slot[r] = curve.apply_dithered(px.r, turn);
+                        slot[g] = curve.apply_dithered(px.g, turn);
+                        slot[b] = curve.apply_dithered(px.b, turn);
+                    } else {
+                        slot[r] = curve.apply(px.r);
+                        slot[g] = curve.apply(px.g);
+                        slot[b] = curve.apply(px.b);
+                    }
                 }
             }
             offset += count;
         }
+        crate::layout::limit_current(out, device.max_milliamps)
     }
 }
 
@@ -1117,6 +1140,117 @@ mod tests {
         r.device_bytes(&show, dev, &mut bytes);
         // (128/255)^2 * 0.5 * 255 = 32
         assert_eq!(bytes, [32, 32, 32]);
+    }
+
+    #[test]
+    fn a_controller_gets_its_colours_in_the_order_it_wants() {
+        use crate::layout::{ColourOrder, DeviceKind};
+        let mut show = solid_show("#ff8000");
+        let dev = show.add_device(
+            Device {
+                gamma: 1.0,
+                ..Device::dmx(DeviceKind::Sacn, "d", "127.0.0.1", 5568, 2, 1)
+            },
+            None,
+        );
+        let (r, _) = render(&show);
+        let mut bytes = Vec::new();
+        let mut sent = |show: &Show| {
+            r.device_bytes(show, dev, &mut bytes);
+            bytes[..3].to_vec()
+        };
+        assert_eq!(sent(&show), [255, 128, 0]);
+        for (order, wanted) in [
+            (ColourOrder::Grb, [128, 255, 0]),
+            (ColourOrder::Brg, [0, 255, 128]),
+            (ColourOrder::Rbg, [255, 0, 128]),
+            (ColourOrder::Gbr, [128, 0, 255]),
+            (ColourOrder::Bgr, [0, 128, 255]),
+        ] {
+            show.devices[0].order = order;
+            assert_eq!(sent(&show), wanted, "{order:?}");
+        }
+        // WLED is always told red, green, blue: a file that says
+        // otherwise is put right when it is opened.
+        show.devices[0].kind = DeviceKind::Wled;
+        show.repair();
+        assert_eq!(show.devices[0].order, ColourOrder::Rgb);
+    }
+
+    #[test]
+    fn a_current_limit_dims_the_whole_frame_and_only_when_needed() {
+        use crate::layout::estimated_milliamps;
+        let mut show = solid_show("#ffffff");
+        let dev = show.add_device(device(100), None);
+        let (r, _) = render(&show);
+        let mut bytes = Vec::new();
+        // A hundred pixels at full white: 6 amps and a little.
+        assert!(!r.device_bytes(&show, dev, &mut bytes));
+        assert!((estimated_milliamps(&bytes) - 6100.0).abs() < 1.0);
+        show.devices[0].max_milliamps = 2000;
+        assert!(r.device_bytes(&show, dev, &mut bytes));
+        let drawn = estimated_milliamps(&bytes);
+        assert!((1900.0..=2000.0).contains(&drawn), "{drawn}");
+        assert!(bytes.iter().all(|b| *b == bytes[0]), "all dimmed alike");
+        // A dim picture is under the limit and is left as it is.
+        let mut show = solid_show("#202020");
+        let dev = show.add_device(device(100), None);
+        show.devices[0].max_milliamps = 2000;
+        let (r, _) = render(&show);
+        assert!(!r.device_bytes(&show, dev, &mut bytes));
+        let before = bytes.clone();
+        show.devices[0].max_milliamps = 0;
+        r.device_bytes(&show, dev, &mut bytes);
+        assert_eq!(bytes, before);
+        // A limit below what the pixels draw when dark leaves them dark.
+        show.devices[0].max_milliamps = 50;
+        assert!(r.device_bytes(&show, dev, &mut bytes));
+        assert!(bytes.iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn dim_levels_between_two_steps_are_made_up_over_time() {
+        // A grey that comes to a level and a quarter after the curve.
+        let mut show = solid_show("#141414");
+        let dev = show.add_device(device(64), None);
+        show.devices[0].gamma = 1.0;
+        show.devices[0].brightness = 1.25 / 20.0;
+        let mut r = Renderer::new();
+        r.sync(&show);
+        let mut bytes = Vec::new();
+        let mut frames = |show: &Show, r: &mut Renderer, n: usize| -> Vec<Vec<u8>> {
+            (0..n)
+                .map(|_| {
+                    r.render(show, 0.0, 1.0 / 60.0, &AudioFeatures::default());
+                    r.device_bytes(show, dev, &mut bytes);
+                    bytes.clone()
+                })
+                .collect()
+        };
+        // Without it, every frame is the nearest step.
+        assert!(frames(&show, &mut r, 8).iter().flatten().all(|b| *b == 1));
+        // With it, each pixel is 2 on one frame in four and 1 on the rest,
+        show.devices[0].dither = true;
+        let seen = frames(&show, &mut r, 8);
+        for pixel in 0..64 {
+            let levels: Vec<u8> = seen.iter().map(|f| f[pixel * 3]).collect();
+            assert_eq!(levels.iter().filter(|l| **l == 2).count(), 2, "{levels:?}");
+            assert_eq!(levels.iter().filter(|l| **l == 1).count(), 6, "{levels:?}");
+        }
+        // and the pixels do not all take their turn on the same frame.
+        let together = seen.iter().filter(|f| f.iter().all(|b| *b == f[0])).count();
+        assert_eq!(together, 0, "the pixels are staggered");
+        // Black stays black and a whole step stays what it is.
+        let mut show = solid_show("#000000");
+        let dev = show.add_device(device(8), None);
+        show.devices[0].dither = true;
+        let mut r = Renderer::new();
+        r.sync(&show);
+        for _ in 0..4 {
+            r.render(&show, 0.0, 1.0 / 60.0, &AudioFeatures::default());
+            r.device_bytes(&show, dev, &mut bytes);
+            assert!(bytes.iter().all(|b| *b == 0));
+        }
     }
 
     #[test]

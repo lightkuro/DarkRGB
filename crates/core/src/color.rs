@@ -113,6 +113,8 @@ impl<'de> Deserialize<'de> for Rgb {
 /// gamma and a brightness limit baked in.
 pub struct OutputCurve {
     table: [u8; 1024],
+    /// The same levels before rounding, in 256ths of a step.
+    fine: [u16; 1024],
 }
 
 impl OutputCurve {
@@ -120,11 +122,24 @@ impl OutputCurve {
         let gamma = gamma.clamp(1.0, 4.0);
         let brightness = brightness.clamp(0.0, 1.0);
         let mut table = [0u8; 1024];
+        let mut fine = [0u16; 1024];
         for (i, slot) in table.iter_mut().enumerate() {
             let v = i as f32 / 1023.0;
-            *slot = (v.powf(gamma) * brightness * 255.0 + 0.5) as u8;
+            let level = v.powf(gamma) * brightness * 255.0;
+            *slot = (level + 0.5) as u8;
+            fine[i] = (level * 256.0 + 0.5) as u16;
         }
-        Self { table }
+        Self { table, fine }
+    }
+
+    /// The level for `v` when the step it falls short of is made up over
+    /// time: `turn` (0..=255) is where this pixel is in its round, and
+    /// the level is the upper of the two steps for as much of the round
+    /// as `v` lies towards it. Over a whole round the average is exact.
+    #[inline]
+    pub fn apply_dithered(&self, v: f32, turn: u8) -> u8 {
+        let fine = self.fine[(v.clamp(0.0, 1.0) * 1023.0 + 0.5) as usize] as u32;
+        ((fine + turn as u32) >> 8).min(255) as u8
     }
 
     #[inline]

@@ -45,6 +45,8 @@ pub struct RenderStats {
     pub late_frames: u64,
     /// True when the flash limit held the picture back in the last second.
     pub flash_limited: bool,
+    /// How many times the frame loop has failed and been started again.
+    pub restarts: u32,
     pub devices: HashMap<u32, DeviceStats>,
 }
 
@@ -258,6 +260,21 @@ impl Shared {
 
     fn bump(&self) {
         self.revision.send_modify(|r| *r += 1);
+    }
+
+    /// Makes the locks usable again after a thread failed while holding
+    /// one. Each guards plain data that is whole between operations, and
+    /// a show that carries on beats one that stops for good.
+    pub(crate) fn mend_locks(&self) {
+        self.show.clear_poison();
+        self.live.clear_poison();
+        self.stats.clear_poison();
+        self.history.clear_poison();
+        self.knob_moves.clear_poison();
+        self.notice.clear_poison();
+        self.midi.clear_poison();
+        self.saved.clear_poison();
+        self.save_path.clear_poison();
     }
 
     pub(crate) fn bump_live(&self) {

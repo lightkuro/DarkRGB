@@ -345,6 +345,12 @@ code {
   scrollbar-color: var(--line-strong) transparent;
 }
 
+/* When a panel is fuller than it is tall it scrolls: nothing in it is
+   squeezed to fit, which would lay one thing over another. */
+.panel > * {
+  flex-shrink: 0;
+}
+
 .panel.devices {
   border-right: 1px solid var(--line);
 }
@@ -372,6 +378,10 @@ code {
 .hint {
   color: var(--muted);
   font-size: 12px;
+}
+
+.hint.warn {
+  color: var(--accent);
 }
 
 .field.inline.each {

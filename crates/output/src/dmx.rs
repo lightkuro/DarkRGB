@@ -17,6 +17,25 @@ pub mod sacn {
     /// Writes one data packet for `universe` into `out` (cleared first).
     /// `cid` identifies the sender, `data` is up to 512 channels.
     pub fn packet(out: &mut Vec<u8>, cid: &[u8; 16], source: &str, universe: u16, seq: u8, data: &[u8]) {
+        write(out, cid, source, universe, seq, data, 0);
+    }
+
+    /// The options bit that says this source has finished with a universe.
+    pub const STREAM_TERMINATED: u8 = 0x40;
+
+    /// Writes the packet that tells receivers this source is done with
+    /// `universe`, so they need not wait to find out. The standard asks
+    /// for it to be sent three times.
+    pub fn farewell(out: &mut Vec<u8>, cid: &[u8; 16], source: &str, universe: u16, seq: u8) {
+        write(out, cid, source, universe, seq, &[], STREAM_TERMINATED);
+    }
+
+    /// Whether a packet is a source saying it is done with its universe.
+    pub fn is_farewell(packet: &[u8]) -> bool {
+        packet.len() >= HEADER_LEN && &packet[4..16] == ACN_ID && packet[112] & STREAM_TERMINATED != 0
+    }
+
+    fn write(out: &mut Vec<u8>, cid: &[u8; 16], source: &str, universe: u16, seq: u8, data: &[u8], options: u8) {
         let data = &data[..data.len().min(512)];
         let total = HEADER_LEN + data.len();
         let length = |from: usize| 0x7000u16 | (total - from) as u16;
@@ -38,7 +57,7 @@ pub mod sacn {
         out.push(100); // priority, the default
         out.extend_from_slice(&[0x00, 0x00]); // no synchronisation universe
         out.push(seq);
-        out.push(0); // options
+        out.push(options);
         out.extend_from_slice(&universe.to_be_bytes());
         // Device management layer.
         out.extend_from_slice(&length(115).to_be_bytes());

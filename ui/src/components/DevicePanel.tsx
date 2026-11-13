@@ -32,6 +32,7 @@ import {
   useSelection,
   useShow,
   useStatus,
+  type ColourOrder,
   type Device,
   type DeviceStats,
   type Discovered,
@@ -129,7 +130,7 @@ function PixelAddress({ device }: { device: Device }) {
 
 const updaters = new Map<string, (value: number) => void>();
 /** One rate-limited sender per device and field, so sliders stay smooth. */
-function deviceSetter(id: number, field: "brightness" | "gamma") {
+function deviceSetter(id: number, field: "brightness" | "gamma" | "delay_ms") {
   const key = `${id}:${field}`;
   let send = updaters.get(key);
   if (!send) {
@@ -137,6 +138,71 @@ function deviceSetter(id: number, field: "brightness" | "gamma") {
     updaters.set(key, send);
   }
   return send;
+}
+
+const ORDERS: [ColourOrder, string][] = [
+  ["rgb", "Red, green, blue"],
+  ["grb", "Green, red, blue"],
+  ["brg", "Blue, red, green"],
+  ["rbg", "Red, blue, green"],
+  ["gbr", "Green, blue, red"],
+  ["bgr", "Blue, green, red"],
+];
+
+/** Amps, as people say them: 2.5 A, 800 mA. */
+function amps(milliamps: number): string {
+  return milliamps >= 1000 ? `${(milliamps / 1000).toFixed(milliamps >= 10000 ? 0 : 1)} A` : `${Math.round(milliamps)} mA`;
+}
+
+/**
+ * The most current a device's lights may draw, typed in amps. Empty is
+ * no limit. Under it: what the picture is drawing now, by estimate.
+ */
+function PowerLimit({ device, stats }: { device: Device; stats?: DeviceStats }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const limit = device.max_milliamps ?? 0;
+  const commit = () => {
+    if (draft !== null) {
+      const text = draft.trim().replace(",", ".");
+      const value = text === "" ? 0 : Number(text);
+      if (Number.isFinite(value) && value >= 0) {
+        engine.send({ type: "update_device", id: device.id, max_milliamps: Math.round(value * 1000) });
+      }
+    }
+    setDraft(null);
+  };
+  // Every pixel at full white, by the same estimate the engine uses.
+  const flatOut = device.pixel_count * 61;
+  return (
+    <>
+      <label className="field inline">
+        <span>Power limit (amps)</span>
+        <input
+          className="number"
+          type="text"
+          inputMode="decimal"
+          aria-label="Power limit in amps"
+          placeholder="None"
+          value={draft ?? (limit > 0 ? String(limit / 1000) : "")}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+        />
+      </label>
+      <p className={`hint${stats?.limited ? " warn" : ""}`}>
+        {stats?.milliamps !== undefined && device.enabled
+          ? stats.limited
+            ? `Dimmed to stay at ${amps(limit)}. `
+            : `Drawing about ${amps(stats.milliamps)} now. `
+          : ""}
+        Flat out, {device.pixel_count} LEDs would draw about {amps(flatOut)}. An estimate for 5 volt strips: set the
+        limit a little under what the power supply gives.
+      </p>
+    </>
+  );
 }
 
 /** The angle of one light, to read off or type. */
@@ -310,6 +376,46 @@ function DeviceRow({
                     Gamma makes dim colours look right on LEDs. If colours look washed out, raise it; if dark
                     shades vanish, lower it.
                   </p>
+                  {(device.kind === "sacn" || device.kind === "artnet") && (
+                    <label className="field inline">
+                      <span>Colour order</span>
+                      <select
+                        aria-label="Colour order"
+                        value={device.order ?? "rgb"}
+                        onChange={(e) =>
+                          engine.send({ type: "update_device", id: device.id, order: e.target.value as ColourOrder })
+                        }
+                      >
+                        {ORDERS.map(([id, name]) => (
+                          <option key={id} value={id}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <PowerLimit device={device} stats={stats} />
+                  <Slider
+                    label="Delay"
+                    min={0}
+                    max={500}
+                    step={5}
+                    value={device.delay_ms ?? 0}
+                    format={(v) => (v === 0 ? "None" : `${Math.round(v)} ms`)}
+                    onChange={deviceSetter(device.id, "delay_ms")}
+                  />
+                  <p className="hint">Holds this light back to line it up with slower ones.</p>
+                  <div className="field inline">
+                    <span>
+                      Smoother dim levels
+                      <span className="hint"> Finer steps in slow fades near black. Switch off if it shimmers.</span>
+                    </span>
+                    <Switch
+                      checked={device.dither ?? false}
+                      label="Smoother dim levels"
+                      onChange={(dither) => engine.send({ type: "update_device", id: device.id, dither })}
+                    />
+                  </div>
                 </>
               )}
             </>

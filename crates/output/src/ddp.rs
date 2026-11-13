@@ -17,6 +17,7 @@
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
+use std::time::{Duration, Instant};
 
 pub const DDP_PORT: u16 = 4048;
 pub const HEADER_LEN: usize = 10;
@@ -87,6 +88,30 @@ pub fn parse(bytes: &[u8]) -> Option<Packet<'_>> {
     })
 }
 
+/// How long one packet may wait for room in the operating system's send
+/// buffer before the frame is given up.
+const SEND_PATIENCE: Duration = Duration::from_micros(600);
+
+/// Sends one packet. When the send buffer is full, which happens for an
+/// instant when many packets go out together, it waits a moment for room
+/// instead of dropping the rest of the frame: half a frame on the lights
+/// is a visible tear. It never waits long, so the frame clock keeps time.
+fn send_patiently(socket: &UdpSocket, packet: &[u8], addr: SocketAddr) -> io::Result<usize> {
+    let mut waited: Option<Instant> = None;
+    loop {
+        match socket.send_to(packet, addr) {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                let since = *waited.get_or_insert_with(Instant::now);
+                if since.elapsed() >= SEND_PATIENCE {
+                    return Err(e);
+                }
+                std::thread::sleep(Duration::from_micros(50));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Sends frames to DDP devices from one UDP socket.
 pub struct Sender {
     socket: UdpSocket,
@@ -110,7 +135,7 @@ impl Sender {
     /// Sends bytes that are already a whole packet of some other protocol
     /// from the same socket.
     pub fn send_raw(&self, addr: SocketAddr, packet: &[u8]) -> io::Result<usize> {
-        self.socket.send_to(packet, addr)
+        send_patiently(&self.socket, packet, addr)
     }
 
     /// Sends one frame. Returns the number of packets sent.
@@ -121,7 +146,7 @@ impl Sender {
             let start = i * MAX_DATA;
             let end = (start + MAX_DATA).min(frame.len());
             let n = write_packet(&mut self.buf, self.seq, start, &frame[start..end], i + 1 == chunks);
-            self.socket.send_to(&self.buf[..n], addr)?;
+            send_patiently(&self.socket, &self.buf[..n], addr)?;
         }
         Ok(chunks)
     }

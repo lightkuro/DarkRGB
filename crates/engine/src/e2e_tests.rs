@@ -215,12 +215,38 @@ fn blackout_and_disabling_a_device_stop_the_light() {
             brightness: None,
             address: None,
             universe: None,
+            order: None,
+            max_milliamps: None,
+            delay_ms: None,
+            dither: None,
         })
         .unwrap();
     std::thread::sleep(Duration::from_millis(100));
     let before = sim.stats().frames;
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(sim.stats().frames, before, "a disabled device must receive nothing");
+}
+
+#[test]
+fn stopping_the_engine_leaves_the_light_dark() {
+    let sim = Sim::start(SimConfig {
+        leds: 10,
+        ..SimConfig::default()
+    })
+    .unwrap();
+    let engine = Engine::start();
+    make_solid(&engine.shared, "#ffffff");
+    engine
+        .shared
+        .execute(&Command::AddDevice {
+            address: format!("127.0.0.1:{}", sim.http_port),
+        })
+        .unwrap();
+    wait_for("white", || sim.frame().iter().all(|b| *b == 255));
+    drop(engine);
+    wait_for("dark after the engine has stopped", || {
+        sim.frame().iter().all(|b| *b == 0)
+    });
 }
 
 #[test]

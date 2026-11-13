@@ -22,7 +22,7 @@ pub mod timeline;
 pub use audio::{AudioFeatures, BANDS, Band};
 pub use color::{Pal, Palette, Rgb};
 pub use effect::{Effect, EffectInfo, FlashUse, FrameCtx};
-pub use layout::{Device, DeviceKind, Fixture, Shape};
+pub use layout::{ColourOrder, Device, DeviceKind, Fixture, Shape};
 pub use params::{ParamKind, ParamSpec, ParamValue, Params};
 pub use render::{Cues, LayerHit, Renderer};
 pub use show::{
