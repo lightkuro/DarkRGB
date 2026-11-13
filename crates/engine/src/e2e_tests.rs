@@ -557,6 +557,97 @@ fn colour_at(sim: &Sim) -> [u8; 3] {
 }
 
 #[test]
+fn a_light_planned_on_screen_is_connected_to_a_device_and_starts_showing_there() {
+    use crate::commands::{ConnectTo, VirtualShape};
+    // The device has 12 LEDs; the plan guessed 30.
+    let sim = Sim::start(SimConfig {
+        leds: 12,
+        ..SimConfig::default()
+    })
+    .unwrap();
+    let engine = Engine::start();
+    let shared = &engine.shared;
+    make_solid(shared, "#ffffff");
+    shared
+        .execute(&Command::AddVirtual {
+            name: "Eaves".into(),
+            shape: VirtualShape::Strip { count: 30 },
+        })
+        .unwrap();
+    let (device, fixture) = {
+        let mut show = shared.show.lock().unwrap();
+        show.fixtures[0].x = 2.5;
+        show.devices[0].brightness = 0.5;
+        (show.devices[0].id, show.fixtures[0].clone())
+    };
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        sim.stats().frames,
+        0,
+        "nothing is sent for a light that is only planned"
+    );
+
+    let note = shared
+        .execute(&Command::Connect {
+            device,
+            to: ConnectTo::Wled {
+                address: format!("127.0.0.1:{}", sim.http_port),
+            },
+        })
+        .unwrap();
+    assert!(note.unwrap().contains("12"), "the difference in LEDs is said");
+    {
+        let show = shared.show.lock().unwrap();
+        let d = &show.devices[0];
+        assert_eq!(
+            (d.id, d.name.as_str(), d.kind),
+            (device, "Eaves", darkrgb_core::DeviceKind::Wled)
+        );
+        assert_eq!((d.pixel_count, d.brightness, d.port), (12, 0.5, sim.ddp_port));
+        assert!(d.mac.is_some() && d.version.is_some());
+        let f = &show.fixtures[0];
+        assert_eq!((f.id, f.x, f.pixel_count()), (fixture.id, 2.5, 12));
+    }
+    // White at the light's own limit of a half, on all twelve.
+    wait_for("the device to show the plan", || {
+        let frame = sim.frame();
+        frame.len() == 36 && frame.iter().all(|b| *b == 128)
+    });
+    // The same device cannot become a second light, and an address
+    // nothing answers at changes nothing.
+    shared
+        .execute(&Command::AddVirtual {
+            name: "Porch".into(),
+            shape: VirtualShape::Strip { count: 12 },
+        })
+        .unwrap();
+    let porch = shared.show.lock().unwrap().devices[1].id;
+    let before = shared.show.lock().unwrap().clone();
+    let again = shared.execute(&Command::Connect {
+        device: porch,
+        to: ConnectTo::Wled {
+            address: format!("127.0.0.1:{}", sim.http_port),
+        },
+    });
+    assert!(again.is_err());
+    let nobody = shared.execute(&Command::Connect {
+        device: porch,
+        to: ConnectTo::Wled {
+            address: "127.0.0.1:9".into(),
+        },
+    });
+    assert!(nobody.is_err());
+    assert_eq!(*shared.show.lock().unwrap(), before);
+    // Undo takes the light back to being planned.
+    shared.execute(&Command::Undo).unwrap();
+    shared.execute(&Command::Undo).unwrap();
+    assert_eq!(
+        shared.show.lock().unwrap().devices[0].kind,
+        darkrgb_core::DeviceKind::Virtual
+    );
+}
+
+#[test]
 fn a_scene_can_be_changed_while_the_lights_play_another() {
     let (engine, sim) = engine_with_strip();
     let shared = &engine.shared;
