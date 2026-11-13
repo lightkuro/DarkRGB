@@ -23,6 +23,10 @@ pub struct LookLayer {
     /// Sliders that follow the music: the setting, what it follows, and
     /// by how much of its range.
     pub links: &'static [(&'static str, Source, f32)],
+    /// The pattern folded on itself, wrapped into wedges, or set turning.
+    pub mirror: Mirror,
+    pub kaleido: u8,
+    pub spin: f32,
 }
 
 /// A parameter value that can be written as a constant.
@@ -52,6 +56,9 @@ const fn layer(effect: &'static str, params: &'static [(&'static str, Value)]) -
         only: Only::Any,
         each: false,
         links: &[],
+        mirror: Mirror::Off,
+        kaleido: 0,
+        spin: 0.0,
     }
 }
 
@@ -348,6 +355,163 @@ pub const LOOKS: &[Look] = &[
             ),
         ],
     },
+    // ---- Added in 0.9.0. Not in any kind's starting set: they are
+    // offered where scenes are managed.
+    Look {
+        name: "Lighthouse",
+        description: "One beam crossing slowly over a deep blue that breathes.",
+        mood: Mood::Calm,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.35,
+                ..layer("breathe", &[("palette", T("ocean")), ("period", N(8.0))])
+            },
+            each(
+                "scanner",
+                &[("colour", T("#fff3c4")), ("width", N(0.12)), ("speed", N(0.35))],
+            ),
+        ],
+    },
+    Look {
+        name: "Marquee",
+        description: "Theatre bulbs stepping round in warm white, with a twinkle over them.",
+        mood: Mood::Any,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                ..each(
+                    "marquee",
+                    &[("palette", T("warm")), ("spacing", N(3.0)), ("speed", N(4.0))],
+                )
+            },
+            LookLayer {
+                opacity: 0.6,
+                ..layer("twinkle", &[])
+            },
+        ],
+    },
+    Look {
+        name: "Fireworks night",
+        description: "Bursts on every hit over a dark sky, with sparks along the strips.",
+        mood: Mood::Big,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.12,
+                ..layer("plasma", &[("palette", T("blacklight")), ("speed", N(0.1))])
+            },
+            LookLayer {
+                only: Only::Matrices,
+                ..each("fireworks", &[("palette", T("rainbow")), ("size", N(0.7))])
+            },
+            LookLayer {
+                only: Only::Strips,
+                band: Band::Treble,
+                ..layer("sparkle", &[("colour", T("#ffe9b0")), ("density", N(0.35))])
+            },
+        ],
+    },
+    Look {
+        name: "Pinwheel",
+        description: "Arms of colour turning in time, pushed brighter by the bass.",
+        mood: Mood::Big,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            links: &[(LINK_STRENGTH, Source::Bass, 0.3)],
+            opacity: 0.75,
+            ..each(
+                "pinwheel",
+                &[("palette", T("candy")), ("arms", N(5.0)), ("speed", N(0.3))],
+            )
+        }],
+    },
+    Look {
+        name: "Ripples",
+        description: "Rings leaving the middle of each light, one a beat.",
+        mood: Mood::Any,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.15,
+                ..layer("plasma", &[("palette", T("ocean")), ("speed", N(0.15))])
+            },
+            each("rings", &[("palette", T("neon")), ("rings", N(3.0))]),
+        ],
+    },
+    Look {
+        name: "Dance floor",
+        description: "Lit tiles that reshuffle on the beat, with a chase round the strips.",
+        mood: Mood::Big,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                only: Only::Matrices,
+                ..each("tiles", &[("palette", T("neon")), ("across", N(4.0))])
+            },
+            LookLayer {
+                only: Only::Strips,
+                ..each("chase", &[("palette", T("neon"))])
+            },
+        ],
+    },
+    Look {
+        name: "Equaliser",
+        description: "Bars for the music with caps that hang and fall, mirrored on the strips.",
+        mood: Mood::Any,
+        layers: &[
+            // So that it is not dark when the music stops.
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.1,
+                ..layer("plasma", &[("palette", T("ocean")), ("speed", N(0.15))])
+            },
+            LookLayer {
+                only: Only::Matrices,
+                ..each("peaks", &[("palette", T("rainbow")), ("bars", N(16.0))])
+            },
+            LookLayer {
+                only: Only::Strips,
+                mirror: Mirror::Across,
+                ..each("meter", &[])
+            },
+        ],
+    },
+    Look {
+        name: "Deep breath",
+        description: "Everything swells and fades together, slowly. For winding down.",
+        mood: Mood::Calm,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer("breathe", &[("palette", T("aurora")), ("period", N(10.0))])
+        }],
+    },
+    Look {
+        name: "Kaleidoscope",
+        description: "A slow pattern folded into six wedges, turning. Best on a matrix.",
+        mood: Mood::Any,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            kaleido: 6,
+            spin: 8.0,
+            links: &[(LINK_STRENGTH, Source::Level, 0.2)],
+            opacity: 0.8,
+            ..each("plasma", &[("palette", T("candy")), ("speed", N(0.5))])
+        }],
+    },
+    Look {
+        name: "Heartbeat",
+        description: "One colour that thumps with the kick and rests between.",
+        mood: Mood::Any,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            band: Band::Bass,
+            ..layer(
+                "beat_pulse",
+                &[("palette", T("warm")), ("decay", N(0.3)), ("floor", N(0.05))],
+            )
+        }],
+    },
 ];
 
 impl Kind {
@@ -453,11 +617,11 @@ impl Show {
                 // lands where it should on lights added later too.
                 only: part.only,
                 angle: 0.0,
-                spin: 0.0,
+                spin: part.spin,
                 turns: false,
-                mirror: Mirror::Off,
+                mirror: part.mirror,
                 repeat: 1,
-                kaleido: 0,
+                kaleido: part.kaleido,
                 spread: 0.0,
                 hue: 0.0,
                 links: part
@@ -558,7 +722,9 @@ mod tests {
                 );
             }
         }
-        for l in LOOKS {
+        // The first fifteen each start some kind of show. Those added
+        // since are offered where scenes are managed, to any show.
+        for l in &LOOKS[..15] {
             assert!(
                 Kind::ALL.iter().any(|k| k.looks().contains(&l.name)),
                 "{} is never offered",

@@ -432,7 +432,13 @@ fn hello() -> String {
         "palettes": color::palettes(),
         // The starter scenes there are, and which of them each kind of
         // show gets, so the UI can tell which are missing.
-        "looks": LOOKS.iter().map(|l| json!({ "name": l.name, "description": l.description })).collect::<Vec<_>>(),
+        "looks": LOOKS.iter().map(|l| json!({
+            "name": l.name,
+            "description": l.description,
+            "mood": l.mood,
+            // The effect whose moving picture stands for the look: its top one.
+            "effect": l.layers.last().map(|layer| layer.effect),
+        })).collect::<Vec<_>>(),
         "kinds": Kind::ALL.iter().map(|k| json!({
             "id": k,
             "name": k.name(),

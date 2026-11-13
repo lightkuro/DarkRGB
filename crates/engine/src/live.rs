@@ -247,6 +247,14 @@ pub struct LiveStatus {
     pub timeline: TransportStatus,
     /// Where the beat comes from and how it has been corrected.
     pub clock: ClockStatus,
+    /// The scene being changed in the effects panel while the lights
+    /// play something else, if any.
+    pub editing: Option<u32>,
+    /// True while the lights play something other than what the effects
+    /// panel shows.
+    pub blind: bool,
+    /// The scene the lights went to last, for marking it while blind.
+    pub on_air_scene: Option<u32>,
 }
 
 /// What clients are told about the timeline's playback.
@@ -346,6 +354,11 @@ pub struct Live {
     /// The scene last switched to, to count "next" and "previous" from
     /// when what is playing has since been edited.
     pub last_scene: Option<u32>,
+    /// What the lights play while the effects panel holds a scene that
+    /// is being changed out of sight: the effects and their folders.
+    pub on_air: Option<(Vec<darkrgb_core::Layer>, Vec<darkrgb_core::LayerGroup>)>,
+    /// The scene being changed out of sight.
+    pub editing: Option<u32>,
     /// Hits fired by hand for single layers: when the last one was, and
     /// how many there have been. Kept, because an effect tells a new hit
     /// by the count going up.
@@ -467,6 +480,9 @@ impl Live {
                 nudge: self.clock.nudge as f32,
                 midi_bpm: self.midi_clock.bpm(self.frame_at),
             },
+            editing: self.editing.filter(|_| self.on_air.is_some()),
+            blind: self.on_air.is_some(),
+            on_air_scene: self.last_scene.filter(|_| self.on_air.is_some()),
         }
     }
 
@@ -560,7 +576,12 @@ impl Live {
     /// the tapped tempo if there is one.
     pub fn autopilot(&mut self, now: f64, show: &Show, features: &AudioFeatures, beat: bool) -> Option<u32> {
         let settings = show.live.auto;
-        let usable: Vec<u32> = show.scenes.iter().filter(|s| s.auto).map(|s| s.id).collect();
+        let usable: Vec<u32> = show
+            .scenes
+            .iter()
+            .filter(|s| s.auto && show.in_use(s))
+            .map(|s| s.id)
+            .collect();
         if !settings.enabled || usable.len() < 2 {
             self.auto = None;
             return None;
@@ -601,7 +622,13 @@ impl Live {
             return None;
         }
 
-        let current = show.current_scene().or(self.last_scene);
+        // While a scene is being changed out of sight, the show holds
+        // that scene, not the one the lights are on.
+        let current = if self.on_air.is_some() {
+            self.last_scene
+        } else {
+            show.current_scene().or(self.last_scene)
+        };
         // Scenes say which parts of a song they suit. In a big part the
         // calm ones are passed over, and in a quiet part the big ones,
         // as long as that leaves something to change to.
@@ -837,6 +864,11 @@ impl Live {
     /// is tied to, for as long as it is down.
     pub fn overlay(&self, show: &Show) -> Show {
         let mut out = show.clone();
+        // While a scene is being changed out of sight, the lights go on
+        // with what they had; the show holds what is being changed.
+        if let Some((layers, groups)) = &self.on_air {
+            (out.layers, out.layer_groups) = (layers.clone(), groups.clone());
+        }
         // With the music stopped, the scene chosen for silence shows. The
         // saved show is not changed: when the music is back, so is what
         // was playing.

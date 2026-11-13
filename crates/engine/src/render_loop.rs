@@ -133,10 +133,14 @@ fn frames(shared: &Arc<Shared>, stop: &AtomicBool) {
     let mut live_revisions = shared.live_rev.subscribe();
     // The show as saved, and as the lights see it: with held keys applied.
     let mut base: Show = shared.show.lock().unwrap().clone();
-    let (mut show, mut scene_serial) = {
+    let (mut show, mut scene_serial, on_air) = {
         let live = shared.live.lock().unwrap();
-        (live.overlay(&base), live.scene_serial)
+        (live.overlay(&base), live.scene_serial, live.on_air.is_some())
     };
+    // While a scene is being changed out of sight, the lights play one
+    // thing and the preview shows another: what is being changed, drawn
+    // by a renderer of its own.
+    let mut blind: Option<Renderer> = on_air.then(Renderer::new);
     let mut fade: Option<Fade> = None;
     let mut delay = Delay::default();
     let mut guard = FlashGuard::default();
@@ -180,10 +184,20 @@ fn frames(shared: &Arc<Shared>, stop: &AtomicBool) {
         }
         if show_changed || live_changed {
             live_revisions.mark_unchanged();
-            let (next, serial, fade_s) = {
+            let (next, serial, fade_s, on_air) = {
                 let mut live = shared.live.lock().unwrap();
-                (live.overlay(&base), live.scene_serial, live.take_fade(base.live.fade))
+                (
+                    live.overlay(&base),
+                    live.scene_serial,
+                    live.take_fade(base.live.fade),
+                    live.on_air.is_some(),
+                )
             };
+            match (on_air, blind.is_some()) {
+                (true, false) => blind = Some(Renderer::new()),
+                (false, true) => blind = None,
+                _ => {}
+            }
             let previous = std::mem::replace(&mut show, next);
             // A change of scene fades in, if the show asks for that. The
             // scene being left keeps its renderer and plays on underneath;
@@ -205,6 +219,9 @@ fn frames(shared: &Arc<Shared>, stop: &AtomicBool) {
         if needs_sync {
             needs_sync = false;
             renderer.sync(&show);
+            if let Some(blind) = &mut blind {
+                blind.sync(&base);
+            }
             outputs.sync(&show);
             if renderer.positions() != last_positions.as_slice() || layout_serial == 0 {
                 last_positions = renderer.positions().to_vec();
@@ -292,6 +309,9 @@ fn frames(shared: &Arc<Shared>, stop: &AtomicBool) {
         let time = show_time;
 
         renderer.render_with(&show, time, dt, &audio, &cues);
+        if let Some(blind) = &mut blind {
+            blind.render_with(&base, time, dt, &audio, &cues);
+        }
         if let Some(leaving) = &mut fade {
             let t = frame_start.duration_since(leaving.started).as_secs_f32() / leaving.seconds;
             if t >= 1.0 {
@@ -309,7 +329,7 @@ fn frames(shared: &Arc<Shared>, stop: &AtomicBool) {
 
         let preview_every = (show.output.frame_rate / PREVIEW_RATE).max(1) as u64;
         if frame_index.is_multiple_of(preview_every) && shared.preview.receiver_count() > 0 {
-            renderer.preview_bytes(&mut preview_bytes);
+            blind.as_ref().unwrap_or(&renderer).preview_bytes(&mut preview_bytes);
             let mut msg = message(MSG_PREVIEW, layout_serial, preview_bytes.len());
             msg.extend_from_slice(&preview_bytes);
             shared.preview.send_replace(msg.into());

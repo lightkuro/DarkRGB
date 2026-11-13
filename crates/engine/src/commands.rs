@@ -12,7 +12,7 @@ use darkrgb_core::show::{
 use darkrgb_core::timeline::{Clip, ClipKind, MAX_CLIPS, MAX_LENGTH, MIN_CLIP};
 use darkrgb_core::{
     Action, Band, Device, DeviceKind, FlashSettings, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, Link, MidiNote,
-    Mood, Only, Rgb, Shape, Show, Sound, Source, Swatch,
+    Mood, Only, Rgb, SceneSet, Shape, Show, Sound, Source, Swatch,
 };
 use darkrgb_output::dmx;
 use serde::Deserialize;
@@ -27,6 +27,7 @@ const MAX_LAYERS: usize = 32;
 /// Most effects inside pinned folders. They play on top of every scene.
 const MAX_PINNED: usize = 16;
 const MAX_SCENES: usize = 200;
+const MAX_SCENE_SETS: usize = 16;
 const MAX_DEVICES: usize = 256;
 const MAX_GROUPS: usize = 64;
 const MAX_BINDINGS: usize = 128;
@@ -756,6 +757,57 @@ pub enum Command {
     },
     SaveScene {
         name: String,
+    },
+    /// Writes what is in the effects panel into a scene that exists.
+    UpdateScene {
+        id: u32,
+    },
+    /// Adds a scene with one effect in it, to be built up. What is
+    /// playing is left alone.
+    AddScene {
+        name: String,
+    },
+    /// Adds one starter scene, by its name.
+    AddLook {
+        name: String,
+    },
+    /// Loads a scene into the effects panel to be changed while the
+    /// lights go on playing what they were playing.
+    EditScene {
+        id: u32,
+    },
+    /// Ends that: the changes are kept in the scene, and either it goes
+    /// onto the lights or the panel returns to what the lights play.
+    FinishEdit {
+        play: bool,
+    },
+    AddSceneSet {
+        name: String,
+    },
+    RenameSceneSet {
+        id: u32,
+        name: String,
+    },
+    /// Removes a set. Its scenes stay, in no set.
+    RemoveSceneSet {
+        id: u32,
+    },
+    /// Files a scene in a set, or in none.
+    FileScene {
+        scene: u32,
+        set: Option<u32>,
+    },
+    /// Chooses the set of scenes in use, or none for every scene.
+    UseSceneSet {
+        id: Option<u32>,
+    },
+    /// Changes what every effect in a folder plays on, in one go.
+    UpdateFolderLayers {
+        group: u32,
+        #[serde(default)]
+        targets: Option<Vec<u32>>,
+        #[serde(default)]
+        only: Option<Only>,
     },
     RecallScene {
         id: u32,
@@ -2438,6 +2490,149 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
+        Command::UpdateScene { id } => {
+            let (layers, groups) = show.scene_part();
+            let scene = show
+                .scenes
+                .iter_mut()
+                .find(|s| s.id == *id)
+                .ok_or("that scene no longer exists")?;
+            scene.layers = layers;
+            scene.groups = groups;
+            show.prune_bindings();
+            Ok(())
+        }
+
+        Command::AddScene { name: scene_name } => {
+            let scene_name = name(scene_name, "The scene name")?;
+            if show.scenes.len() >= MAX_SCENES {
+                return Err(format!("a show can have at most {MAX_SCENES} scenes"));
+            }
+            if show.scenes.iter().any(|s| s.name == scene_name) {
+                return Err(format!("there is already a scene called {scene_name}"));
+            }
+            // Built in the place of what is playing, saved, and what was
+            // playing put back: the scene's effect gets an id of its own.
+            let playing = (show.layers.clone(), show.layer_groups.clone());
+            let (kept, pinned): (Vec<Layer>, Vec<_>) = (
+                show.layers.iter().filter(|l| show.is_pinned(l)).cloned().collect(),
+                show.layer_groups.iter().filter(|g| g.pinned).cloned().collect(),
+            );
+            (show.layers, show.layer_groups) = (kept, pinned);
+            show.add_layer(effects::DEFAULT_EFFECT);
+            show.save_scene(&scene_name);
+            (show.layers, show.layer_groups) = playing;
+            Ok(())
+        }
+
+        Command::AddLook { name: look_name } => {
+            let look = darkrgb_core::looks::look(look_name).ok_or("there is no starter scene of that name")?;
+            if show.scenes.len() >= MAX_SCENES {
+                return Err(format!("a show can have at most {MAX_SCENES} scenes"));
+            }
+            match show.add_look(look) {
+                Some(_) => Ok(()),
+                None => Err(format!("this show already has a scene called {}", look.name)),
+            }
+        }
+
+        Command::EditScene { .. } | Command::FinishEdit { .. } => {
+            Err("that command needs the engine that is running the lights".into())
+        }
+
+        Command::AddSceneSet { name: set_name } => {
+            let set_name = name(set_name, "The name")?;
+            if show.scene_sets.len() >= MAX_SCENE_SETS {
+                return Err(format!("a show can have at most {MAX_SCENE_SETS} sets of scenes"));
+            }
+            if show.scene_sets.iter().any(|s| s.name == set_name) {
+                return Err(format!("there is already a set called {set_name}"));
+            }
+            let id = show.alloc_id();
+            show.scene_sets.push(SceneSet { id, name: set_name });
+            Ok(())
+        }
+
+        Command::RenameSceneSet { id, name: set_name } => {
+            let set_name = name(set_name, "The name")?;
+            if show.scene_sets.iter().any(|s| s.name == set_name && s.id != *id) {
+                return Err(format!("there is already a set called {set_name}"));
+            }
+            let set = show
+                .scene_sets
+                .iter_mut()
+                .find(|s| s.id == *id)
+                .ok_or("that set no longer exists")?;
+            set.name = set_name;
+            Ok(())
+        }
+
+        Command::RemoveSceneSet { id } => {
+            if !show.scene_sets.iter().any(|s| s.id == *id) {
+                return Err("that set no longer exists".into());
+            }
+            show.scene_sets.retain(|s| s.id != *id);
+            for scene in show.scenes.iter_mut().filter(|s| s.set == Some(*id)) {
+                scene.set = None;
+            }
+            if show.live.scene_set == Some(*id) {
+                show.live.scene_set = None;
+            }
+            Ok(())
+        }
+
+        Command::FileScene { scene, set } => {
+            if let Some(set) = set
+                && !show.scene_sets.iter().any(|s| s.id == *set)
+            {
+                return Err("that set no longer exists".into());
+            }
+            let scene = show
+                .scenes
+                .iter_mut()
+                .find(|s| s.id == *scene)
+                .ok_or("that scene no longer exists")?;
+            scene.set = *set;
+            Ok(())
+        }
+
+        Command::UseSceneSet { id } => {
+            if let Some(id) = id
+                && !show.scene_sets.iter().any(|s| s.id == *id)
+            {
+                return Err("that set no longer exists".into());
+            }
+            show.live.scene_set = *id;
+            Ok(())
+        }
+
+        Command::UpdateFolderLayers { group, targets, only } => {
+            if !show.layer_groups.iter().any(|g| g.id == *group) {
+                return Err("that folder no longer exists".into());
+            }
+            if let Some(targets) = targets
+                && targets
+                    .iter()
+                    .any(|t| !show.fixtures.iter().any(|f| f.id == *t) && !show.light_groups.iter().any(|g| g.id == *t))
+            {
+                return Err("one of those lights no longer exists".into());
+            }
+            let targets = targets.clone().map(|mut t| {
+                t.sort_unstable();
+                t.dedup();
+                t
+            });
+            for layer in show.layers.iter_mut().filter(|l| l.group == Some(*group)) {
+                if let Some(t) = &targets {
+                    layer.targets = t.clone();
+                }
+                if let Some(o) = only {
+                    layer.only = *o;
+                }
+            }
+            Ok(())
+        }
+
         Command::RecallScene { id } => {
             if show.recall_scene(*id) {
                 Ok(())
@@ -3098,6 +3293,119 @@ mod tests {
                 4048,
                 0,
                 answered("cc", 150)
+            )
+            .is_err()
+        );
+        assert_eq!(show, before);
+    }
+
+    #[test]
+    fn scenes_can_be_filed_in_sets_and_one_set_is_in_use() {
+        let mut show = Show::default();
+        for name in ["Dinner", "Candles", "Party", "Strobe night"] {
+            apply(&mut show, &Command::AddScene { name: name.into() }).unwrap();
+        }
+        let ids: Vec<u32> = show.scenes.iter().map(|s| s.id).collect();
+        assert_eq!(show.layers.len(), 1, "adding a scene leaves what is playing alone");
+        assert!(
+            show.scenes
+                .iter()
+                .all(|s| s.layers.len() == 1 && s.layers[0].id != show.layers[0].id)
+        );
+        assert!(apply(&mut show, &Command::AddScene { name: "Dinner".into() }).is_err());
+
+        apply(&mut show, &Command::AddSceneSet { name: "Quiet".into() }).unwrap();
+        apply(&mut show, &Command::AddSceneSet { name: "Loud".into() }).unwrap();
+        assert!(apply(&mut show, &Command::AddSceneSet { name: "Loud".into() }).is_err());
+        let (quiet, loud) = (show.scene_sets[0].id, show.scene_sets[1].id);
+        let file = |show: &mut Show, scene, set| apply(show, &Command::FileScene { scene, set });
+        file(&mut show, ids[0], Some(quiet)).unwrap();
+        file(&mut show, ids[1], Some(quiet)).unwrap();
+        file(&mut show, ids[2], Some(loud)).unwrap();
+        assert!(file(&mut show, ids[3], Some(9999)).is_err());
+        // With no set in use every scene is on offer; with one, its own
+        // and those filed nowhere.
+        let on_offer =
+            |show: &Show| -> Vec<u32> { show.scenes.iter().filter(|s| show.in_use(s)).map(|s| s.id).collect() };
+        assert_eq!(on_offer(&show), ids);
+        apply(&mut show, &Command::UseSceneSet { id: Some(quiet) }).unwrap();
+        assert_eq!(on_offer(&show), [ids[0], ids[1], ids[3]]);
+        // Next and previous keep to the set.
+        show.recall_scene(ids[1]);
+        assert_eq!(show.scene_after(None, 1), Some(ids[3]));
+        show.recall_scene(ids[3]);
+        assert_eq!(
+            show.scene_after(None, 1),
+            Some(ids[0]),
+            "round to the first of the set, past Party"
+        );
+        // A scene saved while a set is in use joins it.
+        apply(&mut show, &Command::SaveScene { name: "Late".into() }).unwrap();
+        assert_eq!(show.scenes.last().unwrap().set, Some(quiet));
+        // Removing a set keeps its scenes, in no set, and nothing is left pointing at it.
+        apply(&mut show, &Command::RemoveSceneSet { id: quiet }).unwrap();
+        assert!(show.scenes.iter().all(|s| s.set != Some(quiet)));
+        assert_eq!(show.live.scene_set, None);
+        assert_eq!(show.scenes.len(), 5);
+        let saved = serde_json::to_string(&show).unwrap();
+        assert_eq!(serde_json::from_str::<Show>(&saved).unwrap(), show);
+        // One starter scene can be added by name, once.
+        apply(&mut show, &Command::AddLook { name: "Storm".into() }).unwrap();
+        assert!(apply(&mut show, &Command::AddLook { name: "Storm".into() }).is_err());
+        assert!(apply(&mut show, &Command::AddLook { name: "Nope".into() }).is_err());
+    }
+
+    #[test]
+    fn a_folder_can_point_all_its_effects_at_the_same_lights() {
+        let mut show = Show::default();
+        show.add_virtual(
+            "a",
+            &Shape::Strip {
+                count: 10,
+                reverse: false,
+            },
+            false,
+        );
+        show.add_virtual(
+            "b",
+            &Shape::Strip {
+                count: 10,
+                reverse: false,
+            },
+            false,
+        );
+        let (a, b) = (show.fixtures[0].id, show.fixtures[1].id);
+        let folder = show.add_layer_group("Roof");
+        let inside = [
+            show.add_layer_in("sparkle", Some(folder)),
+            show.add_layer_in("fire", Some(folder)),
+        ];
+        let outside = show.layers.iter().find(|l| l.group.is_none()).unwrap().id;
+        apply(
+            &mut show,
+            &parse(&format!(
+                r#"{{"type":"update_folder_layers","group":{folder},"targets":[{b},{a},{b}],"only":"strips"}}"#
+            )),
+        )
+        .unwrap();
+        for id in inside {
+            let layer = show.layers.iter().find(|l| l.id == id).unwrap();
+            assert_eq!(
+                (layer.targets.as_slice(), layer.only),
+                ([a, b].as_slice(), Only::Strips)
+            );
+        }
+        let other = show.layers.iter().find(|l| l.id == outside).unwrap();
+        assert!(other.targets.is_empty() && other.only == Only::Any);
+        let before = show.clone();
+        let bad = parse(&format!(
+            r#"{{"type":"update_folder_layers","group":{folder},"targets":[4242]}}"#
+        ));
+        assert!(apply(&mut show, &bad).is_err());
+        assert!(
+            apply(
+                &mut show,
+                &parse(r#"{"type":"update_folder_layers","group":4242,"targets":[]}"#)
             )
             .is_err()
         );
@@ -4055,7 +4363,35 @@ mod tests {
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
             let clip = r.id(show.timeline.clips.iter().map(|c| c.id).collect());
-            let command = match r.next() % 62 {
+            let set = r.id(show.scene_sets.iter().map(|s| s.id).collect());
+            let scene_id = r.id(show.scenes.iter().map(|s| s.id).collect());
+            let command = match r.next() % 70 {
+                62 => Command::UpdateScene { id: scene_id },
+                63 => Command::AddScene { name: r.text() },
+                64 => Command::AddLook {
+                    name: ["Pulse", "Storm", "no such look", "Calm"][r.next() as usize % 4].into(),
+                },
+                65 => Command::AddSceneSet { name: r.text() },
+                66 => {
+                    if r.flag() {
+                        Command::RenameSceneSet {
+                            id: set,
+                            name: r.text(),
+                        }
+                    } else {
+                        Command::RemoveSceneSet { id: set }
+                    }
+                }
+                67 => Command::FileScene {
+                    scene: scene_id,
+                    set: r.maybe(|_| set),
+                },
+                68 => Command::UseSceneSet { id: r.maybe(|_| set) },
+                69 => Command::UpdateFolderLayers {
+                    group: folder,
+                    targets: r.maybe(|r| vec![fixture, r.next() % 50]),
+                    only: r.maybe(|r| [Only::Any, Only::Strips, Only::Matrices][r.next() as usize % 3]),
+                },
                 61 => Command::Connect {
                     device,
                     to: if r.flag() {

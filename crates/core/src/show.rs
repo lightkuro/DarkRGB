@@ -370,6 +370,19 @@ pub struct Scene {
     /// The parts of a song autopilot uses it for.
     #[serde(default)]
     pub mood: Mood,
+    /// The set of scenes it is filed in. A scene in no set is offered
+    /// whichever set is in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<u32>,
+}
+
+/// A named set of scenes: the ones for dinner, the ones for the party.
+/// One set is in use at a time; the scene buttons, the next and previous
+/// keys and autopilot keep to it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SceneSet {
+    pub id: u32,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -589,6 +602,9 @@ pub struct LiveSettings {
     pub faders: [f32; FADERS],
     #[serde(default)]
     pub idle: Idle,
+    /// The set of scenes in use, or none for every scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_set: Option<u32>,
     /// Knobs and faders of a MIDI controller, and what each moves.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub knobs: Vec<Knob>,
@@ -652,6 +668,7 @@ impl Default for LiveSettings {
             auto: Autopilot::default(),
             faders: [0.0; FADERS],
             idle: Idle::default(),
+            scene_set: None,
             knobs: Vec::new(),
             page: 1,
             swatches: Vec::new(),
@@ -898,6 +915,8 @@ pub struct Show {
     pub layer_groups: Vec<LayerGroup>,
     #[serde(default)]
     pub scenes: Vec<Scene>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scene_sets: Vec<SceneSet>,
     #[serde(default)]
     pub bindings: Vec<Binding>,
     #[serde(default)]
@@ -1021,6 +1040,7 @@ impl Default for Show {
             layers: Vec::new(),
             layer_groups: Vec::new(),
             scenes: Vec::new(),
+            scene_sets: Vec::new(),
             bindings: Vec::new(),
             master: Master::default(),
             audio: AudioSettings::default(),
@@ -1049,6 +1069,7 @@ impl Show {
             .chain(self.scenes.iter().flat_map(|s| s.layers.iter().map(|l| l.id)))
             .chain(self.scenes.iter().flat_map(|s| s.groups.iter().map(|g| g.id)))
             .chain(self.layer_groups.iter().map(|g| g.id))
+            .chain(self.scene_sets.iter().map(|s| s.id))
             .chain(self.light_groups.iter().map(|g| g.id))
             .chain(self.bindings.iter().map(|b| b.id))
             .max()
@@ -1140,7 +1161,7 @@ impl Show {
         id
     }
 
-    fn is_pinned(&self, layer: &Layer) -> bool {
+    pub fn is_pinned(&self, layer: &Layer) -> bool {
         layer
             .group
             .is_some_and(|g| self.layer_groups.iter().any(|x| x.id == g && x.pinned))
@@ -1357,21 +1378,32 @@ impl Show {
     /// a negative step), going round at the ends. `from` is the scene to
     /// count from when what is playing matches no scene.
     pub fn scene_after(&self, from: Option<u32>, step: i32) -> Option<u32> {
-        if self.scenes.is_empty() {
+        // Only the scenes of the set in use are stepped through.
+        let offered: Vec<u32> = self.scenes.iter().filter(|s| self.in_use(s)).map(|s| s.id).collect();
+        if offered.is_empty() {
             return None;
         }
-        let count = self.scenes.len() as i32;
+        let count = offered.len() as i32;
         let at = self
             .current_scene()
             .or(from)
-            .and_then(|id| self.scenes.iter().position(|s| s.id == id));
+            .and_then(|id| offered.iter().position(|s| *s == id));
         let next = match at {
             Some(at) => (at as i32 + step).rem_euclid(count),
             // Nothing to count from: start at the first, or the last going back.
             None if step >= 0 => 0,
             None => count - 1,
         };
-        Some(self.scenes[next as usize].id)
+        Some(offered[next as usize])
+    }
+
+    /// Whether a scene is among those on offer: it is in the set in use,
+    /// or in no set, or no set is in use.
+    pub fn in_use(&self, scene: &Scene) -> bool {
+        match (self.live.scene_set, scene.set) {
+            (Some(using), Some(filed)) => using == filed,
+            _ => true,
+        }
     }
 
     /// Adds a device and one fixture covering all of its pixels, placed
@@ -1520,6 +1552,8 @@ impl Show {
             groups,
             auto: true,
             mood: Mood::Any,
+            // Made while a set is in use, it belongs to that set.
+            set: self.live.scene_set,
         });
         let free = "1234567890"
             .chars()
@@ -1592,6 +1626,12 @@ impl Show {
             fixture.mend_path();
         }
         self.timeline.repair();
+        // A scene filed in a set that is gone is in no set; likewise the set in use.
+        let sets: Vec<u32> = self.scene_sets.iter().map(|s| s.id).collect();
+        for scene in &mut self.scenes {
+            scene.set = scene.set.filter(|id| sets.contains(id));
+        }
+        self.live.scene_set = self.live.scene_set.filter(|id| sets.contains(id));
         if !FRAME_RATES.contains(&self.output.frame_rate) {
             self.output.frame_rate = OutputSettings::default().frame_rate;
         }

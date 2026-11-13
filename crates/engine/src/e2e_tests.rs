@@ -546,6 +546,80 @@ fn all(sim: &Sim, value: u8) -> bool {
     !frame.is_empty() && frame.iter().all(|b| *b == value)
 }
 
+/// The colour of the first light, as the simulator last received it.
+fn colour_at(sim: &Sim) -> [u8; 3] {
+    let frame = sim.frame();
+    if frame.len() < 3 {
+        [1, 2, 3]
+    } else {
+        [frame[0], frame[1], frame[2]]
+    }
+}
+
+#[test]
+fn a_scene_can_be_changed_while_the_lights_play_another() {
+    let (engine, sim) = engine_with_strip();
+    let shared = &engine.shared;
+    let colour = |hex: &str| {
+        let layer = shared.show.lock().unwrap().layers[0].id;
+        shared
+            .execute(&Command::SetParam {
+                layer,
+                param: "colour".into(),
+                value: ParamValue::Text(hex.into()),
+            })
+            .unwrap();
+    };
+    make_solid(shared, "#ff0000");
+    shared.execute(&Command::SaveScene { name: "Red".into() }).unwrap();
+    colour("#0000ff");
+    shared.execute(&Command::SaveScene { name: "Blue".into() }).unwrap();
+    let (red, blue) = {
+        let show = shared.show.lock().unwrap();
+        (show.scenes[0].id, show.scenes[1].id)
+    };
+    shared.execute(&Command::RecallScene { id: red }).unwrap();
+    wait_for("red", || colour_at(&sim) == [255, 0, 0]);
+
+    // Blue is opened to be changed. The lights stay red; the preview
+    // shows blue.
+    let mut preview = shared.preview.subscribe();
+    shared.execute(&Command::EditScene { id: blue }).unwrap();
+    let status = shared.live.lock().unwrap().status();
+    assert_eq!((status.blind, status.editing), (true, Some(blue)));
+    colour("#00ff00");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(colour_at(&sim), [255, 0, 0], "the lights were not touched");
+    preview.mark_unchanged();
+    wait_for("a preview frame", || preview.has_changed().unwrap_or(false));
+    let frame = preview.borrow_and_update().clone();
+    assert_eq!(frame[8..11], [0, 255, 0], "the preview shows what is being changed");
+    // A scene asked for meanwhile goes to the lights, not into the panel.
+    shared.launch_scene(red);
+    assert_eq!(
+        shared.show.lock().unwrap().layers[0].params["colour"],
+        ParamValue::Text("#00ff00".into())
+    );
+
+    // Done: the change is kept in Blue, and the panel is back on Red.
+    shared.execute(&Command::FinishEdit { play: false }).unwrap();
+    {
+        let show = shared.show.lock().unwrap();
+        let kept = show.scenes.iter().find(|s| s.id == blue).unwrap();
+        assert_eq!(kept.layers[0].params["colour"], ParamValue::Text("#00ff00".into()));
+        assert_eq!(show.layers[0].params["colour"], ParamValue::Text("#ff0000".into()));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(colour_at(&sim), [255, 0, 0]);
+    assert!(shared.execute(&Command::FinishEdit { play: false }).is_err());
+    // Changed again and put on the lights this time.
+    shared.execute(&Command::EditScene { id: blue }).unwrap();
+    colour("#ffffff");
+    shared.execute(&Command::FinishEdit { play: true }).unwrap();
+    wait_for("white", || colour_at(&sim) == [255, 255, 255]);
+    assert!(!shared.live.lock().unwrap().status().blind);
+}
+
 #[test]
 fn a_held_key_flashes_and_a_toggled_key_stays() {
     let (engine, sim) = engine_with_strip();

@@ -303,6 +303,8 @@ impl Shared {
                 device,
                 to: crate::commands::ConnectTo::Wled { address },
             } => return self.connect_wled(*device, address),
+            Command::EditScene { id } => return self.edit_scene(*id),
+            Command::FinishEdit { play } => return self.finish_edit(*play),
             Command::ScanNetwork { prefix } => return self.scan_network(prefix),
             Command::Trigger { binding, down } => return self.trigger(*binding, *down),
             Command::Perform { action } => return self.perform(*action),
@@ -1493,8 +1495,105 @@ impl Shared {
         Ok(None)
     }
 
+    /// Loads a scene into the effects panel to be changed, while the
+    /// lights go on with what they are playing. Changes made to another
+    /// scene this way are kept in that scene first.
+    fn edit_scene(&self, id: u32) -> Result<Option<String>, String> {
+        let (on_air, editing) = {
+            let live = self.live.lock().unwrap();
+            (live.on_air.clone(), live.editing)
+        };
+        let (before, playing) = {
+            let mut show = self.show.lock().unwrap();
+            if !show.scenes.iter().any(|s| s.id == id) {
+                return Err("that scene no longer exists".into());
+            }
+            let before = show.clone();
+            if on_air.is_some()
+                && let Some(editing) = editing
+            {
+                let _ = crate::commands::apply(&mut show, &Command::UpdateScene { id: editing });
+            }
+            let playing = on_air.unwrap_or_else(|| (show.layers.clone(), show.layer_groups.clone()));
+            show.recall_scene(id);
+            (before, playing)
+        };
+        {
+            let mut live = self.live.lock().unwrap();
+            live.on_air = Some(playing);
+            live.editing = Some(id);
+        }
+        self.history.lock().unwrap().remember_other(before);
+        self.bump();
+        self.bump_live();
+        Ok(None)
+    }
+
+    /// Ends the changing of a scene out of sight. What was changed is
+    /// kept in the scene. With `play` the scene goes onto the lights;
+    /// without, the effects panel returns to what the lights play.
+    fn finish_edit(&self, play: bool) -> Result<Option<String>, String> {
+        let (on_air, editing) = {
+            let mut live = self.live.lock().unwrap();
+            (live.on_air.take(), live.editing.take())
+        };
+        let Some((layers, groups)) = on_air else {
+            return Err("no scene is being changed out of sight".into());
+        };
+        let before = {
+            let mut show = self.show.lock().unwrap();
+            let before = show.clone();
+            let kept = editing.filter(|id| show.scenes.iter().any(|s| s.id == *id));
+            if let Some(id) = kept {
+                let _ = crate::commands::apply(&mut show, &Command::UpdateScene { id });
+            }
+            if !play {
+                (show.layers, show.layer_groups) = (layers, groups);
+                show.repair();
+            }
+            before
+        };
+        {
+            let mut live = self.live.lock().unwrap();
+            if play {
+                live.last_scene = editing;
+                live.scene_changed();
+            }
+            // Either way the lights may be showing something else now.
+            live.scene_serial += 1;
+        }
+        self.history.lock().unwrap().remember_other(before);
+        self.bump();
+        self.bump_live();
+        Ok(None)
+    }
+
     /// Switches to a scene now and forgets any scene that was waiting.
     pub fn launch_scene(&self, id: u32) {
+        // While a scene is being changed out of sight, a change of scene
+        // is a change to what the lights play, not to what is being changed.
+        let blind = self.live.lock().unwrap().on_air.is_some();
+        let stack = blind
+            .then(|| {
+                let show = self.show.lock().unwrap();
+                show.scenes.iter().find(|s| s.id == id).map(|s| show.scene_stack(s))
+            })
+            .flatten();
+        if blind {
+            let mut live = self.live.lock().unwrap();
+            live.pending = None;
+            if let Some(stack) = stack {
+                if live.on_air.as_ref() != Some(&stack) {
+                    live.scene_serial += 1;
+                }
+                live.on_air = Some(stack);
+                live.last_scene = Some(id);
+                live.scene_changed();
+            }
+            drop(live);
+            self.bump_live();
+            return;
+        }
         let changed = {
             let mut show = self.show.lock().unwrap();
             let before = show.clone();

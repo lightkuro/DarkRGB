@@ -28,5 +28,5 @@ pub use params::{ParamKind, ParamSpec, ParamValue, Params};
 pub use render::{Cues, LayerHit, Renderer};
 pub use show::{
     Action, Autopilot, Binding, Blend, FlashSettings, Idle, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, LayerGroup,
-    LightGroup, Link, MidiNote, Mirror, Mood, Only, Scene, Schedule, Show, Sound, Source, Swatch,
+    LightGroup, Link, MidiNote, Mirror, Mood, Only, Scene, SceneSet, Schedule, Show, Sound, Source, Swatch,
 };
