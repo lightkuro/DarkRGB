@@ -1,6 +1,42 @@
 # What's new
 
-## 0.7.0 (in development)
+## 0.8.0 (in development)
+
+A beat that holds, tools that work on any pattern, and outputs that look after the hardware. Most of this
+round answers an outside review of 0.6.0; see [docs/roadmap.md](docs/roadmap.md).
+
+- The beat keeps going. When the drums drop out for a breakdown the tempo is held from memory, for up to
+  sixteen bars, and picked up again when they return. The pause before a drop is counted through.
+- Bars have a first beat. Four boxes in the Live view show where the bar is; press **Beat 1** on the first
+  beat of a bar and scene changes and autopilot follow it.
+- Corrections that keep the music's tempo: half time and double time, a nudge earlier or later, and tapping,
+  which now adjusts the music's own beat when your taps agree with it. **Follow the music** undoes them all.
+- Lights fire a little early, 50 ms by default, so they land with the sound and not after it. The setting
+  is "Lights lead the beat" in Settings.
+- MIDI clock: a DJ mixer or a music program that sends clock can drive the beat exactly.
+- Any pattern can be mirrored, repeated, wrapped round its middle as a kaleidoscope, staggered from one
+  light to the next, and have its colours turned round the colour wheel. The colour shift can follow the
+  music.
+- The angle of a pattern moves in steps of 45° in the simple layout, with two buttons that turn it an
+  eighth of a turn either way. The full layout keeps the fine slider.
+- Links have smoothing, and three more things to follow, all in time with the music: a climb, on and off,
+  and a new level by chance.
+- Beat pulse and Sweep can take their timing from the tempo.
+- A power limit for each device, in amps. When a picture would draw more, the whole frame is dimmed alike.
+  The device's settings show what the lights are drawing now. It is an estimate for 5 volt strips.
+- sACN and Art-Net controllers can be told the order their colours go in.
+- A delay for each device, to line a quick one up with a slow one.
+- Smoother dim levels, as a switch on each device: slow fades near black move in finer steps. Off unless you
+  switch it on, because it has not been seen on real LEDs yet.
+- Closing darkRGB leaves the lights dark, and tells sACN controllers the stream has ended. Before, a pixel
+  controller held its last frame.
+- If the part that draws the frames ever fails, it starts again by itself and says so.
+- Live shows no longer dim quiet parts of a song by default.
+- Fixed: a short silence inside a song made the next loud part read as nothing special.
+- Fixed: a full panel could squeeze its contents over each other.
+- Fixed: Fit left the lowest light under the stage's buttons.
+
+## 0.7.0
 
 A timeline, shapes of your own, patterns that turn, and eight more effects.
 

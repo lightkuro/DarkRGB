@@ -1,8 +1,7 @@
 # Architecture
 
-Decided on 2026-11-10. As of version 0.3.0 the engine, the app window, the UI and the device simulator exist,
-and live mode has its first cut (keys, pads, tap tempo); MIDI and the timeline do not exist. Sections say
-which parts are built. Items marked **(to verify)** are
+Decided on 2026-11-10, and kept up to date since; this describes version 0.8.0. The engine, the app window,
+the UI, live mode, MIDI, the timeline and the device simulator exist. Sections say which parts are built. Items marked **(to verify)** are
 assumptions that the checks in [roadmap.md](roadmap.md) test.
 
 ## Why installed software, not a website
@@ -169,8 +168,18 @@ What is live and not saved lives in `crates/engine/src/live.rs`, as pure logic w
 - **Freeze.** The show clock stops and the sound is held as it was, so every effect keeps drawing the same
   picture. Brightness and blackout still work.
 - **Speed.** The show clock runs at 0.25 to 4 times real time.
-- **Tapped tempo.** Two or more taps set a tempo that replaces the one found in the music (beat, phase, count)
-  until cleared. The first tap of a run is the first beat of four.
+- **The beat clock.** The analysis keeps the beat going from memory when the music stops giving one (a
+  flywheel: up to 32 seconds without drum hits, 4 of silence), and says so (`coasting`). On top of what it
+  reports, `Live::clocked` applies what the person at the controls has said (`Clock`): a scale of half or
+  double, a nudge in sixteenths of a beat, and where beat one of the bar falls. It also runs the beat ahead
+  by the show's lead time, 50 ms by default, so lights that take that long to appear land on the sound.
+  `bar_beat` (0 to 3) is what scene changes "on the bar" and autopilot count by.
+- **Tapped tempo.** Taps within 8% of the music's tempo, or of half or double it, are taken as a correction:
+  the music's tempo is kept and its phase moved to the taps. Taps that disagree replace the music's tempo
+  until "Follow the music". The first tap of a run is beat one.
+- **MIDI clock.** With the show's switch on, clock messages (24 to a beat) from any connected port set the
+  tempo and phase exactly, and a start message sets beat one. If the clock stops for two seconds the music
+  is followed again.
 - **Hand-fired beats.** Raise the beat and hit signals for every layer for a moment.
 - **A waiting scene.** With scene changes set to wait, a requested scene starts on the first beat (or fourth
   beat) that begins after it was asked for, or after a few seconds if no beat comes.
@@ -259,7 +268,20 @@ every source stands (`Source::value`): loudness, the beat and hits as the layer 
 and the song's energy from the whole sound; a slow wave counted in beats; one of four faders. A linked setting
 is moved from where its slider is set by `amount` of its range, clamped to the range, for that frame only
 (`linked_settings` in `render.rs`). The stored show is never changed, so a link cannot drift. The layer's
-strength can be linked under the name `opacity`.
+strength can be linked under the name `opacity`, its angle under `angle` and its colour shift under `hue`.
+Timed sources (`Wave`, `Ramp`, `Square`, `Random`) count in beats. A link's `smooth` makes its reading
+settle instead of jump: quick to rise and a fifth as quick to fall (`settle`), which is what makes a
+brightness tied to the bass look like a glow and not a flicker.
+
+### Tools for any pattern
+
+Mirror, repeat, kaleidoscope and spread are done to the place an effect is asked about, before the effect
+runs, so no effect knows of them (`Fold` in `render.rs`): a kaleidoscope folds the angle round the middle
+into one wedge, repeat multiplies the place and wraps it, mirror folds it back on itself, and spread shifts
+each light's copy along by a share of the pattern. The colour shift is done to the colour that comes back
+(`HueTurn`): a true turn round the colour wheel that keeps how strong and how pure the colour is. An
+earlier form kept perceived brightness instead and turned green to white on LEDs, which have no way to show
+a blue as bright as a green.
 
 ### Colours
 
@@ -330,7 +352,9 @@ all of it.
   reconnects if the sound server restarts.
 - Analysis (`crates/audio/src/analysis.rs`): mono mix, a 2048-sample windowed FFT every 512 samples at
   48 kHz, 32 mel bands, automatic gain, onset detection by spectral flux, and a tempo and beat tracker
-  (autocorrelation of onset strength, 70 to 190 BPM). Tap tempo is not built.
+  (autocorrelation of onset strength, 70 to 190 BPM) that holds its tempo through breakdowns and short
+  silences. Song sections are measured through a pause of up to four seconds, so the drop after a breath
+  is still compared with what came before it.
 - Each band, each group (bass, mids, treble) and the overall level is read between its own recent quiet level
   and recent peak, so treble shows next to a loud kick and a steady bass line does not hide the kick on top
   of it. The tempo tracker uses the unlevelled signal, weighted toward bass, so hi-hats are not mistaken for
@@ -369,7 +393,8 @@ all of it.
 - **Settings that fight realtime:** WLED applies its own brightness and gamma to realtime data unless "Disable
   realtime gamma correction" and "Force max brightness" are set, and streaming to segments needs "Use main
   segment only". The app should detect and explain these.
-- **Handing back:** stop streaming on exit so WLED returns to its own effects after its realtime timeout.
+- **Handing back:** on exit every device is sent black, twice, and streaming stops, so WLED returns to its
+  own effects after its realtime timeout (`Outputs::go_dark`).
 - **Limits:** an ESP32 on WiFi handles roughly 500 to 1000 pixels at 40 to 60 fps **(estimate, to verify)**.
   Larger props want an Ethernet board. Show per-device frame rate and dropped frames in the UI.
 
@@ -381,8 +406,31 @@ all of it.
   the same sequence number. Nothing can be asked of such a controller, so its LED count and shape are typed
   in. Covers Falcon, Kulp, HinksPix, Advatek PixLite and DMX nodes. WLED also accepts these but caps
   universes (12 on ESP32 in the source), which is why DDP is preferred for WLED.
-  [WLED E1.31](https://kno.wled.ge/interfaces/e1.31-dmx/) Not built: multicast, colour orders other than
-  RGB, sACN priority and synchronisation.
+  [WLED E1.31](https://kno.wled.ge/interfaces/e1.31-dmx/) A device has a colour order. On exit, sACN
+  receivers get the stream-terminated packet three times for each universe. Not built: multicast, a start
+  channel inside a universe, sACN priority and synchronisation.
+
+### What every device gets
+
+Applied where a frame becomes bytes (`Renderer::device_bytes`) and where bytes are sent (`Outputs`):
+
+- **Power limit.** The frame's draw is estimated at 20 mA for each colour of a pixel at full and 1 mA for a
+  pixel at rest, the figures for 5 volt WS2812-type strips. Over the device's limit, every byte is scaled
+  down alike, rounded down. The estimate and whether it is dimming are in the device's stats.
+- **Smoother dim levels.** The output curve keeps each level to 1/256 of a step; with the switch on, a level
+  between two steps is the upper one for as many frames in four as it lies towards it. Pixels take their
+  turns at different times, by a hash of their position, so there is no flicker in step and no crawl. Off
+  by default: at 60 frames a second the lowest levels may shimmer, and that has to be judged on real LEDs.
+- **Delay.** Frames wait in a queue for the device and the newest one that is old enough is sent.
+- **A full send buffer.** A packet that cannot be sent waits up to 0.6 ms for room, then the frame is
+  counted as dropped. Before, the rest of a frame's universes were dropped at once.
+
+### When the frame loop fails
+
+`render_loop::run` calls the loop inside `catch_unwind` and starts it again after a panic, with waits that
+grow from 0.2 to 5 seconds when failures come close together. The locks the loop may have held are made
+usable again (`Shared::mend_locks`): each guards plain data that is whole between operations. The window
+shows a notice, and the count is in the stats.
 - **`.fseq` v2 export and FPP upload:** render a timeline show to a file that a Falcon Player runs on its own.
 - **xLights layout import:** read models and positions from an existing xLights setup.
 

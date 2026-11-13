@@ -29,10 +29,11 @@ Or start blank. The kind of show only decides what it begins with; everything ca
 
 ## Status
 
-Version 0.7.0, in development. Audio-reactive mode and live control are both complete enough to run a show
+Version 0.8.0, in development. Audio-reactive mode and live control are both complete enough to run a show
 with: fifteen starter scenes, thirty effects, pads, keys and MIDI controllers, autopilot, any slider tied to
-the music, and undo. The timeline is new in this version: it plays, records and edits, and has not yet been
-used for a whole show by anyone.
+the music, and undo. The timeline plays, records and edits, and has not yet been used for a whole show by
+anyone. This version rebuilt the beat clock, added tools that work on any pattern, and made the outputs
+kinder to hardware.
 
 **Nothing here has yet met real LEDs or real music.** Every check so far used simulated devices and a
 synthetic test song. An outside review of 0.6.0 put that first among its concerns; see
@@ -46,7 +47,8 @@ synthetic test song. An outside review of 0.6.0 put that first among its concern
 | Real WLED hardware | not yet tried | not yet tried |
 | sACN and Art-Net | packets checked against the standards and received by a test program; no real controller yet | the same code; not yet run |
 | MIDI controllers | built, and its message handling tested; not yet tried with a real controller | the same |
-| Installers | `.deb` and AppImage build | the setup program has not been built yet |
+| Installers | `.deb` and AppImage build | see the latest CI run |
+| Power limit, colour order, delay, smoother dimming | checked against a test receiver | the same code; not yet run |
 | Timeline | plays against a song in a browser and in the app window; recording and editing checked | not yet run |
 
 The effects, the song-energy tracking and the drop detection have only met synthetic test songs so far, so
@@ -67,18 +69,24 @@ What works today:
 - A simple layout by default, and a full one with every control, switched by one setting.
 - Captures system audio with no setup and analyses it: loudness, 32 frequency bands, hits in bass, mids and
   highs, tempo and beats, how big this part of the song is, and when the song moves to a new section.
+- A beat that holds: the tempo is kept from memory through a breakdown, bars have a first beat you can set,
+  and half time, double time, a nudge and tapping correct it without letting go of the music. Lights fire a
+  little early so they land with the sound. A mixer or music program that sends MIDI clock can drive it.
 - Thirty effects in layers, among them words and small pictures for matrices. Many keep time with the music:
-  a scanner crosses in a beat, tiles reshuffle on the beat, rings leave the middle one a beat.
-- A pattern can be turned to any angle and set spinning, and the angle can follow the music. A matrix hung
-  at an angle, such as a square mounted as a diamond, keeps its pattern the right way up.
+  a scanner crosses in a beat, tiles reshuffle on the beat, rings leave the middle one a beat. Each can
+  play on all lights, chosen ones, a group, or only strips or only matrices; drawn across them or once per
+  light; reacting to everything, bass, mids, highs or a frequency range you pick.
+- A pattern can be turned, in steps of 45° or to any angle, and set spinning, and the angle can follow the
+  music. A matrix hung at an angle, such as a square mounted as a diamond, keeps its pattern the right way up.
+- Any pattern can be mirrored, repeated, wrapped into a kaleidoscope, staggered from light to light, and
+  have its colours turned round the colour wheel.
 - Strips can be bent into shapes: arches, circles, stars, zigzags, outlines, or anything drawn corner by
   corner.
 - A timeline: a song, a lane for scenes and a lane for every pad. Clips are placed by hand, snapping to the
-  beat, or recorded by playing the show while the song runs. Each can play on all lights, chosen ones, a group, or only strips or only
-  matrices; drawn across them or once per light; reacting to everything, bass, mids, highs or a frequency
-  range you pick.
-- Any slider can follow the music (loudness, bass, mids, highs, the beat, hits, the song's energy), a slow
-  wave in time with it, or a fader in the Live view.
+  beat, or recorded by playing the show while the song runs.
+- Any slider can follow the music (loudness, bass, mids, highs, the beat, hits, the song's energy), a shape
+  in time with it (a slow wave, a climb, on and off, a new level by chance), or a fader in the Live view,
+  with as much smoothing as you like.
 - Colours from built-in palettes or palettes of your own.
 - Quiet parts of a song are dimmer and calmer and drops hit harder; a setting says how much.
 - Scenes, master brightness and blackout. Autopilot changes scene every few bars and when the song changes,
@@ -94,6 +102,8 @@ What works today:
 - A phone or tablet on the same network as a remote, after giving a six-digit code shown on the computer.
 - Undo and redo for every change to a show.
 - Hours for a show to keep: lit from one time of day to another, dark in between.
+- Care for the hardware: a power limit in amps for each device, a delay to line devices up, the colour order
+  for sACN and Art-Net controllers, and lights left dark when darkRGB closes.
 - A library: your shows (open, new, copy, rename, delete), and effects, looks and palettes you keep to use in
   any show. Every change saves itself.
 
@@ -122,6 +132,17 @@ A strip bent into an arch over a matrix hung as a diamond, and the shape editor:
 ![An arch of lights over a diamond-mounted matrix whose words stay level](docs/images/shapes.png)
 
 ![The shape editor with a star drawn from ten corners](docs/images/shape.png)
+
+The beat in the Live view: four boxes for the bar, the tempo, and the corrections beside it:
+
+![The Live view with the beat bar: 124 BPM, with the music](docs/images/beat.png)
+
+Tools that work on any pattern, here a kaleidoscope of six wedges, and a controller's settings with a power
+limit holding it to 4 amps:
+
+![A kaleidoscope on a matrix, with the angle, mirror, repeat and colour shift controls](docs/images/pattern-tools.png)
+
+![A pixel controller's settings: colour order, power limit, delay and smoother dim levels](docs/images/device.png)
 
 The eight effects added in 0.7.0:
 

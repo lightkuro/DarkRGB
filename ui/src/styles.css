@@ -389,7 +389,8 @@ code {
   font-size: 12px;
 }
 
-.hint.block {
+.hint.block,
+.field.inline > span > .hint {
   display: block;
 }
 

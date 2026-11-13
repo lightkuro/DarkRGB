@@ -1,6 +1,6 @@
 # Roadmap
 
-Written on 2026-11-10, last updated 2026-11-12 for version 0.7.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
+Written on 2026-11-10, last updated 2026-11-13 for version 0.8.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
 features. The design targets room/desk setups (a few WLED devices, up to a few thousand pixels) and house/yard
 shows (many controllers, 5k to 50k pixels). See [architecture.md](architecture.md) for the design.
 
@@ -186,33 +186,46 @@ Left:
 
 On 2026-11-12 an independent reviewer was given the repository and asked what keeps this from being a truly
 good audio-reactive and live tool. It could read everything and run nothing. Its ranked findings, and where
-each stands after 0.7.0:
+each stands after 0.8.0:
 
 1. **The beat clock.** Lights are always a little late and nothing fires early to make up for it; bars are
    counted from whenever listening began, not from beat one; when the music breaks down the tempo is lost
    and every onset becomes a "beat"; the tracker can lock at double time; tap tempo replaces the music's
    tempo and then drifts; there is no nudge, no halving or doubling, no beat display, no MIDI clock or
-   Ableton Link. **Not addressed. This is the first job of the next round.**
+   Ableton Link. *Mostly addressed in 0.8.0:* the tempo is held through a breakdown and a pause; bars have
+   a first beat, set by hand; half and double time, nudge, a beat display, a lead time and MIDI clock are
+   built; tapping corrects the music's beat when it agrees with it. Still missing: finding beat one by
+   listening, Ableton Link, and anything that stops a lock at double time by itself (the ×2 and ÷2 buttons
+   are the answer for now).
 2. **Effects and tempo.** Most speeds were in seconds, not beats; no mirror, repeat or kaleidoscope for any
    effect; links have one wave shape and no smoothing; colour cannot be modulated; no pitch-to-colour; the
-   section detector judges by loudness alone and is reset by a short silence. *Partly addressed:* seven of
-   the eight new effects count in beats, and scanner, theatre chase (Marquee), breathe and falling peaks
-   were among the staples it named. The rest stands.
+   section detector judges by loudness alone and is reset by a short silence. *Mostly addressed:* mirror,
+   repeat, kaleidoscope, spread and a colour shift work on every effect; links have smoothing and four
+   timed shapes; the colour shift can be linked; Beat pulse and Sweep can count in beats; a short silence
+   no longer resets the sections. Still missing: pitch-to-colour, and a section detector that listens to
+   more than loudness and bass.
 3. **Nothing has met real hardware or real music.** Stands, and only the owner can change it.
 4. **The outdoor display audience was promised a timeline that did not exist,** and shapes were only straight
-   strips and rectangles. *Addressed in part:* 0.7.0 has a timeline and bent strips. Still missing: xLights
-   import, FSEQ export, a calendar, power limiting by current, colour orders and start channels for sACN.
+   strips and rectangles. *Addressed in part:* a timeline and bent strips in 0.7.0; a power limit by
+   current and colour orders in 0.8.0. Still missing: xLights import, FSEQ export, a calendar, and a start
+   channel inside a universe.
 5. **The live model is shallow next to a console.** A scene replaces everything; no cue list; MIDI ignores
    velocity and gives no feedback; no DMX fixtures. Stands.
 6. **Output under load.** All sends are on the render thread through one socket, and a full buffer drops the
    rest of a device's universes for that frame; no sACN or Art-Net sync; no latency offset for each device;
-   8-bit output with no dithering, so slow dim fades will step. Stands.
+   8-bit output with no dithering, so slow dim fades will step. *Partly addressed:* a packet now waits a
+   moment for room instead of abandoning the frame; each device has a delay; dithering is built, off by
+   default until it has been seen on real LEDs. Still on the render thread and one socket; no sync packets.
 7. **Unattended reliability.** A panic in an effect would stop the show silently; no autostart; no
-   stream-terminated packet on exit; the flash limit judges the whole picture. Stands.
+   stream-terminated packet on exit; the flash limit judges the whole picture. *Partly addressed:* the
+   frame loop restarts itself and says so; lights are left dark and sACN streams ended on exit. Still
+   missing: starting with the computer, and a flash limit that looks at parts of the picture.
 
 It also advised: stop adding features until a real device and real music have been through the loop; call
 autopilot's "bars" what they are (four beats from an arbitrary start) until there is a downbeat; reconsider
-dimming quiet parts by default for live shows.
+dimming quiet parts by default for live shows. On the first, the owner chose to keep building while a
+hardware test is arranged. The second is answered by Beat 1; the third is done: live shows start with
+that setting at nothing.
 
 ## Before the first public release
 
@@ -246,8 +259,9 @@ Still to do before the first release is published:
 - **Scope:** this is three products in one. Each milestone must be usable on its own, and the effect list stays
   short until the engine is solid.
 - **Safety:** the flash limit, and a question asked once per show about it, are built. The limit looks at the
-  whole picture, so one small light flashing fast among many steady ones is not held back. Still to do: cap
-  brightness or power per device so a mistake cannot overload a power supply.
+  whole picture, so one small light flashing fast among many steady ones is not held back. Each device has
+  a power limit in amps (0.8.0); it is an estimate that assumes 5 volt strips at 60 mA a pixel, so it is a
+  help and not a fuse.
 - **Network exposure:** the engine listens on localhost only by default. With phone access on it listens on
   the network, asks other devices for a code, and speaks plain HTTP; see SECURITY.md. The first run on
   Windows triggers a firewall prompt for device discovery; explain it in the app.

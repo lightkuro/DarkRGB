@@ -99,11 +99,14 @@ function fitView(fixtures: Fixture[], width: number, height: number): View {
   if (fixtures.length === 0 || width === 0 || height === 0) return { cx: 0, cy: 0, scale: 300 };
   const [minX, minY, maxX, maxY] = bounds(fixtures);
   const pad = 56;
-  const scale = Math.min(
+  // More room below, where the stage's buttons lie over the picture.
+  const below = Math.min(104, height / 4);
+  const fit = Math.min(
     (width - pad * 2) / Math.max(maxX - minX, 0.05),
-    (height - pad * 2) / Math.max(maxY - minY, 0.05),
+    (height - pad - below) / Math.max(maxY - minY, 0.05),
   );
-  return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, scale: Math.min(Math.max(scale, 10), 6000) };
+  const scale = Math.min(Math.max(fit, 10), 6000);
+  return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 + (below - pad) / 2 / scale, scale };
 }
 
 /** Turns fixtures about a point by `degrees`, as one rigid thing. */
