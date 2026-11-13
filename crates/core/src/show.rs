@@ -852,8 +852,10 @@ pub struct AudioSettings {
     pub lead_ms: f32,
 }
 
-/// About what capture, analysis, one frame and the network add up to.
-pub const DEFAULT_LEAD_MS: f32 = 50.0;
+/// Off unless asked for. About 50 ms is what capture, analysis, one frame
+/// and the network add up to, but only a person watching real lights can
+/// say what looks right.
+pub const DEFAULT_LEAD_MS: f32 = 0.0;
 
 fn default_lead() -> f32 {
     DEFAULT_LEAD_MS

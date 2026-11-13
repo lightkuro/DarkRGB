@@ -913,6 +913,34 @@ input.number {
   gap: 6px;
 }
 
+/* What a light is connected to. The button that opens the form stays
+   where it is and closes it again. */
+.connect-toggle .chevron {
+  transition: transform 0.12s;
+}
+
+.connect.open .connect-toggle {
+  color: var(--text);
+}
+
+.connect.open .connect-toggle .chevron {
+  transform: rotate(90deg);
+}
+
+.connect-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.found.compact li {
+  justify-content: space-between;
+  padding: 5px 6px 5px 10px;
+}
+
 .demo-switch {
   align-items: flex-start;
 }

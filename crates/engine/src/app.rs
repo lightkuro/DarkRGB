@@ -299,6 +299,10 @@ impl Shared {
     pub fn execute(self: &Arc<Self>, command: &Command) -> Result<Option<String>, String> {
         match command {
             Command::AddDevice { address } => return self.add_device(address),
+            Command::Connect {
+                device,
+                to: crate::commands::ConnectTo::Wled { address },
+            } => return self.connect_wled(*device, address),
             Command::ScanNetwork { prefix } => return self.scan_network(prefix),
             Command::Trigger { binding, down } => return self.trigger(*binding, *down),
             Command::Perform { action } => return self.perform(*action),
@@ -1542,6 +1546,46 @@ impl Shared {
                 info.name
             )
         }))
+    }
+
+    /// Connects a light already in the show to a WLED device, which is
+    /// asked what it is first. The light keeps its place and settings.
+    fn connect_wled(&self, device: u32, address: &str) -> Result<Option<String>, String> {
+        let (host, http_port) = wled::parse_address(address)?;
+        let info = wled::fetch_info(&host, http_port, Duration::from_secs(4))?;
+        let mut show = self.show.lock().unwrap();
+        let before = show.clone();
+        let answered = crate::commands::Answered {
+            mac: info.mac.clone(),
+            version: Some(info.version.clone()),
+            leds: info.led_count,
+        };
+        let note = crate::commands::rewire(
+            &mut show,
+            device,
+            darkrgb_core::DeviceKind::Wled,
+            &host,
+            info.ddp_port,
+            0,
+            Some(answered),
+        );
+        let note = match note {
+            Ok(note) => note,
+            Err(e) => {
+                *show = before;
+                return Err(e);
+            }
+        };
+        drop(show);
+        self.history.lock().unwrap().remember_other(before);
+        self.bump();
+        let streaming = info.live_source.filter(|_| info.live).map(|source| {
+            format!(
+                "{} is already receiving a stream ({source}). Two senders at once will flicker.",
+                info.name
+            )
+        });
+        Ok(note.or(streaming))
     }
 
     /// Starts asking every address under `prefix` whether it is a WLED

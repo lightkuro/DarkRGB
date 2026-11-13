@@ -190,14 +190,15 @@ function Sound({ show }: { show: Show }) {
         min={0}
         max={250}
         step={5}
-        value={show.audio.lead_ms ?? 50}
+        value={show.audio.lead_ms ?? 0}
         format={(v) => (v === 0 ? "Nothing" : `${Math.round(v)} ms`)}
         onChange={setLead}
       />
       <p className="hint">
-        Hearing a beat takes a moment, so a light that waits to be told is late. A steady beat can be run ahead
-        of instead. Raise this if flashes on the beat land after the kick; lower it if they come before. It only
-        moves things that keep time with the beat, not things that react to each sound.
+        Off unless you set it. A light that reacts to a sound can never be early: it happens when the sound is
+        heard. But once a steady tempo is found, the next beat is known before it comes, so things timed to the
+        beat (pulses on the beat, effects that count in beats, scene changes on the beat) can run this much
+        ahead and land with the sound. Raise it if they land after the kick on your lights.
       </p>
       {(full || show.audio.delay_ms > 0) && (
         <>

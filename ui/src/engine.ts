@@ -580,6 +580,14 @@ export type Command =
   | { type: "set_sound"; layer: number; band?: Band; gain?: number; pulse?: number; manual?: boolean }
   | { type: "remove_device"; id: number }
   | {
+      type: "connect";
+      device: number;
+      to:
+        | { type: "wled"; address: string }
+        | { type: "pixels"; protocol: "sacn" | "artnet"; address: string; port?: number; universe: number }
+        | { type: "nothing" };
+    }
+  | {
       type: "update_device";
       id: number;
       name?: string;

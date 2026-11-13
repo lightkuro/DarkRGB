@@ -12,6 +12,7 @@ import {
   GripVertical,
   Minus,
   Network,
+  Plug,
   Plus,
   Radar,
   Search,
@@ -205,6 +206,127 @@ function PowerLimit({ device, stats }: { device: Device; stats?: DeviceStats }) 
   );
 }
 
+/**
+ * What a light is connected to. A light planned on screen is given its
+ * hardware here, and keeps its place, shape, group and settings.
+ */
+function ConnectHardware({ device }: { device: Device }) {
+  const virtual = device.kind === "virtual";
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<"wled" | "sacn" | "artnet">("wled");
+  const [address, setAddress] = useState("");
+  const [universe, setUniverse] = useState("1");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const found = useFound();
+  const connect = async (to: Extract<Parameters<typeof engine.request>[0], { type: "connect" }>["to"]) => {
+    setBusy(true);
+    const result = await engine.request({ type: "connect", device: device.id, to });
+    setBusy(false);
+    if (!result.ok) return setError(result.error ?? "Could not connect that.");
+    setError(null);
+    setOpen(false);
+    setAddress("");
+    if (result.note) engine.toast("info", result.note);
+  };
+  const choose = (next: "wled" | "sacn" | "artnet") => {
+    if (next !== "wled" && universe === (kind === "artnet" ? "0" : "1")) setUniverse(next === "sacn" ? "1" : "0");
+    setKind(next);
+    setError(null);
+  };
+  const valid = address.trim() !== "" && (kind === "wled" || /^\d{1,5}$/.test(universe));
+  return (
+    <div className={`connect${open ? " open" : ""}`}>
+      <button type="button" className="text-button connect-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Plug size={13} /> {virtual ? "Connect to real hardware" : "Change what it is connected to"}
+        <ChevronRight size={13} className="chevron" aria-hidden />
+      </button>
+      {open && (
+        <form
+          className="connect-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!valid || busy) return;
+            const where = address.trim();
+            void connect(
+              kind === "wled"
+                ? { type: "wled", address: where }
+                : { type: "pixels", protocol: kind, address: where, universe: Number(universe) },
+            );
+          }}
+        >
+          <p className="hint">
+            {virtual
+              ? "This light keeps its place, its shape, its group and everything that plays on it. Only where its colours are sent changes."
+              : "Point this light at other hardware. Everything else about it stays."}
+          </p>
+          <div className="segmented" role="radiogroup" aria-label="Kind of hardware">
+            {(
+              [
+                ["wled", "WLED"],
+                ["sacn", "sACN"],
+                ["artnet", "Art-Net"],
+              ] as const
+            ).map(([id, name]) => (
+              <button key={id} type="button" role="radio" aria-checked={kind === id} className={kind === id ? "selected" : ""} onClick={() => choose(id)}>
+                {name}
+              </button>
+            ))}
+          </div>
+          {kind === "wled" && found.length > 0 && (
+            <ul className="found compact">
+              {found.map((d) => (
+                <li key={d.address}>
+                  <span>
+                    {d.name} <span className="hint">{d.leds} LEDs</span>
+                  </span>
+                  <button type="button" className="button small" disabled={busy} onClick={() => void connect({ type: "wled", address: d.address })}>
+                    Use
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <input
+            type="text"
+            className="address"
+            aria-label="Address of the hardware"
+            placeholder={kind === "wled" ? "IP address, e.g. 192.168.1.50" : "IP address of the controller"}
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
+          />
+          {kind !== "wled" && (
+            <label className="field inline">
+              <span>First universe</span>
+              <input
+                className="number"
+                type="text"
+                inputMode="numeric"
+                aria-label="First universe"
+                value={universe}
+                onChange={(e) => setUniverse(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+              />
+            </label>
+          )}
+          {error && <p className="callout error">{error}</p>}
+          <div className="form-actions">
+            {!virtual && (
+              <button type="button" className="text-button" disabled={busy} onClick={() => void connect({ type: "nothing" })}>
+                Make it preview only
+              </button>
+            )}
+            <button type="submit" className="button small" disabled={!valid || busy}>
+              {busy ? "Asking…" : "Connect"}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
 /** The angle of one light, to read off or type. */
 export function AngleField({ fixture }: { fixture: Fixture }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -352,6 +474,7 @@ function DeviceRow({
             </label>
           )}
           {(device.kind === "sacn" || device.kind === "artnet") && <PixelAddress device={device} />}
+          {(virtual || full) && <ConnectHardware device={device} />}
           {!virtual && (
             <>
               <Slider
@@ -1078,7 +1201,7 @@ export function DevicePanel() {
           <AddPixels />
           <h2>Without hardware</h2>
           <DemoSwitch />
-          {full && <AddVirtual />}
+          <AddVirtual />
         </>
       )}
     </aside>

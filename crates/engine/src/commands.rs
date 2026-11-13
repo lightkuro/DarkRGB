@@ -39,8 +39,98 @@ pub enum PixelProtocol {
     Artnet,
 }
 
+/// What a light in the show is connected to.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConnectTo {
+    /// A WLED device at this address. It is asked what it is first.
+    Wled { address: String },
+    /// A pixel controller that takes sACN or Art-Net.
+    Pixels {
+        protocol: PixelProtocol,
+        address: String,
+        #[serde(default)]
+        port: Option<u16>,
+        universe: u16,
+    },
+    /// Nothing: the light is shown in the preview only.
+    Nothing,
+}
+
+/// What a device answered about itself, for [`rewire`].
+pub(crate) struct Answered {
+    pub mac: Option<String>,
+    pub version: Option<String>,
+    pub leds: u32,
+}
+
+/// Points a device at other hardware and leaves the rest of it alone.
+/// A single strip takes the number of LEDs the hardware really has; any
+/// other difference is returned as a note for the person to read.
+pub(crate) fn rewire(
+    show: &mut Show,
+    id: u32,
+    kind: DeviceKind,
+    address: &str,
+    port: u16,
+    universe: u16,
+    answered: Option<Answered>,
+) -> Result<Option<String>, String> {
+    let index = show
+        .devices
+        .iter()
+        .position(|d| d.id == id)
+        .ok_or("that light no longer exists")?;
+    if kind != DeviceKind::Virtual {
+        let taken = show.devices.iter().any(|d| {
+            let same_mac = answered.as_ref().is_some_and(|a| a.mac.is_some() && a.mac == d.mac);
+            let same_place = d.kind == kind && d.address == address && d.port == port && d.universe == universe;
+            d.id != id && (same_mac || same_place)
+        });
+        if taken {
+            return Err(format!("{address} is already one of this show's lights"));
+        }
+    }
+    let planned = show.devices[index].pixel_count;
+    let mut note = None;
+    if let Some(real) = answered.as_ref().map(|a| a.leds).filter(|n| *n != planned && *n > 0) {
+        let own: Vec<usize> = (0..show.fixtures.len())
+            .filter(|i| show.fixtures[*i].device == id)
+            .collect();
+        let name = show.devices[index].name.clone();
+        match own.as_slice() {
+            [only] if matches!(show.fixtures[*only].shape, Shape::Strip { .. }) => {
+                if let Shape::Strip { count, .. } = &mut show.fixtures[*only].shape {
+                    *count = real.min(MAX_PIXELS);
+                }
+                show.devices[index].pixel_count = real.min(MAX_PIXELS);
+                note = Some(format!(
+                    "{name} was planned with {planned} LEDs and the device has {real}, so it now has {real}."
+                ));
+            }
+            _ => {
+                note = Some(format!(
+                    "{name} was planned with {planned} LEDs and the device has {real}. \
+                     The plan was kept: check the device's LED settings."
+                ));
+            }
+        }
+    }
+    let device = &mut show.devices[index];
+    device.kind = kind;
+    device.address = address.to_string();
+    device.port = port;
+    device.universe = universe;
+    device.demo = false;
+    device.mac = answered.as_ref().and_then(|a| a.mac.clone());
+    device.version = answered.and_then(|a| a.version);
+    device.mend_universe();
+    device.mend_output();
+    Ok(note)
+}
+
 impl PixelProtocol {
-    fn kind(self) -> DeviceKind {
+    pub(crate) fn kind(self) -> DeviceKind {
         match self {
             Self::Sacn => DeviceKind::Sacn,
             Self::Artnet => DeviceKind::Artnet,
@@ -225,6 +315,13 @@ pub enum Command {
     },
     RemoveDevice {
         id: u32,
+    },
+    /// Says what a light is really connected to, keeping its place, its
+    /// shape, its group and everything that plays on it. It is how a
+    /// light planned on screen becomes a real one.
+    Connect {
+        device: u32,
+        to: ConnectTo,
     },
     UpdateDevice {
         id: u32,
@@ -1023,9 +1120,56 @@ fn checked(show: &mut Show, command: &Command) -> Result<(), String> {
 
 fn change(show: &mut Show, command: &Command) -> Result<(), String> {
     match command {
-        Command::AddDevice { .. } | Command::ScanNetwork { .. } | Command::SetRemote { .. } => {
-            Err("that command needs the network".into())
+        Command::Connect {
+            device,
+            to: ConnectTo::Nothing,
+        } => rewire(
+            show,
+            *device,
+            DeviceKind::Virtual,
+            "",
+            darkrgb_core::layout::default_ddp_port(),
+            0,
+            None,
+        )
+        .map(|_| ()),
+
+        Command::Connect {
+            device,
+            to:
+                ConnectTo::Pixels {
+                    protocol,
+                    address,
+                    port,
+                    universe,
+                },
+        } => {
+            let address = host(address)?;
+            if *port == Some(0) {
+                return Err("the port cannot be 0".into());
+            }
+            let kind = protocol.kind();
+            let pixels = show.device(*device).ok_or("that light no longer exists")?.pixel_count;
+            universes_fit(kind, *universe, pixels)?;
+            rewire(
+                show,
+                *device,
+                kind,
+                &address,
+                port.unwrap_or(protocol.port()),
+                *universe,
+                None,
+            )
+            .map(|_| ())
         }
+
+        Command::Connect {
+            to: ConnectTo::Wled { .. },
+            ..
+        }
+        | Command::AddDevice { .. }
+        | Command::ScanNetwork { .. }
+        | Command::SetRemote { .. } => Err("that command needs the network".into()),
         Command::TimelinePlay { .. }
         | Command::TimelineStop
         | Command::TimelineSeek { .. }
@@ -2828,6 +2972,139 @@ mod tests {
     }
 
     #[test]
+    fn a_planned_light_can_be_connected_to_hardware_and_keeps_everything_else() {
+        let mut show = Show::default();
+        apply(
+            &mut show,
+            &parse(r#"{"type":"add_virtual","name":"Eaves","shape":{"type":"strip","count":120}}"#),
+        )
+        .unwrap();
+        apply(
+            &mut show,
+            &parse(r#"{"type":"add_virtual","name":"Sign","shape":{"type":"matrix","cols":16,"rows":16}}"#),
+        )
+        .unwrap();
+        let (eaves, sign) = (show.devices[0].id, show.devices[1].id);
+        show.fixtures[0].x = 3.25;
+        show.fixtures[0].rotation = 30.0;
+        show.devices[0].brightness = 0.4;
+        let planned = show.clone();
+        // To a pixel controller: only what it is connected to changes.
+        apply(
+            &mut show,
+            &parse(&format!(
+                r#"{{"type":"connect","device":{eaves},"to":{{"type":"pixels","protocol":"sacn","address":"10.0.0.20","universe":3}}}}"#
+            )),
+        )
+        .unwrap();
+        let d = &show.devices[0];
+        assert_eq!(
+            (d.kind, d.address.as_str(), d.port, d.universe),
+            (DeviceKind::Sacn, "10.0.0.20", 5568, 3)
+        );
+        assert_eq!((d.id, d.name.as_str(), d.brightness), (eaves, "Eaves", 0.4));
+        assert_eq!(show.fixtures, planned.fixtures, "place, angle and shape are kept");
+        assert_eq!(show.layers, planned.layers);
+        // The same address and universe cannot be two lights.
+        let before = show.clone();
+        let again = parse(&format!(
+            r#"{{"type":"connect","device":{sign},"to":{{"type":"pixels","protocol":"sacn","address":"10.0.0.20","universe":3}}}}"#
+        ));
+        assert!(apply(&mut show, &again).is_err());
+        // Universes that do not exist are refused.
+        let bad = parse(&format!(
+            r#"{{"type":"connect","device":{sign},"to":{{"type":"pixels","protocol":"sacn","address":"10.0.0.21","universe":0}}}}"#
+        ));
+        assert!(apply(&mut show, &bad).is_err());
+        assert_eq!(show, before);
+        // And back to the preview only.
+        apply(
+            &mut show,
+            &parse(&format!(
+                r#"{{"type":"connect","device":{eaves},"to":{{"type":"nothing"}}}}"#
+            )),
+        )
+        .unwrap();
+        assert_eq!(show.devices[0], planned.devices[0]);
+        // A WLED device that answers with another number of LEDs: a lone
+        // strip takes the real number, a matrix keeps its plan and says so.
+        let answered = |mac: &str, leds| {
+            Some(Answered {
+                mac: Some(mac.into()),
+                version: Some("0.15".into()),
+                leds,
+            })
+        };
+        let note = rewire(
+            &mut show,
+            eaves,
+            DeviceKind::Wled,
+            "10.0.0.30",
+            4048,
+            0,
+            answered("aa", 150),
+        )
+        .unwrap();
+        assert!(note.unwrap().contains("150"));
+        assert_eq!(show.devices[0].pixel_count, 150);
+        assert_eq!(show.fixtures[0].pixel_count(), 150);
+        assert_eq!(show.fixtures[0].x, 3.25);
+        assert!(show.validate().is_ok());
+        let note = rewire(
+            &mut show,
+            sign,
+            DeviceKind::Wled,
+            "10.0.0.31",
+            4048,
+            0,
+            answered("bb", 64),
+        )
+        .unwrap();
+        assert!(note.unwrap().contains("plan was kept"));
+        assert_eq!(show.devices[1].pixel_count, 256);
+        // A light may be pointed at its own hardware again, at a new address;
+        // hardware that is already another light is refused.
+        assert!(
+            rewire(
+                &mut show,
+                sign,
+                DeviceKind::Wled,
+                "10.0.0.99",
+                4048,
+                0,
+                answered("bb", 256)
+            )
+            .is_ok()
+        );
+        let before = show.clone();
+        assert!(
+            rewire(
+                &mut show,
+                eaves,
+                DeviceKind::Wled,
+                "10.0.0.98",
+                4048,
+                0,
+                answered("bb", 150)
+            )
+            .is_err()
+        );
+        assert!(
+            rewire(
+                &mut show,
+                eaves,
+                DeviceKind::Wled,
+                "10.0.0.99",
+                4048,
+                0,
+                answered("cc", 150)
+            )
+            .is_err()
+        );
+        assert_eq!(show, before);
+    }
+
+    #[test]
     fn commands_parse_from_what_the_ui_sends() {
         assert_eq!(
             parse(r#"{"type":"add_device","address":"192.168.1.50"}"#),
@@ -3778,7 +4055,24 @@ mod tests {
             let group = r.id(show.light_groups.iter().map(|g| g.id).collect());
             let binding = r.id(show.bindings.iter().map(|b| b.id).collect());
             let clip = r.id(show.timeline.clips.iter().map(|c| c.id).collect());
-            let command = match r.next() % 61 {
+            let command = match r.next() % 62 {
+                61 => Command::Connect {
+                    device,
+                    to: if r.flag() {
+                        ConnectTo::Nothing
+                    } else {
+                        ConnectTo::Pixels {
+                            protocol: if r.flag() {
+                                PixelProtocol::Sacn
+                            } else {
+                                PixelProtocol::Artnet
+                            },
+                            address: ["10.0.0.9", "", "bad host!", "lights.local"][r.next() as usize % 4].into(),
+                            port: r.maybe(|r| [0, 5568, 6454][r.next() as usize % 3]),
+                            universe: [0, 1, 7, 32767, 63999, 65535][r.next() as usize % 6],
+                        }
+                    },
+                },
                 57 => Command::SetTimeline {
                     length: r.maybe(Awkward::number),
                     bpm: r.maybe(Awkward::number),
