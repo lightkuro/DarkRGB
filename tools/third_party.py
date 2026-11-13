@@ -18,6 +18,10 @@ import pathlib
 import subprocess
 import sys
 
+# Everything read here is UTF-8, and is read as such by name: on Windows
+# the default is the system's own character set, which fails on the first
+# author's name with an accent in it.
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # The programs that are handed out.
 PROGRAMS = ["darkrgb-desktop", "darkrgb-engine"]
@@ -46,7 +50,7 @@ def notices(folder: pathlib.Path) -> list[tuple[str, str]]:
 
 
 def host_triple() -> str:
-    out = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, encoding="utf-8", check=True).stdout
     return next(line.split(": ", 1)[1] for line in out.splitlines() if line.startswith("host: "))
 
 
@@ -54,7 +58,7 @@ def rust_packages() -> list[dict]:
     """Every crate compiled into the programs for this machine."""
     out = subprocess.run(
         ["cargo", "metadata", "--format-version", "1", "--locked", "--filter-platform", host_triple()],
-        capture_output=True, text=True, check=True, cwd=ROOT,
+        capture_output=True, text=True, encoding="utf-8", check=True, cwd=ROOT,
     ).stdout
     meta = json.loads(out)
     by_id = {p["id"]: p for p in meta["packages"]}
@@ -89,7 +93,7 @@ def rust_packages() -> list[dict]:
 def js_packages() -> list[dict]:
     """Every JavaScript package bundled into the UI."""
     modules = ROOT / "ui" / "node_modules"
-    wanted = list(json.loads((ROOT / "ui" / "package.json").read_text())["dependencies"])
+    wanted = list(json.loads((ROOT / "ui" / "package.json").read_text(encoding="utf-8"))["dependencies"])
     if not modules.is_dir():
         sys.exit("ui/node_modules is missing: run `pnpm install` in ui/ first")
     seen, packages = set(), []

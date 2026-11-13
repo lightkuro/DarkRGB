@@ -3050,6 +3050,65 @@ input.number {
   fill: var(--accent);
 }
 
+/* ---------------------------------------------------------------- beat */
+
+.beat-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.beat-boxes {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.beat-boxes span {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--raised-2);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.beat-boxes span.first {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.beat-boxes span.on {
+  background: #fff;
+}
+
+.beat-boxes span.first.on {
+  background: var(--accent);
+}
+
+.beat-text {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 96px;
+  line-height: 1.2;
+}
+
+.beat-tempo {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.beat-note {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.beat-note.warn {
+  color: var(--accent);
+}
+
+.beat-bar .tool:disabled {
+  opacity: 0.4;
+}
+
 /* ------------------------------------------------------------ timeline */
 
 .timeline {

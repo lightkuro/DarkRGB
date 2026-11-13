@@ -164,6 +164,9 @@ pub fn run(shared: Arc<Shared>, stop: Arc<AtomicBool>) {
         let heard = delay.step(now, shared.audio.features(), show.audio.delay_ms);
         let (audio, launch, cues, frozen, idle_changed, timeline) = {
             let mut live = shared.live.lock().unwrap();
+            // Two things about the beat that the show decides.
+            live.lead_ms = base.audio.lead_ms;
+            live.follow_midi = base.live.midi_clock;
             let clocked = live.clocked(now, heard);
             // Where the timeline has got to, and what it calls for now.
             let timeline = live.timeline_step(now, &base);

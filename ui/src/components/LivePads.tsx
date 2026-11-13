@@ -46,6 +46,7 @@ import { swatch } from "./LayerPanel";
 import { MidiPad } from "./Midi";
 import { Slider, Switch, useDismiss } from "./ui";
 import { Transport } from "./Timeline";
+import { BeatBar } from "./Beat";
 
 const setSpeed = perFrame((speed: number) => engine.quiet({ type: "set_live", speed }));
 const setSensitivity = perFrame((sensitivity: number) => engine.quiet({ type: "set_audio", sensitivity }));
@@ -140,6 +141,8 @@ export function describe(action: Action, show: Show, hello: Hello): { name: stri
       return { name: "Previous scene", icon: <SkipBack size={15} /> };
     case "freeze":
       return { name: "Freeze", icon: <Snowflake size={15} /> };
+    case "downbeat":
+      return { name: "Beat one", icon: <Activity size={15} /> };
     case "colours": {
       const found = show.live.swatches?.find((s) => s.id === action.id);
       const palette = found ? readPalette(found.value, hello.palettes) : undefined;
@@ -486,6 +489,7 @@ const BUILT_IN: Action[] = [
   { type: "prev_scene" },
   { type: "next_scene" },
   { type: "freeze" },
+  { type: "downbeat" },
 ];
 
 export function LivePads() {
@@ -532,6 +536,7 @@ export function LivePads() {
         >
           <Pencil size={13} /> {customizing ? "Done" : "Customize"}
         </button>
+        {!customizing && <BeatBar compact />}
         {/* A show with a timeline is played, and recorded, from here too. */}
         {!customizing && show.timeline && <Transport compact />}
         {customizing && (

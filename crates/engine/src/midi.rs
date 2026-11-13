@@ -24,12 +24,23 @@ pub enum MidiEvent {
     Note(MidiNote, bool),
     /// A knob or fader moved; where it stands, 0..1.
     Control { channel: u8, cc: u8, value: f32 },
+    /// One tick of a clock another machine is sending: 24 to the beat.
+    Clock,
+    /// The sender of the clock started from the top.
+    ClockStart,
 }
 
-/// Reads one MIDI message. Anything other than notes and controllers
-/// (clock, pitch bend, system messages) is ignored.
+/// Reads one MIDI message. Anything other than notes, controllers and
+/// clock (pitch bend, other system messages) is ignored.
 pub fn parse(bytes: &[u8]) -> Option<MidiEvent> {
     let (&status, data) = bytes.split_first()?;
+    // Clock messages are one byte long. "Continue" picks up where the
+    // sender stopped, which the tick count already does by itself.
+    match status {
+        0xF8 => return Some(MidiEvent::Clock),
+        0xFA => return Some(MidiEvent::ClockStart),
+        _ => {}
+    }
     let (kind, channel) = (status & 0xF0, status & 0x0F);
     let (&a, &b) = (data.first()?, data.get(1)?);
     if a > 127 || b > 127 {
@@ -188,9 +199,13 @@ mod tests {
                 value: 0.0
             })
         );
-        // Clock, pitch bend, short and malformed messages.
+        // A clock another machine sends, and its start.
+        assert_eq!(parse(&[0xF8]), Some(MidiEvent::Clock));
+        assert_eq!(parse(&[0xFA]), Some(MidiEvent::ClockStart));
+        // Stop and continue, pitch bend, short and malformed messages.
         for bytes in [
-            &[0xF8][..],
+            &[0xFC][..],
+            &[0xFB],
             &[0xE0, 0, 64],
             &[0x90, 60],
             &[],

@@ -4,7 +4,8 @@
 
 import { Piano, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { engine, useShow, useStatus, type Binding, type KnobTarget, type MidiNote } from "../engine";
+import { engine, useLive, useShow, useStatus, type Binding, type KnobTarget, type MidiNote } from "../engine";
+import { Switch } from "./ui";
 
 const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -128,6 +129,32 @@ function KnobRow({ name, target }: { name: string; target: KnobTarget }) {
 }
 
 /** The MIDI part of the settings: what is heard, and the knobs. */
+/** Taking the beat from a clock a DJ mixer, drum machine or another program sends. */
+function ClockSwitch() {
+  const show = useShow();
+  const live = useLive();
+  const heard = live.clock?.midi_bpm;
+  if (!show) return null;
+  return (
+    <div className="field inline">
+      <span>
+        Follow a MIDI clock
+        <span className="hint">
+          {" "}
+          {heard
+            ? `One is arriving at ${Math.round(heard)} beats a minute.`
+            : "None is arriving now. When one is, its beat replaces the beat heard in the music."}
+        </span>
+      </span>
+      <Switch
+        checked={show.live.midi_clock ?? false}
+        label="Follow a MIDI clock"
+        onChange={(midi_clock) => engine.send({ type: "set_live", midi_clock })}
+      />
+    </div>
+  );
+}
+
 export function MidiSettings() {
   const midi = useStatus()?.midi;
   useEffect(
@@ -154,6 +181,7 @@ export function MidiSettings() {
           : "No controller is plugged in. One is picked up within a couple of seconds of being connected."}{" "}
         {midi.last ? `Last heard: ${midi.last}.` : ""}
       </p>
+      <ClockSwitch />
       <p className="hint">
         Pads on the controller are tied to the show's pads in the Live view, under Customize. Knobs and faders are
         tied here: choose Learn, then move the one you want. Speed and sensitivity are normal at the middle of a

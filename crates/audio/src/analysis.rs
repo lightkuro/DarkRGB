@@ -68,6 +68,15 @@ const TEMPO_WINDOW_S: f32 = 6.0;
 const TEMPO_MIN_CONFIDENCE: f32 = 0.12;
 /// Onsets needed inside the tempo window before a tempo is believed.
 const TEMPO_MIN_ONSETS: usize = 6;
+/// How long the beat is kept going from memory when the music stops
+/// giving one: through a breakdown of sixteen bars at 120.
+const COAST_S: f32 = 32.0;
+/// Silence longer than this ends the song as far as the beat goes. A
+/// shorter one, like the pause before a drop, is counted through.
+const COAST_SILENCE_S: f32 = 4.0;
+/// While a tempo is held, a different one has to be this many times
+/// surer than the least that counts before it takes over.
+const SWITCH_CONFIDENCE: f32 = 2.0;
 
 pub struct Analyzer {
     sample_rate: f32,
@@ -126,6 +135,10 @@ pub struct Analyzer {
     candidate_votes: u32,
     phase: f32,
     steps_since_beat: usize,
+    /// Steps since the tempo was last heard clearly in the music.
+    coast_steps: usize,
+    /// A tempo has been heard clearly since the clock last gave up.
+    locked_once: bool,
 
     /// How big the current part of the song is: overall, and in the bass.
     sections: [SectionMeter; 2],
@@ -256,6 +269,8 @@ impl Analyzer {
             candidate_votes: 0,
             phase: 0.0,
             steps_since_beat: usize::MAX / 2,
+            coast_steps: 0,
+            locked_once: false,
             sections: [SectionMeter::default(); 2],
             settled: 1.0,
             away_steps: 0,
@@ -543,11 +558,26 @@ impl Analyzer {
         }
 
         self.steps_since_beat = self.steps_since_beat.saturating_add(1);
-        // A couple of hits that happen to be evenly spaced are not a tempo.
-        let enough_hits = self.recent_onsets.len() >= TEMPO_MIN_ONSETS;
-        let locked = self.out.active && enough_hits && self.period > 0.0 && self.confidence >= TEMPO_MIN_CONFIDENCE;
+        let heard =
+            self.out.active && self.hits_are_fresh() && self.period > 0.0 && self.confidence >= TEMPO_MIN_CONFIDENCE;
+        if heard {
+            self.coast_steps = 0;
+            self.locked_once = true;
+        } else {
+            self.coast_steps = self.coast_steps.saturating_add(1);
+        }
+        // Once a tempo has been heard, the clock keeps running at it when
+        // the music stops giving a beat: a breakdown has no drums, but
+        // the song has not stopped, and the beat must still be there when
+        // the drums come back.
+        let coasting =
+            !heard && self.locked_once && self.period > 0.0 && (self.coast_steps as f32) < self.step_rate * COAST_S;
+        if !heard && !coasting {
+            self.locked_once = false;
+        }
+        self.out.coasting = coasting;
         let mut beat = false;
-        if locked {
+        if heard || coasting {
             self.phase += 1.0 / self.period;
             if self.phase >= 1.0 {
                 self.phase -= 1.0;
@@ -573,15 +603,37 @@ impl Analyzer {
         }
     }
 
+    /// Whether there are hits to take a tempo from right now: enough of
+    /// them lately (a couple that happen to be evenly spaced are not a
+    /// tempo), and some in the last two seconds. Without the second
+    /// test, the drums that have just stopped would go on steering the
+    /// clock, worse and worse, until they left the window.
+    fn hits_are_fresh(&self) -> bool {
+        let lately = (self.step_rate * 2.0) as u64;
+        self.recent_onsets.len() >= TEMPO_MIN_ONSETS
+            && self
+                .recent_onsets
+                .iter()
+                .rev()
+                .take_while(|at| self.step_index - **at <= lately)
+                .count()
+                >= 2
+    }
+
     /// Finds the beat length that best explains the recent onsets, then
     /// nudges the beat clock toward where those onsets say the beat is.
     fn estimate_tempo(&mut self, window: usize) {
         let len = self.onset_strength.len();
         if !self.out.active || len < window / 2 {
             if !self.out.active {
-                self.period = 0.0;
                 self.confidence = 0.0;
                 self.candidate_votes = 0;
+                // A pause is counted through. A long silence is the end
+                // of the song, and the next one starts afresh.
+                if self.quiet_steps as f32 > self.step_rate * COAST_SILENCE_S {
+                    self.period = 0.0;
+                    self.locked_once = false;
+                }
             }
             return;
         }
@@ -652,6 +704,10 @@ impl Analyzer {
             return;
         }
 
+        // A clock that is running is only corrected by hits being heard now.
+        if self.period > 0.0 && !self.hits_are_fresh() {
+            return;
+        }
         let near = |a: f32, b: f32| b > 0.0 && (a - b).abs() / b < 0.06;
         if self.period <= 0.0 {
             self.period = measured;
@@ -668,7 +724,10 @@ impl Analyzer {
                 self.candidate = measured;
                 self.candidate_votes = 1;
             }
-            if self.candidate_votes >= 4 {
+            // And it has to be heard plainly: the pads of a breakdown can
+            // suggest a tempo of their own, faintly.
+            let sure = self.confidence >= TEMPO_MIN_CONFIDENCE * SWITCH_CONFIDENCE;
+            if self.candidate_votes >= 4 && sure {
                 self.period = measured;
                 self.candidate_votes = 0;
                 self.phase = self.measure_phase(&x);
@@ -978,6 +1037,81 @@ mod tests {
         assert!((19..=21).contains(&counted), "counted {counted} beats in 10 s");
         let worst = errors.iter().fold(0.0f32, |m, e| m.max(e.abs()));
         assert!(worst < 0.07, "a beat was {:.0} ms away from its kick", worst * 1000.0);
+    }
+
+    /// The times beats were reported at, in seconds, across a signal.
+    fn beat_times(analyzer: &mut Analyzer, samples: &[f32], from: f32) -> Vec<f32> {
+        let mut out = Vec::new();
+        let mut count = analyzer.features().beat_count;
+        let mut t = from;
+        for chunk in samples.chunks(256) {
+            let steps = analyzer.push(chunk);
+            t += chunk.len() as f32 / SR as f32;
+            if steps > 0 && analyzer.features().beat_count != count {
+                count = analyzer.features().beat_count;
+                out.push(t);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_beat_runs_on_through_a_breakdown_and_is_still_right_after_it() {
+        let mut a = Analyzer::new(SR);
+        // Eight seconds of drums at 120, eight of a held note with no
+        // drums, then the drums again exactly in time.
+        feed(&mut a, &drum_loop(120.0, 8.0, SR, 0.5));
+        assert!((a.features().bpm - 120.0).abs() < 2.0);
+        assert!(!a.features().coasting);
+        let before = a.features().beat_count;
+        let breakdown = beat_times(&mut a, &sine(220.0, 0.2, 8.0, SR), 8.0);
+        let f = a.features();
+        assert!(f.coasting, "kept from memory");
+        assert!((f.bpm - 120.0).abs() < 2.0, "at the tempo it had: {}", f.bpm);
+        let counted = f.beat_count - before;
+        assert!(
+            (15..=17).contains(&counted),
+            "sixteen beats in eight seconds, counted {counted}"
+        );
+        // Evenly, not in bursts on whatever the note does.
+        for pair in breakdown.windows(2) {
+            assert!((pair[1] - pair[0] - 0.5).abs() < 0.06, "{pair:?}");
+        }
+        // The drums come back on the grid they left, and the beats are on them.
+        let back = beat_times(&mut a, &drum_loop(120.0, 6.0, SR, 0.5), 16.0);
+        assert!(!a.features().coasting, "heard again");
+        for t in back.iter().filter(|t| **t > 19.0) {
+            let off = (t / 0.5).fract();
+            let off = off.min(1.0 - off) * 0.5;
+            assert!(off < 0.08, "a beat {off:.3} s off the kick at {t:.2}");
+        }
+    }
+
+    #[test]
+    fn a_pause_is_counted_through_and_a_long_silence_ends_the_song() {
+        let mut a = Analyzer::new(SR);
+        feed(&mut a, &drum_loop(120.0, 8.0, SR, 0.5));
+        let before = a.features().beat_count;
+        // Two seconds of nothing, as before a drop.
+        feed(&mut a, &vec![0.0; SR as usize * 2]);
+        let f = a.features();
+        assert!(f.coasting && f.bpm > 0.0);
+        assert!(
+            (3..=5).contains(&(f.beat_count - before)),
+            "four beats: {}",
+            f.beat_count - before
+        );
+        // Ten seconds of nothing: the song is over.
+        feed(&mut a, &vec![0.0; SR as usize * 10]);
+        let f = a.features();
+        assert!(!f.coasting && f.bpm == 0.0);
+        let stopped = f.beat_count;
+        feed(&mut a, &vec![0.0; SR as usize * 2]);
+        assert_eq!(
+            a.features().beat_count,
+            stopped,
+            "no beats in silence once it has given up"
+        );
     }
 
     #[test]

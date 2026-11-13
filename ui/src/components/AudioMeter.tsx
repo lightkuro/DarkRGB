@@ -3,8 +3,9 @@
 
 import { ChevronDown, TriangleAlert, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { engine, perFrame, useLive, useShow, useStatus } from "../engine";
+import { engine, perFrame, useShow, useStatus } from "../engine";
 import { Slider, useDismiss } from "./ui";
+import { BeatBar } from "./Beat";
 
 const setSensitivity = perFrame((sensitivity: number) => engine.quiet({ type: "set_audio", sensitivity }));
 
@@ -56,28 +57,14 @@ export function AudioControls() {
 }
 
 /** The tempo: found in the music, or tapped by hand. */
+/** The beat and the ways to correct it, for the sound menu and Settings. */
 export function Tempo() {
-  const live = useLive();
-  const tapped = live.tapped_bpm > 0;
   return (
     <div className="field">
       <span className="field-head">
-        <span>Tempo</span>
-        <output>{tapped ? `${Math.round(live.tapped_bpm)} BPM, tapped` : "Following the music"}</output>
+        <span>Beat</span>
       </span>
-      <div className="tempo-buttons">
-        <button type="button" className="button small" onClick={() => engine.quiet({ type: "tap" })}>
-          Tap
-        </button>
-        <button
-          type="button"
-          className="button small quiet"
-          disabled={!tapped}
-          onClick={() => engine.send({ type: "auto_tempo" })}
-        >
-          Follow the music
-        </button>
-      </div>
+      <BeatBar />
     </div>
   );
 }

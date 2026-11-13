@@ -629,6 +629,7 @@ fn a_scene_waits_for_the_beat_when_asked_to() {
             every_bars: None,
             shuffle: None,
             on_drops: None,
+            midi_clock: None,
         })
         .unwrap();
 
@@ -679,6 +680,7 @@ fn a_scene_change_can_fade_in() {
             every_bars: None,
             shuffle: None,
             on_drops: None,
+            midi_clock: None,
         })
         .unwrap();
 
@@ -1501,6 +1503,7 @@ fn next_scene_previous_scene_freeze_and_speed() {
             every_bars: None,
             shuffle: None,
             on_drops: None,
+            midi_clock: None,
         })
         .unwrap();
     assert_eq!(shared.show.lock().unwrap().live.speed, 0.25);
@@ -1529,6 +1532,7 @@ fn autopilot_changes_scene_by_itself_and_a_press_restarts_its_count() {
             every_bars: Some(1),
             shuffle: None,
             on_drops: None,
+            midi_clock: None,
         })
         .unwrap();
     wait_for("the first change", || current() == Some(ids[0]));
@@ -1569,6 +1573,7 @@ fn autopilot_changes_scene_by_itself_and_a_press_restarts_its_count() {
             every_bars: None,
             shuffle: None,
             on_drops: None,
+            midi_clock: None,
         })
         .unwrap();
     std::thread::sleep(Duration::from_millis(2500));

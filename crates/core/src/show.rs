@@ -345,6 +345,9 @@ pub enum Action {
     PrevScene,
     /// Stops the picture where it is.
     Freeze,
+    /// Says "this is beat one": bars are counted from the beat nearest
+    /// the press.
+    Downbeat,
     /// Gives everything that is playing the colours of a swatch.
     Colours {
         id: u32,
@@ -520,6 +523,10 @@ pub struct LiveSettings {
     /// The swatch in force, if any: every palette is replaced by it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colours: Option<u32>,
+    /// Take the beat from a MIDI clock when one is being sent, in place
+    /// of the beat heard in the music.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub midi_clock: bool,
 }
 
 /// A palette with a pad of its own. While it is in force, every effect
@@ -571,6 +578,7 @@ impl Default for LiveSettings {
             page: 1,
             swatches: Vec::new(),
             colours: None,
+            midi_clock: false,
         }
     }
 }
@@ -758,6 +766,19 @@ pub struct AudioSettings {
     /// every part of a song alike.
     #[serde(default = "default_dynamics")]
     pub dynamics: f32,
+    /// Milliseconds the lights run ahead of the beat as it is heard, 0..250.
+    /// Hearing a beat takes time (capturing the sound, analysing it,
+    /// drawing a frame, sending it), so a light that waits to be told is
+    /// late. The beat is steady, so the lights can simply be early.
+    #[serde(default = "default_lead")]
+    pub lead_ms: f32,
+}
+
+/// About what capture, analysis, one frame and the network add up to.
+pub const DEFAULT_LEAD_MS: f32 = 50.0;
+
+fn default_lead() -> f32 {
+    DEFAULT_LEAD_MS
 }
 
 /// A mild amount: enough to feel a breakdown, not enough to go dark in one.
@@ -774,6 +795,7 @@ impl Default for AudioSettings {
             sensitivity: 1.0,
             delay_ms: 0.0,
             dynamics: DEFAULT_DYNAMICS,
+            lead_ms: DEFAULT_LEAD_MS,
         }
     }
 }
@@ -1168,7 +1190,8 @@ impl Show {
             | Action::Hit
             | Action::NextScene
             | Action::PrevScene
-            | Action::Freeze => true,
+            | Action::Freeze
+            | Action::Downbeat => true,
         });
         // Clips on the timeline go with the scene or pad they play.
         let (scenes, bindings) = (&self.scenes, &self.bindings);

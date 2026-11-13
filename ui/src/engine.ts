@@ -165,6 +165,7 @@ export type Action =
   | { type: "next_scene" }
   | { type: "prev_scene" }
   | { type: "freeze" }
+  | { type: "downbeat" }
   | { type: "colours"; id: number };
 
 /**
@@ -287,6 +288,8 @@ export interface Show {
     delay_ms: number;
     /** How much the lights follow the shape of the song, 0 to 1. */
     dynamics: number;
+    /** Milliseconds the lights run ahead of the beat they hear. */
+    lead_ms?: number;
   };
   live: {
     launch: Launch;
@@ -306,6 +309,8 @@ export interface Show {
     swatches?: { id: number; name: string; value: string }[];
     /** The swatch in force, if any. */
     colours?: number;
+    /** Take the beat from a MIDI clock when one is arriving. */
+    midi_clock?: boolean;
   };
   output: {
     frame_rate: number;
@@ -341,6 +346,8 @@ export interface Live {
   asleep: boolean;
   /** Where the timeline is, as of the engine's last frame. */
   timeline?: { playing: boolean; recording: boolean; position: number };
+  /** Where the beat comes from, and how it has been corrected by hand. */
+  clock?: { source: "music" | "tapped" | "midi"; scale: number; nudge: number; midi_bpm: number | null };
 }
 
 /** What a clip on the timeline plays: a scene from then on, or a pad held for its length. */
@@ -508,6 +515,10 @@ export interface AudioFeatures {
   section: number;
   /** Jumps to 1 on a drop, then fades. */
   drop: number;
+  /** Which beat of the bar this is, 0 for the first. */
+  bar_beat?: number;
+  /** The beat is being kept from memory: the music is not giving one just now. */
+  coasting?: boolean;
 }
 
 export type Command =
@@ -587,6 +598,9 @@ export type Command =
   | { type: "tap" }
   | { type: "hit" }
   | { type: "auto_tempo" }
+  | { type: "tempo_scale"; scale: number }
+  | { type: "nudge"; beats: number }
+  | { type: "downbeat" }
   | {
       type: "set_live";
       launch?: Launch;
@@ -596,6 +610,7 @@ export type Command =
       every_bars?: number;
       shuffle?: boolean;
       on_drops?: boolean;
+  midi_clock?: boolean;
     }
   | { type: "set_output"; frame_rate?: number }
   | { type: "set_flash"; limit?: number; strict?: boolean; decided?: boolean }
@@ -648,7 +663,7 @@ export type Command =
   | { type: "set_scene_mood"; id: number; mood: Mood }
   | { type: "set_idle"; scene: number | null; after?: number }
   | { type: "set_master"; brightness?: number; blackout?: boolean; limit?: number }
-  | { type: "set_audio"; source?: string; sensitivity?: number; delay_ms?: number; dynamics?: number }
+  | { type: "set_audio"; source?: string; sensitivity?: number; delay_ms?: number; dynamics?: number; lead_ms?: number }
   | { type: "save_scene"; name: string }
   | { type: "recall_scene"; id: number }
   | { type: "delete_scene"; id: number }

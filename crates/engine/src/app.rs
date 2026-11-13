@@ -297,7 +297,31 @@ impl Shared {
                 return Ok(None);
             }
             Command::AutoTempo => {
-                self.live.lock().unwrap().tempo.clear();
+                self.live.lock().unwrap().follow_music();
+                self.bump_live();
+                return Ok(None);
+            }
+            Command::TempoScale { scale } => {
+                if ![0.5, 1.0, 2.0].contains(scale) {
+                    return Err("the beat can be counted at half speed, as heard, or double".into());
+                }
+                self.live
+                    .lock()
+                    .unwrap()
+                    .set_scale(self.now(), self.audio.features(), *scale);
+                self.bump_live();
+                return Ok(None);
+            }
+            Command::Nudge { beats } => {
+                if !beats.is_finite() {
+                    return Err("that is not an amount to nudge by".into());
+                }
+                self.live.lock().unwrap().nudge(beats.clamp(-1.0, 1.0) as f64);
+                self.bump_live();
+                return Ok(None);
+            }
+            Command::Downbeat => {
+                self.live.lock().unwrap().downbeat(self.now(), self.audio.features());
                 self.bump_live();
                 return Ok(None);
             }
@@ -624,6 +648,12 @@ impl Shared {
         let Some(event) = midi::parse(bytes) else {
             return;
         };
+        // A clock ticks 24 times a beat; it is counted and nothing more.
+        match event {
+            MidiEvent::Clock => return self.live.lock().unwrap().midi_tick(self.now()),
+            MidiEvent::ClockStart => return self.live.lock().unwrap().midi_clock.start(),
+            _ => {}
+        }
         let learning = {
             let mut status = self.midi.lock().unwrap();
             status.last = Some(match event {
@@ -636,6 +666,7 @@ impl Shared {
                 MidiEvent::Control { channel, cc, value } => {
                     format!("knob {cc} on channel {} at {}%", channel + 1, (value * 100.0).round())
                 }
+                MidiEvent::Clock | MidiEvent::ClockStart => return,
             });
             status.learning
         };
@@ -687,6 +718,8 @@ impl Shared {
                     moves.push((target, value));
                 }
             }
+            // Dealt with before any of this.
+            (MidiEvent::Clock | MidiEvent::ClockStart, _) => {}
         }
     }
 
@@ -709,12 +742,14 @@ impl Shared {
                     every_bars: None,
                     shuffle: None,
                     on_drops: None,
+                    midi_clock: None,
                 },
                 KnobTarget::Sensitivity => Command::SetAudio {
                     source: None,
                     sensitivity: Some(midi::doubling(value)),
                     delay_ms: None,
                     dynamics: None,
+                    lead_ms: None,
                 },
             };
             let _ = self.execute(&command);
@@ -1253,6 +1288,7 @@ impl Shared {
                 }
             }
             Action::TapTempo => self.execute(&Command::Tap),
+            Action::Downbeat => self.execute(&Command::Downbeat),
             Action::Hit => self.execute(&Command::Hit),
             Action::Freeze => {
                 let mut live = self.live.lock().unwrap();
@@ -1301,7 +1337,8 @@ impl Shared {
             | Action::Hit
             | Action::NextScene
             | Action::PrevScene
-            | Action::Freeze => None,
+            | Action::Freeze
+            | Action::Downbeat => None,
         };
         drop(show);
         if flipped.is_some() {

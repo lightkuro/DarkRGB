@@ -49,6 +49,7 @@ const setLimit = perFrame((limit: number) => engine.quiet({ type: "set_master", 
 const setDelay = perFrame((delay_ms: number) => engine.quiet({ type: "set_audio", delay_ms }));
 const setFade = perFrame((fade: number) => engine.quiet({ type: "set_live", fade }));
 const setDynamics = perFrame((dynamics: number) => engine.quiet({ type: "set_audio", dynamics }));
+const setLead = perFrame((lead_ms: number) => engine.quiet({ type: "set_audio", lead_ms }));
 
 /** A setting with its explanation underneath. */
 function Row({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
@@ -183,6 +184,20 @@ function Sound({ show }: { show: Show }) {
       <p className="hint">
         Makes the quiet parts of a song dimmer and calmer, so the big parts land harder. Off treats every part
         of a song alike. Effects you play by hand are never held back.
+      </p>
+      <Slider
+        label="Lights lead the beat by"
+        min={0}
+        max={250}
+        step={5}
+        value={show.audio.lead_ms ?? 50}
+        format={(v) => (v === 0 ? "Nothing" : `${Math.round(v)} ms`)}
+        onChange={setLead}
+      />
+      <p className="hint">
+        Hearing a beat takes a moment, so a light that waits to be told is late. A steady beat can be run ahead
+        of instead. Raise this if flashes on the beat land after the kick; lower it if they come before. It only
+        moves things that keep time with the beat, not things that react to each sound.
       </p>
       {(full || show.audio.delay_ms > 0) && (
         <>
@@ -430,6 +445,8 @@ export function actionName(action: Action, show: Show, effectName: (id: string) 
       return "Previous scene";
     case "freeze":
       return "Freeze the picture";
+    case "downbeat":
+      return "Beat one";
   }
 }
 
@@ -600,6 +617,7 @@ function LivePage({ show }: { show: Show }) {
           <KeyAssign action={{ type: "next_scene" }} label="Next scene" />
           <KeyAssign action={{ type: "prev_scene" }} label="Previous scene" />
           <KeyAssign action={{ type: "freeze" }} label="Freeze the picture" />
+          <KeyAssign action={{ type: "downbeat" }} label="This is beat one" />
           <p className="hint">
             Firing a beat sets off every effect that waits for one, such as Beat pulse and Ripple, with or without
             music.

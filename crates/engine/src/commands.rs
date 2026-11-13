@@ -473,8 +473,19 @@ pub enum Command {
     Tap,
     /// Fires a beat by hand. Handled by the app.
     Hit,
-    /// Goes back to following the music's own tempo. Handled by the app.
+    /// Goes back to following the music's own tempo, as it is heard.
+    /// Handled by the app, like the three after it.
     AutoTempo,
+    /// Counts the music's beat at half speed (0.5), as heard (1) or double (2).
+    TempoScale {
+        scale: f32,
+    },
+    /// Moves the beat later by a part of a beat, or earlier if negative.
+    Nudge {
+        beats: f32,
+    },
+    /// Says the beat nearest now is the first of a bar.
+    Downbeat,
     SetLive {
         launch: Option<Launch>,
         fade: Option<f32>,
@@ -484,6 +495,9 @@ pub enum Command {
         every_bars: Option<u32>,
         shuffle: Option<bool>,
         on_drops: Option<bool>,
+        /// Take the beat from a MIDI clock when one is arriving.
+        #[serde(default)]
+        midi_clock: Option<bool>,
     },
     /// Whether autopilot may switch to a scene.
     SetSceneAuto {
@@ -609,6 +623,9 @@ pub enum Command {
         sensitivity: Option<f32>,
         delay_ms: Option<f32>,
         dynamics: Option<f32>,
+        /// Milliseconds the lights run ahead of the beat.
+        #[serde(default)]
+        lead_ms: Option<f32>,
     },
     SaveScene {
         name: String,
@@ -1075,6 +1092,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
         | Command::Tap
         | Command::Hit
         | Command::AutoTempo
+        | Command::TempoScale { .. }
+        | Command::Nudge { .. }
+        | Command::Downbeat
         | Command::NewShow { .. }
         | Command::OpenShow { .. }
         | Command::DuplicateShow { .. }
@@ -1743,7 +1763,8 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 | Action::Hit
                 | Action::NextScene
                 | Action::PrevScene
-                | Action::Freeze => true,
+                | Action::Freeze
+                | Action::Downbeat => true,
             };
             if !exists {
                 return Err("the thing that pad was for no longer exists".into());
@@ -1817,6 +1838,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             every_bars,
             shuffle,
             on_drops,
+            midi_clock,
         } => {
             let fade = fade.map(|f| finite(f, "The fade time")).transpose()?;
             let speed = speed.map(|s| finite(s, "The speed")).transpose()?;
@@ -1840,6 +1862,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(on) = on_drops {
                 show.live.auto.on_drops = *on;
+            }
+            if let Some(on) = midi_clock {
+                show.live.midi_clock = *on;
             }
             Ok(())
         }
@@ -2138,10 +2163,15 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             sensitivity,
             delay_ms,
             dynamics,
+            lead_ms,
         } => {
             let sensitivity = sensitivity.map(|s| finite(s, "Sensitivity")).transpose()?;
             let delay_ms = delay_ms.map(|d| finite(d, "The delay")).transpose()?;
             let dynamics = dynamics.map(|d| finite(d, "That setting")).transpose()?;
+            let lead_ms = lead_ms.map(|d| finite(d, "The lead")).transpose()?;
+            if let Some(l) = lead_ms {
+                show.audio.lead_ms = l.clamp(0.0, 250.0);
+            }
             if let Some(d) = delay_ms {
                 show.audio.delay_ms = d.clamp(0.0, 1000.0);
             }
@@ -3324,6 +3354,7 @@ mod tests {
                 sensitivity: None,
                 delay_ms: Some(5000.0),
                 dynamics: None,
+                lead_ms: None,
             },
         )
         .unwrap();
@@ -3338,6 +3369,7 @@ mod tests {
                 every_bars: None,
                 shuffle: None,
                 on_drops: None,
+                midi_clock: None,
             },
         )
         .unwrap();
@@ -3636,6 +3668,7 @@ mod tests {
                     every_bars: r.maybe(|r| [0, 1, 8, 64, 65, u32::MAX][r.next() as usize % 6]),
                     shuffle: r.maybe(Awkward::flag),
                     on_drops: r.maybe(Awkward::flag),
+                    midi_clock: None,
                 },
                 39 => Command::SetSceneAuto {
                     id: scene,
@@ -3841,6 +3874,7 @@ mod tests {
                     sensitivity: r.maybe(Awkward::number),
                     delay_ms: r.maybe(Awkward::number),
                     dynamics: r.maybe(Awkward::number),
+                    lead_ms: None,
                 },
                 11 => Command::SaveScene { name: r.text() },
                 12 => Command::RecallScene { id: scene },

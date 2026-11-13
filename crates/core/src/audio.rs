@@ -109,6 +109,13 @@ pub struct AudioFeatures {
     /// Jumps to 1 when the song moves to a louder part, then fades over
     /// a couple of seconds.
     pub drop: f32,
+    /// Which beat of the bar this is, 0 for the first. Bars are four
+    /// beats long.
+    pub bar_beat: u8,
+    /// The beat is being kept from memory: the music's own beat cannot be
+    /// heard just now (a breakdown, a pause), and the clock runs on at
+    /// the tempo it had.
+    pub coasting: bool,
 }
 
 impl Default for AudioFeatures {
@@ -130,6 +137,8 @@ impl Default for AudioFeatures {
             intensity: 1.0,
             section: 0,
             drop: 0.0,
+            bar_beat: 0,
+            coasting: false,
         }
     }
 }
@@ -259,6 +268,8 @@ mod tests {
             intensity: 0.6,
             section: 2,
             drop: 0.4,
+            bar_beat: 3,
+            coasting: false,
         }
     }
 

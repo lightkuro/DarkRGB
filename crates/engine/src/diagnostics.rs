@@ -332,14 +332,24 @@ pub fn midi_test(seconds: u64) -> bool {
         };
         input.ignore(Ignore::All);
         let (count, label) = (heard.clone(), name.clone());
+        let clock_seen = std::sync::atomic::AtomicBool::new(false);
         let connected = input.connect(
             port,
             "darkRGB check in",
             move |_, bytes, _| {
+                // A clock ticks 24 times a beat: said once, then left out
+                // of the count so the other messages can still be seen.
+                let event = parse(bytes);
+                if matches!(event, Some(MidiEvent::Clock)) {
+                    if !clock_seen.swap(true, Ordering::Relaxed) {
+                        println!("  {label}: is sending a clock (darkRGB can follow its tempo)");
+                    }
+                    return;
+                }
                 let seen = count.fetch_add(1, Ordering::Relaxed);
                 // Enough to see that it works, without flooding the screen.
                 if seen < 40 {
-                    match parse(bytes) {
+                    match event {
                         Some(MidiEvent::Note(note, down)) => println!(
                             "  {label}: {} {} on channel {}",
                             note_name(note.note),
@@ -351,6 +361,8 @@ pub fn midi_test(seconds: u64) -> bool {
                             channel + 1,
                             value * 100.0
                         ),
+                        Some(MidiEvent::Clock) => {}
+                        Some(MidiEvent::ClockStart) => println!("  {label}: its clock started"),
                         None => println!("  {label}: something darkRGB does not use ({bytes:02x?})"),
                     }
                 }

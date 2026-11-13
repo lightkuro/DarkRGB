@@ -43,6 +43,15 @@ impl Tempo {
         self.bpm
     }
 
+    /// The tempo of the taps so far, whether or not they are the clock.
+    fn tapped_bpm(&self) -> f32 {
+        if self.taps.len() < 2 {
+            return 0.0;
+        }
+        let interval = (self.taps[self.taps.len() - 1] - self.taps[0]) / (self.taps.len() - 1) as f64;
+        ((60.0 / interval) as f32).clamp(MIN_BPM, MAX_BPM)
+    }
+
     /// One tap. `count` is the beat number the lights are on right now.
     /// The first tap of a run starts a new bar; from the second tap on
     /// there is a tempo.
@@ -83,6 +92,116 @@ impl Tempo {
         features.beat_count = self.count_at_anchor.wrapping_add(beats.floor() as u32);
         features.beat = (-since_beat / PULSE_FADE_S).exp() as f32;
     }
+}
+
+/// What a performer does to the beat, on top of wherever it comes from.
+///
+/// The music's own beat can be right in tempo and wrong in everything
+/// else: counted at twice or half the speed a person would clap, a
+/// little ahead or behind, with its bars starting on the wrong beat.
+/// These put it right without taking the clock away from the music, so
+/// it keeps following the song and never drifts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Clock {
+    /// Half time, as heard, or double time: 0.5, 1 or 2.
+    pub scale: f32,
+    /// Beats added to where the beat is.
+    pub nudge: f64,
+    /// A beat number that begins a bar.
+    bar_origin: i64,
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            nudge: 0.0,
+            bar_origin: 0,
+        }
+    }
+}
+
+/// The most a beat can be nudged either way, in beats.
+const MAX_NUDGE: f64 = 2.0;
+
+/// A beat sent by another machine as MIDI clock: 24 ticks to the beat.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MidiClock {
+    /// Ticks since the sender last started.
+    ticks: u64,
+    /// When the last tick came, and the time between ticks, smoothed.
+    last: f64,
+    interval: f64,
+    heard: bool,
+    /// The sender has said "start": the next tick is the first of a bar.
+    starting: bool,
+}
+
+impl MidiClock {
+    const TICKS_A_BEAT: f64 = 24.0;
+    /// A clock that has sent nothing for this long has stopped.
+    const GONE_S: f64 = 0.5;
+
+    pub fn tick(&mut self, now: f64) {
+        let gap = now - self.last;
+        if self.heard && gap > 0.0 && gap < Self::GONE_S {
+            // Ticks arrive with a millisecond or two of jitter each.
+            self.interval = if self.interval > 0.0 {
+                self.interval * 0.9 + gap * 0.1
+            } else {
+                gap
+            };
+        } else {
+            self.interval = 0.0;
+        }
+        self.ticks = if std::mem::take(&mut self.starting) {
+            0
+        } else {
+            self.ticks + 1
+        };
+        self.last = now;
+        self.heard = true;
+    }
+
+    /// The sender started from the top.
+    pub fn start(&mut self) {
+        self.starting = true;
+    }
+
+    /// The tempo being sent, if a clock is arriving now.
+    pub fn bpm(&self, now: f64) -> Option<f32> {
+        let arriving = self.heard && now - self.last < Self::GONE_S && self.interval > 0.0;
+        arriving.then(|| ((60.0 / (Self::TICKS_A_BEAT * self.interval)) as f32).clamp(20.0, 400.0))
+    }
+
+    /// Beats since the sender started, and the tempo.
+    fn position(&self, now: f64) -> Option<(f64, f32)> {
+        let bpm = self.bpm(now)?;
+        let into_tick = ((now - self.last) / self.interval).clamp(0.0, 1.0);
+        Some(((self.ticks as f64 + into_tick) / Self::TICKS_A_BEAT, bpm))
+    }
+}
+
+/// Where the beat comes from, to tell the performer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BeatSource {
+    #[default]
+    Music,
+    Tapped,
+    Midi,
+}
+
+/// What clients are told about the beat clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct ClockStatus {
+    pub source: BeatSource,
+    /// 0.5, 1 or 2.
+    pub scale: f32,
+    /// Beats the beat has been nudged by.
+    pub nudge: f32,
+    /// The tempo of a MIDI clock that is arriving, followed or not.
+    pub midi_bpm: Option<f32>,
 }
 
 /// Autopilot changes scene after this long when there is no tempo to count
@@ -126,6 +245,8 @@ pub struct LiveStatus {
     pub asleep: bool,
     /// Where the timeline is.
     pub timeline: TransportStatus,
+    /// Where the beat comes from and how it has been corrected.
+    pub clock: ClockStatus,
 }
 
 /// What clients are told about the timeline's playback.
@@ -254,6 +375,13 @@ pub struct Live {
     frame_at: f64,
     /// Pads being recorded: the clip each press began, by pad.
     pub recording: HashMap<u32, u32>,
+    /// The performer's corrections to the beat.
+    pub clock: Clock,
+    /// A beat arriving as MIDI clock, and whether the show follows it.
+    pub midi_clock: MidiClock,
+    pub follow_midi: bool,
+    /// Milliseconds the lights run ahead of the beat heard in the music.
+    pub lead_ms: f32,
 }
 
 impl Live {
@@ -332,6 +460,12 @@ impl Live {
                 playing: self.transport.playing,
                 recording: self.transport.recording,
                 position: self.transport.position(self.frame_at),
+            },
+            clock: ClockStatus {
+                source: self.source(self.frame_at),
+                scale: self.clock.scale,
+                nudge: self.clock.nudge as f32,
+                midi_bpm: self.midi_clock.bpm(self.frame_at),
             },
         }
     }
@@ -455,7 +589,10 @@ impl Live {
         }
         let bars_up = if features.bpm > 0.0 {
             // On a beat, so the change lands in time.
-            beat && features.beat_count.wrapping_sub(mark.beat) >= settings.every_bars.clamp(1, 64) * 4
+            // On the first beat of a bar, so the change lands where the
+            // music itself changes.
+            beat && features.bar_beat == 0
+                && features.beat_count.wrapping_sub(mark.beat) + 3 >= settings.every_bars.clamp(1, 64) * 4
         } else {
             played >= settings.every_bars.clamp(1, 64) as f64 * BAR_WITHOUT_TEMPO_S
         };
@@ -549,16 +686,131 @@ impl Live {
     }
 
     /// One tap of the tempo. `raw` is what the audio analysis says now.
+    /// One tap of the tempo key.
+    ///
+    /// Tapped along to a beat the music already gives (at its speed, or
+    /// half or double it), the taps correct that beat: where it falls,
+    /// which speed it is counted at, and which beat is the first of the
+    /// bar. The clock stays with the music. Tapped at a tempo of their
+    /// own, the taps become the clock, as they always did.
     pub fn tap(&mut self, now: f64, raw: AudioFeatures) {
         let count = self.clocked(now, raw).beat_count;
         self.tempo.tap(now, count);
+        let taps = self.tempo.taps.len();
+        let following_midi = self.source(now) == BeatSource::Midi;
+        let fits = (taps >= 3 && raw.bpm > 0.0 && !following_midi)
+            .then(|| {
+                let ratio = self.tempo.tapped_bpm() / raw.bpm;
+                [0.5f32, 1.0, 2.0].into_iter().find(|s| (ratio / s - 1.0).abs() < 0.08)
+            })
+            .flatten();
+        match fits {
+            Some(scale) => {
+                // Where the music's beat is at this speed, before any nudge.
+                let plain = self.music_position(&raw, scale, 0.0);
+                // This tap is a beat: the nudge moves the nearest one onto it.
+                let on = plain.round();
+                self.clock.scale = scale;
+                self.clock.nudge = on - plain;
+                // And the first tap of the run was beat one.
+                self.clock.bar_origin = on as i64 - (taps as i64 - 1);
+                self.tempo.bpm = 0.0;
+            }
+            None if self.tempo.bpm > 0.0 => {
+                // A clock of its own, counted from its first tap.
+                self.clock = Clock::default();
+            }
+            None => {}
+        }
     }
 
-    /// The audio features with the tapped tempo in place of the music's.
-    /// Bars are counted on this, before beats fired by hand are added.
+    /// Where the music's beat is, in beats, at a speed and with a nudge:
+    /// its own position, ahead by the lead the lights are given.
+    fn music_position(&self, raw: &AudioFeatures, scale: f32, nudge: f64) -> f64 {
+        let lead = self.lead_ms.clamp(0.0, 250.0) as f64 / 1000.0 * (raw.bpm * scale) as f64 / 60.0;
+        ((raw.beat_count as f64 + raw.beat_phase as f64) * scale as f64 + nudge + lead).max(0.0)
+    }
+
+    /// Where the beat is coming from at `now`.
+    pub fn source(&self, now: f64) -> BeatSource {
+        if self.follow_midi && self.midi_clock.bpm(now).is_some() {
+            BeatSource::Midi
+        } else if self.tempo.bpm > 0.0 {
+            BeatSource::Tapped
+        } else {
+            BeatSource::Music
+        }
+    }
+
+    /// The audio features with the beat as the show should count it: from
+    /// a MIDI clock, from taps, or from the music with the performer's
+    /// corrections and the lights' lead. Bars are counted on this, before
+    /// beats fired by hand are added.
     pub fn clocked(&self, now: f64, mut features: AudioFeatures) -> AudioFeatures {
-        self.tempo.apply(now, &mut features);
+        let position = match self.source(now) {
+            BeatSource::Midi => self.midi_clock.position(now).map(|(at, bpm)| {
+                features.bpm = bpm;
+                features.coasting = false;
+                at
+            }),
+            BeatSource::Tapped => {
+                self.tempo.apply(now, &mut features);
+                features.coasting = false;
+                None
+            }
+            BeatSource::Music if features.bpm > 0.0 => {
+                let at = self.music_position(&features, self.clock.scale, self.clock.nudge);
+                features.bpm *= self.clock.scale;
+                Some(at)
+            }
+            BeatSource::Music => None,
+        };
+        if let Some(at) = position {
+            features.beat_count = at.floor() as u32;
+            features.beat_phase = at.fract() as f32;
+            let since_beat = at.fract() * 60.0 / features.bpm.max(1.0) as f64;
+            features.beat = (-since_beat / PULSE_FADE_S).exp() as f32;
+        }
+        features.bar_beat = (features.beat_count as i64 - self.clock.bar_origin).rem_euclid(4) as u8;
         features
+    }
+
+    /// Says the beat nearest to now is the first of a bar.
+    pub fn downbeat(&mut self, now: f64, raw: AudioFeatures) {
+        let f = self.clocked(now, raw);
+        let nearest = f.beat_count as i64 + i64::from(f.beat_phase >= 0.5);
+        self.clock.bar_origin = nearest;
+    }
+
+    /// Counts the music's beat at half its speed, as it is, or double.
+    /// The beat that is playing keeps its place in the bar.
+    pub fn set_scale(&mut self, now: f64, raw: AudioFeatures, scale: f32) {
+        let before = self.clocked(now, raw);
+        self.clock.scale = scale;
+        let after = self.clocked(now, raw);
+        self.clock.bar_origin = after.beat_count as i64 - before.bar_beat as i64;
+    }
+
+    /// Moves the beat earlier (negative) or later by a part of a beat.
+    pub fn nudge(&mut self, beats: f64) {
+        self.clock.nudge = (self.clock.nudge + beats).clamp(-MAX_NUDGE, MAX_NUDGE);
+    }
+
+    /// Hands the clock back to the music, as it hears it.
+    pub fn follow_music(&mut self) {
+        self.tempo.clear();
+        self.clock.scale = 1.0;
+        self.clock.nudge = 0.0;
+    }
+
+    /// A message of MIDI clock: a tick, or the sender starting.
+    pub fn midi_tick(&mut self, now: f64) {
+        let starting = self.midi_clock.starting;
+        self.midi_clock.tick(now);
+        // A sender that starts from the top starts a bar.
+        if starting && self.follow_midi {
+            self.clock.bar_origin = 0;
+        }
     }
 
     /// The audio features as the lights should see them: with the tapped
@@ -645,7 +897,8 @@ impl Live {
                 | Action::Hit
                 | Action::NextScene
                 | Action::PrevScene
-                | Action::Freeze => {}
+                | Action::Freeze
+                | Action::Downbeat => {}
             }
         }
         out
@@ -674,7 +927,7 @@ impl Live {
             // Without a tempo there is no beat to wait for.
             _ if features.bpm <= 0.0 => true,
             Launch::Beat => beat || waited > BEAT_WAIT_S,
-            Launch::Bar => (beat && features.beat_count.is_multiple_of(4)) || waited > BAR_WAIT_S,
+            Launch::Bar => (beat && features.bar_beat == 0) || waited > BAR_WAIT_S,
         }
     }
 }
@@ -908,6 +1161,7 @@ mod tests {
         AudioFeatures {
             bpm: 120.0,
             beat_count,
+            bar_beat: (beat_count % 4) as u8,
             section,
             active: true,
             ..AudioFeatures::default()
@@ -1143,6 +1397,180 @@ mod tests {
         assert!(!live.idle);
     }
 
+    /// The music's beat as the analysis reports it: at `bpm`, `beats` in.
+    fn heard(bpm: f32, beats: f64) -> AudioFeatures {
+        AudioFeatures {
+            bpm,
+            beat_count: beats.floor() as u32,
+            beat_phase: beats.fract() as f32,
+            active: true,
+            ..AudioFeatures::default()
+        }
+    }
+
+    #[test]
+    fn the_lights_lead_the_beat_they_hear() {
+        let mut live = Live::default();
+        // Nothing asked for: the beat is passed on as it is.
+        let f = live.clocked(0.0, heard(120.0, 10.25));
+        assert_eq!((f.beat_count, f.bpm), (10, 120.0));
+        assert!((f.beat_phase - 0.25).abs() < 1e-6);
+        assert_eq!(f.bar_beat, 2);
+        // A lead of 50 ms at 120 is a tenth of a beat: 0.95 of the way
+        // through beat 10 as heard, the lights are already on beat 11.
+        live.lead_ms = 50.0;
+        let f = live.clocked(0.0, heard(120.0, 10.95));
+        assert_eq!(f.beat_count, 11);
+        assert!((f.beat_phase - 0.05).abs() < 1e-4);
+        assert!(f.beat > 0.7, "and the beat's flash has just begun: {}", f.beat);
+        // Without a tempo there is nothing to run ahead of.
+        let none = live.clocked(
+            0.0,
+            AudioFeatures {
+                beat_count: 7,
+                ..AudioFeatures::default()
+            },
+        );
+        assert_eq!((none.beat_count, none.bpm), (7, 0.0));
+    }
+
+    #[test]
+    fn the_beat_can_be_halved_doubled_nudged_and_given_its_first_beat() {
+        let mut live = Live::default();
+        let raw = heard(140.0, 20.5);
+        // Half time: every second beat, at half the tempo.
+        live.set_scale(0.0, raw, 0.5);
+        let f = live.clocked(0.0, raw);
+        assert_eq!((f.bpm, f.beat_count), (70.0, 10));
+        assert!((f.beat_phase - 0.25).abs() < 1e-6);
+        // The beat that is playing kept its place in the bar.
+        assert_eq!(f.bar_beat, live_bar(&Live::default(), raw));
+        live.set_scale(0.0, raw, 2.0);
+        let f = live.clocked(0.0, raw);
+        assert_eq!((f.bpm, f.beat_count), (280.0, 41));
+        live.set_scale(0.0, raw, 1.0);
+
+        // A nudge of a quarter of a beat later; they add up, to a limit.
+        live.nudge(0.25);
+        assert!((live.clocked(0.0, raw).beat_phase - 0.75).abs() < 1e-6);
+        live.nudge(-0.5);
+        assert!((live.clocked(0.0, raw).beat_phase - 0.25).abs() < 1e-6);
+        for _ in 0..100 {
+            live.nudge(1.0);
+        }
+        assert_eq!(live.clock.nudge, MAX_NUDGE);
+        assert_eq!(live.status().clock.nudge, MAX_NUDGE as f32);
+
+        // "This is beat one": the nearest beat begins the bar.
+        let mut live = Live::default();
+        live.downbeat(0.0, heard(120.0, 22.1));
+        assert_eq!(live.clocked(0.0, heard(120.0, 22.1)).bar_beat, 0);
+        assert_eq!(live.clocked(0.0, heard(120.0, 25.0)).bar_beat, 3);
+        assert_eq!(live.clocked(0.0, heard(120.0, 26.0)).bar_beat, 0);
+        // Pressed just before a beat, it means that beat.
+        live.downbeat(0.0, heard(120.0, 30.9));
+        assert_eq!(live.clocked(0.0, heard(120.0, 31.0)).bar_beat, 0);
+        assert_eq!(live.clocked(0.0, heard(120.0, 30.9)).bar_beat, 3);
+
+        // Back to the music as it is heard. The bar stays where it was put.
+        live.nudge(0.3);
+        live.set_scale(0.0, raw, 2.0);
+        live.follow_music();
+        assert_eq!((live.clock.scale, live.clock.nudge), (1.0, 0.0));
+    }
+
+    fn live_bar(live: &Live, raw: AudioFeatures) -> u8 {
+        live.clocked(0.0, raw).bar_beat
+    }
+
+    #[test]
+    fn taps_along_with_the_music_correct_its_beat_and_leave_it_in_charge() {
+        let mut live = Live::default();
+        // The music is at 120; the analysis is 0.3 of a beat out and its
+        // bars start on the wrong beat. Three taps, one a beat, the first
+        // of them on beat one.
+        let at = |seconds: f64| heard(120.0, 40.3 + seconds * 2.0);
+        live.tap(0.0, at(0.0));
+        live.tap(0.5, at(0.5));
+        assert_eq!(
+            live.source(0.5),
+            BeatSource::Tapped,
+            "two taps: their own clock for now"
+        );
+        live.tap(1.0, at(1.0));
+        assert_eq!(
+            live.source(1.0),
+            BeatSource::Music,
+            "three that fit: the music's, corrected"
+        );
+        assert_eq!(live.status().tapped_bpm, 0.0);
+        let f = live.clocked(1.0, at(1.0));
+        assert!(
+            f.beat_phase < 0.01 || f.beat_phase > 0.99,
+            "the tap is on the beat: {}",
+            f.beat_phase
+        );
+        assert_eq!(f.bar_beat, 2, "the third tap is the third beat of the bar");
+        // It follows the music from here: a bar later, still in step.
+        let f = live.clocked(3.0, at(3.0));
+        assert!(f.beat_phase < 0.01 || f.beat_phase > 0.99);
+        assert_eq!((f.bar_beat, f.bpm), (2, 120.0));
+
+        // Tapped at half the speed the analysis counts, it is half time.
+        let mut live = Live::default();
+        let at = |seconds: f64| heard(160.0, 8.0 + seconds * 160.0 / 60.0);
+        for tap in 0..4 {
+            let t = tap as f64 * 0.75;
+            live.tap(t, at(t));
+        }
+        assert_eq!(live.source(3.0), BeatSource::Music);
+        assert_eq!(live.clock.scale, 0.5);
+        assert_eq!(live.clocked(3.0, at(3.0)).bpm, 80.0);
+
+        // Tapped at a tempo that has nothing to do with the music's, or
+        // with no music, the taps are the clock, as before.
+        let mut live = Live::default();
+        for tap in 0..4 {
+            let t = tap as f64 * 0.6;
+            live.tap(t, heard(133.0, t * 133.0 / 60.0));
+        }
+        assert_eq!(live.source(2.0), BeatSource::Tapped);
+        assert!((live.status().tapped_bpm - 100.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn a_midi_clock_is_followed_only_when_asked_and_only_while_it_ticks() {
+        let mut live = Live::default();
+        // 24 ticks a beat at 125 beats a minute, after a start.
+        let tick = 60.0 / 125.0 / 24.0;
+        live.midi_clock.start();
+        for n in 0..=24 * 6 {
+            live.midi_tick(n as f64 * tick);
+        }
+        let now = 24.0 * 6.0 * tick;
+        assert!((live.midi_clock.bpm(now).unwrap() - 125.0).abs() < 0.5);
+        // Heard, but not followed: the music's beat stands.
+        assert_eq!(live.source(now), BeatSource::Music);
+        assert_eq!(live.clocked(now, heard(98.0, 3.5)).bpm, 98.0);
+        // Followed: six beats since the start, so the third beat of the second bar.
+        live.follow_midi = true;
+        let f = live.clocked(now, heard(98.0, 3.5));
+        assert!((f.bpm - 125.0).abs() < 0.5);
+        assert_eq!((f.beat_count, f.bar_beat), (6, 2));
+        // Between ticks the position runs on.
+        let f = live.clocked(now + tick * 0.5, heard(98.0, 3.5));
+        assert!((f.beat_phase - 0.5 / 24.0).abs() < 0.01);
+        // The sender stops: half a second later the music is back in charge.
+        assert_eq!(live.source(now + 0.6), BeatSource::Music);
+        assert_eq!(live.clocked(now + 0.6, heard(98.0, 3.5)).bpm, 98.0);
+        // Starting again begins a bar.
+        live.midi_clock.start();
+        live.midi_tick(now + 2.0);
+        live.midi_tick(now + 2.0 + tick);
+        let f = live.clocked(now + 2.0 + tick, heard(98.0, 3.5));
+        assert_eq!((f.beat_count, f.bar_beat), (0, 0));
+    }
+
     #[test]
     fn the_timelines_clock_plays_stops_jumps_and_follows_the_song() {
         let mut t = Transport::default();
@@ -1318,9 +1746,10 @@ mod tests {
     #[test]
     fn a_waiting_scene_starts_on_the_beat_or_the_bar_or_gives_up_waiting() {
         let mut live = Live::default();
-        let with_tempo = |beat_count| AudioFeatures {
+        let with_tempo = |beat_count: u32| AudioFeatures {
             bpm: 120.0,
             beat_count,
+            bar_beat: (beat_count % 4) as u8,
             ..AudioFeatures::default()
         };
         let go = |live: &Live, now: f64, launch, features: &AudioFeatures, beat| {
