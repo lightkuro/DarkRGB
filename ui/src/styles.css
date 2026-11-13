@@ -1235,42 +1235,234 @@ input.number {
   gap: 10px;
 }
 
-.effect-group {
+/* The search box and the effect being looked at stay in view while the
+   tiles scroll under them. */
+.picker-top {
+  position: sticky;
+  top: -14px;
+  z-index: 3;
   display: grid;
+  gap: 8px;
+  margin: 0 -4px;
+  padding: 8px 4px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.layer .picker-top {
+  background: var(--raised);
+}
+
+.picker-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  color: var(--muted);
+}
+
+.picker-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  outline: none;
+}
+
+/* A fixed height: if it grew with what it says, the tiles would move
+   from under the pointer that chose what it says. */
+.picker-detail {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  height: 92px;
+  overflow: hidden;
+}
+
+.picker-words {
+  display: grid;
+  gap: 3px;
+  align-content: start;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.picker-words > span:not(.picker-badges) {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.picker-words strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.picker-badges {
+  display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
-.effect-grid {
-  display: grid;
-  gap: 2px;
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--raised-2);
+  font-size: 11px;
 }
 
-.effect-card {
+.badge.warn {
+  color: var(--accent);
+}
+
+.effect-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  background: #000;
+  image-rendering: pixelated;
+}
+
+.effect-thumb.large {
+  flex: none;
+  width: 76px;
+}
+
+.tile-section {
   display: grid;
-  gap: 2px;
-  padding: 7px 9px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-small);
+  gap: 6px;
+}
+
+.tile-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+}
+
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 6px;
   background: none;
-  text-align: left;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
 }
 
-.effect-card:hover {
+.section-toggle:hover {
+  color: var(--text);
+}
+
+.section-toggle .chevron {
+  transition: transform 0.12s;
+}
+
+.section-toggle[aria-expanded="true"] .chevron {
+  transform: rotate(90deg);
+}
+
+.section-toggle .count {
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--faint);
+}
+
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.effect-tile {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--raised);
+}
+
+.effect-tile:hover,
+.effect-tile:focus-within {
+  border-color: var(--line-strong);
   background: var(--raised-2);
 }
 
-.effect-card.selected {
+.effect-tile.selected {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
 
-.effect-name {
-  font-weight: 600;
+.tile-main {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 5px 5px 6px;
+  border: 0;
+  background: none;
+  text-align: center;
 }
 
-.effect-description {
-  color: var(--muted);
-  font-size: 12px;
+.tile-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 28px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.effect-tile.kept .tile-name {
+  color: var(--teal);
+}
+
+.tile-info {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  opacity: 0;
+}
+
+.effect-tile:hover .tile-info,
+.tile-info:focus-visible,
+.tile-info[aria-pressed="true"] {
+  opacity: 1;
+}
+
+.tile-info[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+@media (hover: none) {
+  .tile-info {
+    opacity: 1;
+  }
 }
 
 .add-effect {

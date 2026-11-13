@@ -54,13 +54,15 @@ import {
   type Palette,
   type ParamSpec,
   type ParamValue,
-  type SavedPattern,
   type Show,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
 import { ANGLE, HUE, LinkedSlider, STRENGTH } from "./Links";
 import { ConfirmButton, IconButton, NameField, Slider, Switch, useDismiss } from "./ui";
 import { PictureField } from "./PictureField";
+import { EffectPicker } from "./EffectTiles";
+
+export { EffectPicker };
 
 const BLENDS: { id: Blend; name: string; hint: string }[] = [
   { id: "normal", name: "Replace", hint: "Covers the effects below" },
@@ -405,67 +407,6 @@ function ParamControl({ layer, spec, full }: { layer: Layer; spec: ParamSpec; fu
         </label>
       );
   }
-}
-
-/** Effects grouped the way the engine groups them. */
-export function EffectPicker({
-  onPick,
-  onUse,
-  current,
-}: {
-  onPick: (id: string) => void;
-  /** Given when something kept can be added here: called with its id. */
-  onUse?: (pattern: number) => void;
-  current?: string;
-}) {
-  const hello = useHello();
-  const library = useLibrary();
-  const effects = hello?.effects ?? [];
-  const categories = [...new Set(effects.map((e) => e.category))];
-  const kept = onUse ? library.patterns : [];
-  const describe = (pattern: SavedPattern) =>
-    pattern.look
-      ? `A look of ${pattern.layers.length} effects. Added as a scene.`
-      : (effects.find((e) => e.id === pattern.layers[0]?.effect)?.name ?? "An effect") + ", with your settings.";
-  return (
-    <div className="effect-picker">
-      {kept.length > 0 && onUse && (
-        <div className="effect-group">
-          <h3>Kept by you</h3>
-          <div className="effect-grid">
-            {kept.map((pattern) => (
-              <button key={pattern.id} type="button" className="effect-card kept" onClick={() => onUse(pattern.id)}>
-                <span className="effect-name">
-                  <Bookmark size={12} aria-hidden /> {pattern.name}
-                </span>
-                <span className="effect-description">{describe(pattern)}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      {categories.map((category) => (
-        <div key={category} className="effect-group">
-          <h3>{category}</h3>
-          <div className="effect-grid">
-            {effects
-              .filter((e) => e.category === category)
-              .map((effect) => (
-                <button
-                  key={effect.id}
-                  type="button"
-                  className={`effect-card ${effect.id === current ? "selected" : ""}`}
-                  onClick={() => onPick(effect.id)}
-                >
-                  <span className="effect-name">{effect.name}</span>
-                  <span className="effect-description">{effect.description}</span>
-                </button>
-              ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 /**

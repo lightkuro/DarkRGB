@@ -14,6 +14,7 @@ pub mod looks;
 mod more_effects;
 pub mod params;
 pub mod picture;
+pub mod preview;
 pub mod render;
 pub mod safety;
 pub mod show;

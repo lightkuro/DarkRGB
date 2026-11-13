@@ -85,6 +85,7 @@ fn router(shared: Arc<Shared>, access: Access) -> Router {
             post(song_upload).layer(DefaultBodyLimit::max(MAX_SONG_BYTES)),
         )
         .route("/api/song/{file}", get(song_download))
+        .route("/api/preview/{effect}", get(effect_preview))
         .route("/api/access", get(access_handler))
         .route("/api/pair", post(pair_handler).layer(DefaultBodyLimit::max(1024)))
         .route(
@@ -145,6 +146,48 @@ async fn song_upload(
 }
 
 /// Hands a kept song back to the page that plays it.
+/// A short moving picture of one effect, for the list effects are chosen
+/// from: see `darkrgb_core::preview`. Made the first time it is asked for.
+async fn effect_preview(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(effect): Path<String>,
+) -> Response {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static MADE: OnceLock<Mutex<HashMap<String, Arc<Vec<u8>>>>> = OnceLock::new();
+    if !allowed(&headers, &state.access) || !may_control(&headers, peer, &state.access) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let made = MADE.get_or_init(Default::default);
+    let ready = made.lock().unwrap_or_else(|e| e.into_inner()).get(&effect).cloned();
+    let bytes = match ready {
+        Some(bytes) => bytes,
+        None => {
+            let id = effect.clone();
+            let Ok(Some(bytes)) = tokio::task::spawn_blocking(move || darkrgb_core::preview::effect(&id)).await else {
+                return StatusCode::NOT_FOUND.into_response();
+            };
+            let bytes = Arc::new(bytes);
+            made.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(effect, bytes.clone());
+            bytes
+        }
+    };
+    let mut response = bytes.as_ref().clone().into_response();
+    let h = response.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    // The same for as long as this version runs; a new version may draw it differently.
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"));
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    response
+}
+
 async fn song_download(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
