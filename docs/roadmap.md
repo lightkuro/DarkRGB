@@ -236,9 +236,8 @@ after the product.
 
 Still to do before the first release is published:
 
-- Run the Release workflow once and try what it makes: the Windows setup program has never been built, and
-  none of the installers has been installed on a real desktop.
-- Merge `dev` into `main`, which is still the first version.
+- Run the Release workflow once and try what it makes. CI built the Windows setup program for the first
+  time on 2026-11-13 (run 11, 0.8.0), with the `.deb` and AppImage; none has been installed on a real desktop.
 - Try real hardware: a WLED device, a MIDI controller, and an sACN or Art-Net controller if one is to hand.
 - Decide about signing. Unsigned, Windows shows a warning before the setup program runs.
 

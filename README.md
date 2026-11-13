@@ -41,13 +41,13 @@ synthetic test song. An outside review of 0.6.0 put that first among its concern
 
 | | Linux | Windows |
 |---|---|---|
-| Automated tests | pass | see the latest CI run |
+| Automated tests | pass | pass in CI (first time on current code, 2026-11-13) |
 | System audio with no setup | works (PulseAudio and PipeWire, tested with virtual speakers) | works (checked on one Windows PC) |
-| The app window | works, keys included (tested under a virtual display) | built by CI; not yet run by anyone since 0.2.0 |
+| The app window | works, keys included (tested under a virtual display) | built by CI; not yet opened by anyone since 0.2.0 |
 | Real WLED hardware | not yet tried | not yet tried |
 | sACN and Art-Net | packets checked against the standards and received by a test program; no real controller yet | the same code; not yet run |
 | MIDI controllers | built, and its message handling tested; not yet tried with a real controller | the same |
-| Installers | `.deb` and AppImage build | see the latest CI run |
+| Installers | `.deb` and AppImage build | the setup program builds in CI (4 MB); not yet installed by anyone |
 | Power limit, colour order, delay, smoother dimming | checked against a test receiver | the same code; not yet run |
 | Timeline | plays against a song in a browser and in the app window; recording and editing checked | not yet run |
 
