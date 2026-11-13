@@ -255,6 +255,8 @@ pub struct LiveStatus {
     pub blind: bool,
     /// The scene the lights went to last, for marking it while blind.
     pub on_air_scene: Option<u32>,
+    /// The scene last switched to, whatever has been changed since.
+    pub last_scene: Option<u32>,
 }
 
 /// What clients are told about the timeline's playback.
@@ -483,6 +485,7 @@ impl Live {
             editing: self.editing.filter(|_| self.on_air.is_some()),
             blind: self.on_air.is_some(),
             on_air_scene: self.last_scene.filter(|_| self.on_air.is_some()),
+            last_scene: self.last_scene,
         }
     }
 

@@ -214,6 +214,9 @@ pub struct Shared {
     pub remote: Mutex<Remote>,
     /// What is happening live: held keys, a tapped tempo, a waiting scene.
     pub live: Mutex<Live>,
+    /// The scene that what is playing was last the same as, so that the
+    /// window can say which scene changes made since belong to.
+    pub base_scene: Mutex<Option<u32>>,
     /// Bumped on every change to `live`.
     pub live_rev: watch::Sender<u64>,
     started: Instant,
@@ -253,6 +256,7 @@ impl Shared {
             notice: Mutex::new(notice),
             remote: Mutex::new(Remote::default()),
             live: Mutex::new(Live::default()),
+            base_scene: Mutex::new(None),
             live_rev: watch::Sender::new(1),
             started: Instant::now(),
         })
@@ -1589,6 +1593,7 @@ impl Shared {
                 live.on_air = Some(stack);
                 live.last_scene = Some(id);
                 live.scene_changed();
+                *self.base_scene.lock().unwrap() = Some(id);
             }
             drop(live);
             self.bump_live();

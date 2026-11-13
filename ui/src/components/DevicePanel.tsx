@@ -804,13 +804,14 @@ export function AddPixels() {
   const [rows, setRows] = useState("16");
   const [error, setError] = useState<string | null>(null);
 
-  if (!open) {
-    return (
-      <button type="button" className="text-button" onClick={() => setOpen(true)}>
-        <Network size={13} /> Add an sACN or Art-Net controller
-      </button>
-    );
-  }
+  // The button that opens the form stays where it is and closes it again.
+  const opener = (
+    <button type="button" className="text-button connect-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <Network size={13} /> Add an sACN or Art-Net controller
+      <ChevronRight size={13} className="chevron" aria-hidden />
+    </button>
+  );
+  if (!open) return opener;
   const whole = (value: string) => /^\d{1,6}$/.test(value);
   const pixels = kind === "strip" ? Number(count) : Number(cols) * Number(rows);
   const valid =
@@ -846,6 +847,8 @@ export function AddPixels() {
     }
   };
   return (
+    <div className="connect open">
+      {opener}
     <form
       className="virtual-form"
       onSubmit={(e) => {
@@ -909,6 +912,7 @@ export function AddPixels() {
         </button>
       </div>
     </form>
+    </div>
   );
 }
 
@@ -922,13 +926,14 @@ function AddVirtual() {
   const [rows, setRows] = useState("16");
   const [error, setError] = useState<string | null>(null);
 
-  if (!open) {
-    return (
-      <button type="button" className="text-button" onClick={() => setOpen(true)}>
-        <Ghost size={13} /> Add a virtual light
-      </button>
-    );
-  }
+  // The button that opens the form stays where it is and closes it again.
+  const opener = (
+    <button type="button" className="text-button connect-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <Ghost size={13} /> Add a virtual light
+      <ChevronRight size={13} className="chevron" aria-hidden />
+    </button>
+  );
+  if (!open) return opener;
   const add = async () => {
     const shape =
       kind === "strip"
@@ -948,6 +953,8 @@ function AddVirtual() {
   const whole = (value: string) => /^\d{1,6}$/.test(value);
   const valid = kind === "strip" ? whole(count) : whole(cols) && whole(rows);
   return (
+    <div className="connect open">
+      {opener}
     <form
       className="virtual-form"
       onSubmit={(e) => {
@@ -993,6 +1000,7 @@ function AddVirtual() {
         </button>
       </div>
     </form>
+    </div>
   );
 }
 
@@ -1019,7 +1027,6 @@ export function DemoSwitch() {
 }
 
 export function DevicePanel() {
-  const full = useFull();
   const show = useShow();
   const status = useStatus();
   const found = useFound();
@@ -1093,10 +1100,15 @@ export function DevicePanel() {
     <aside className="panel devices">
       <div className="panel-head">
         <h2>Lights</h2>
-        {full && show.devices.length > 0 && (
-          <IconButton label="New group of lights" onClick={newGroup}>
-            <FolderPlus size={15} />
-          </IconButton>
+        {show.devices.length > 1 && (
+          <button
+            type="button"
+            className="text-button"
+            title="A named group of lights, such as Roof or Stage left. Drag lights into it, or pick them on the stage and choose Group. Effects can then play on the group."
+            onClick={newGroup}
+          >
+            <FolderPlus size={14} /> New group
+          </button>
         )}
       </div>
       {show.devices.length === 0 ? (

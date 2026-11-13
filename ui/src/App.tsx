@@ -12,6 +12,8 @@ import { TopBar } from "./components/TopBar";
 import { engine, useConnected, useNeedsCode, useShow, useStatus, useToasts, useView } from "./engine";
 import { PairScreen } from "./components/PairScreen";
 import { ShapeEditor } from "./components/ShapeEditor";
+import { SceneManager } from "./components/ScenePanel";
+import { Help } from "./components/Help";
 import { TimelineView } from "./components/Timeline";
 import { startSongPlayer } from "./songPlayer";
 import { startKeys } from "./keys";
@@ -76,6 +78,8 @@ export function App() {
       <Library />
       <FlashPrompt />
       <ShapeEditor />
+      <SceneManager />
+      <Help />
       <Toasts />
       {needsCode && <PairScreen />}
       {!connected && !needsCode && (

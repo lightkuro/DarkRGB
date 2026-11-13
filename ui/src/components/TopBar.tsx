@@ -1,4 +1,5 @@
 import { ChevronDown, Music, Pencil, Play, Power, Redo2, Settings as Gear, Sun, Undo2 } from "lucide-react";
+import { HelpButton } from "./Help";
 import { engine, libraryOpen, perFrame, settingsPage, useHistory, useShow, useView, viewPref } from "../engine";
 import { AudioMeter } from "./AudioMeter";
 import { Keycap, useBinding } from "./Keys";
@@ -129,6 +130,7 @@ export function TopBar() {
           {blackout ? "Lights off" : "Blackout"}
           {blackoutKey && <Keycap binding={blackoutKey} />}
         </button>
+        <HelpButton />
         <button
           type="button"
           className="icon-button settings-button"

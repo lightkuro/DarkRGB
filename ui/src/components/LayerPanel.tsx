@@ -61,6 +61,7 @@ import { ANGLE, HUE, LinkedSlider, STRENGTH } from "./Links";
 import { ConfirmButton, IconButton, NameField, Slider, Switch, useDismiss } from "./ui";
 import { PictureField } from "./PictureField";
 import { EffectPicker } from "./EffectTiles";
+import { NameButton, SceneHead } from "./ScenePanel";
 
 export { EffectPicker };
 
@@ -579,6 +580,17 @@ function Targets({
     const everyLight = fixtures.every((f) => next.includes(f.id));
     engine.send({ type: "update_layer", id: layer.id, targets: everyLight ? [] : next });
   };
+  // The single lights this plays on, which can be given a name as a group.
+  const chosenLights = layer.targets.filter((t) => fixtures.some((f) => f.id === t));
+  const nameGroup = async (name: string) => {
+    const result = await engine.request({ type: "add_light_group", name, fixtures: chosenLights });
+    if (!result.ok) return engine.toast("error", result.error ?? "Could not make that group.");
+    const made = engine.show.get()?.light_groups.find((g) => g.name === name);
+    if (!made) return;
+    // The effect now plays on the group, and so on lights added to it later.
+    const others = layer.targets.filter((t) => !chosenLights.includes(t));
+    engine.send({ type: "update_layer", id: layer.id, targets: [...others, made.id] });
+  };
   return (
     <div className="field">
       <span className="field-head">
@@ -641,6 +653,16 @@ function Targets({
             {f.name}
           </button>
         ))}
+        {chosenLights.length >= 2 && (
+          <NameButton
+            label={`Name these ${chosenLights.length} as a group`}
+            placeholder="Name of the group"
+            className="chip add"
+            onName={(name) => void nameGroup(name)}
+          >
+            <FolderPlus size={12} />
+          </NameButton>
+        )}
       </div>
       {
         // Only a choice when it plays on more than one light.
@@ -885,6 +907,13 @@ function LayerBody({
   if (picking) {
     return (
       <div className="layer-body">
+        <button type="button" className="effect-choice" onClick={() => setPicking(false)} title="Keep this effect and close the list">
+          <span>
+            <span className="effect-choice-label">Effect</span>
+            {effect?.name ?? `Unknown (${layer.effect})`}
+          </span>
+          <span className="effect-choice-change">Close</span>
+        </button>
         <EffectPicker
           current={layer.effect}
           onPick={(id) => {
@@ -892,9 +921,6 @@ function LayerBody({
             if (id !== layer.effect) engine.send({ type: "update_layer", id: layer.id, effect: id });
           }}
         />
-        <button type="button" className="text-button" onClick={() => setPicking(false)}>
-          Cancel
-        </button>
       </div>
     );
   }
@@ -1101,6 +1127,85 @@ function listItems(show: Show): Item[] {
   return items;
 }
 
+/**
+ * The effects sorted under what they play on: all the lights, each kind,
+ * each group, each light. Top of the stack first within each.
+ */
+function byLights(show: Show): { key: string; name: string; layers: Layer[] }[] {
+  const top = [...show.layers].reverse();
+  const buckets: { key: string; name: string; layers: Layer[] }[] = [
+    { key: "all", name: "All lights", layers: top.filter((l) => l.targets.length === 0 && l.only === "any") },
+    { key: "strips", name: "Strips only", layers: top.filter((l) => l.targets.length === 0 && l.only === "strips") },
+    { key: "matrices", name: "Matrices only", layers: top.filter((l) => l.targets.length === 0 && l.only === "matrices") },
+    ...show.light_groups.map((g) => ({ key: `g${g.id}`, name: `Group: ${g.name}`, layers: top.filter((l) => l.targets.includes(g.id)) })),
+    ...show.fixtures.map((f) => ({ key: `f${f.id}`, name: f.name, layers: top.filter((l) => l.targets.includes(f.id)) })),
+  ];
+  return buckets.filter((b) => b.layers.length > 0);
+}
+
+/** What every effect in a folder plays on, set for all of them at once. */
+function FolderTargets({ folder }: { folder: LayerGroup }) {
+  const show = useShow();
+  if (!show) return null;
+  const inside = show.layers.filter((l) => l.group === folder.id);
+  if (inside.length === 0 || (show.fixtures.length < 2 && show.light_groups.length === 0)) return null;
+  const first = inside[0]!;
+  const same = inside.every(
+    (l) => l.only === first.only && l.targets.length === first.targets.length && l.targets.every((t) => first.targets.includes(t)),
+  );
+  const targets = same ? first.targets : [];
+  const only = same ? first.only : null;
+  const all = same && targets.length === 0 && only === "any";
+  const set = (change: { targets?: number[]; only?: "any" | "strips" | "matrices" }) =>
+    engine.send({ type: "update_folder_layers", group: folder.id, ...change });
+  const toggle = (id: number) => {
+    const next = targets.includes(id) ? targets.filter((t) => t !== id) : [...targets, id];
+    const everyLight = show.fixtures.every((f) => next.includes(f.id));
+    set({ targets: everyLight ? [] : next, ...(same ? {} : { only: "any" }) });
+  };
+  const strips = show.fixtures.filter((f) => f.shape.type === "strip").length;
+  const kinds = strips > 0 && strips < show.fixtures.length;
+  return (
+    <div className="field">
+      <span className="field-head">
+        <span>Everything inside plays on</span>
+      </span>
+      <div className="chips">
+        <button type="button" className={`chip ${all ? "selected" : ""}`} aria-pressed={all} onClick={() => set({ targets: [], only: "any" })}>
+          All lights
+        </button>
+        {kinds &&
+          (["strips", "matrices"] as const).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className={`chip ${only === kind ? "selected" : ""}`}
+              aria-pressed={only === kind}
+              onClick={() => set({ only: only === kind ? "any" : kind, ...(same ? {} : { targets: [] }) })}
+            >
+              {kind === "strips" ? "Strips" : "Matrices"}
+            </button>
+          ))}
+        {show.light_groups.map((g) => (
+          <button key={g.id} type="button" className={`chip ${targets.includes(g.id) ? "selected" : ""}`} aria-pressed={targets.includes(g.id)} onClick={() => toggle(g.id)}>
+            <Folder size={12} aria-hidden /> {g.name}
+          </button>
+        ))}
+        {show.fixtures.map((f) => (
+          <button key={f.id} type="button" className={`chip ${targets.includes(f.id) ? "selected" : ""}`} aria-pressed={targets.includes(f.id)} onClick={() => toggle(f.id)}>
+            {f.name}
+          </button>
+        ))}
+      </div>
+      <p className="hint">
+        {same
+          ? `Changes all ${inside.length} ${inside.length === 1 ? "effect" : "effects"} in this folder at once.`
+          : "The effects in this folder play on different lights now. Choosing here sets them all alike."}
+      </p>
+    </div>
+  );
+}
+
 function FolderSettings({ folder, onAdd }: { folder: LayerGroup; onAdd: () => void }) {
   return (
     <div className="folder-settings">
@@ -1121,6 +1226,7 @@ function FolderSettings({ folder, onAdd }: { folder: LayerGroup; onAdd: () => vo
           opacity,
         }))}
       />
+      <FolderTargets folder={folder} />
       <KeyAssign action={{ type: "layer_group", id: folder.id }} />
       <div className="field inline">
         <span>
@@ -1168,6 +1274,21 @@ export function LayerPanel() {
   const live = useLive();
   // The effect picker, and the folder a new effect should go into.
   const [adding, setAdding] = useState<{ group: number | null } | null>(null);
+  const [view, setView] = useState<"order" | "lights">(() => {
+    try {
+      return localStorage.getItem("darkrgb.effectsView") === "lights" ? "lights" : "order";
+    } catch {
+      return "order";
+    }
+  });
+  const chooseView = (next: "order" | "lights") => {
+    setView(next);
+    try {
+      localStorage.setItem("darkrgb.effectsView", next);
+    } catch {
+      // Not remembering the choice is no loss.
+    }
+  };
   // One effect is open at a time, so the list stays short.
   const [open, setOpen] = useState<number | null>(null);
   const [openFolder, setOpenFolder] = useState<number | null>(null);
@@ -1191,7 +1312,10 @@ export function LayerPanel() {
     const added = ids.filter((id) => !before.layers.includes(id));
     if (added.length === 1) setOpen(added[0]!);
     const addedFolders = folderIds.filter((id) => !before.folders.includes(id));
-    if (addedFolders.length === 1) setOpenFolder(addedFolders[0]!);
+    // Only a folder made by itself: one that arrives with a scene or a new
+    // show comes with its effects, and is not something just asked for.
+    const sameEffects = added.length === 0 && before.layers.length === ids.length;
+    if (addedFolders.length === 1 && sameEffects) setOpenFolder(addedFolders[0]!);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idKey, show === null]);
 
@@ -1425,7 +1549,7 @@ export function LayerPanel() {
   return (
     <aside className="panel layers">
       <div className="panel-head">
-        <h2>Effects</h2>
+        <h2>Scene</h2>
         <label
           className="advanced-toggle"
           title="The simple layout shows what most shows need. The full layout shows every control."
@@ -1434,8 +1558,56 @@ export function LayerPanel() {
           <Switch checked={advanced} label="Full layout" onChange={(on) => fullPref.set(on)} />
         </label>
       </div>
+      <SceneHead />
+      <div className="panel-head">
+        <h2>Its effects</h2>
+        {show.layers.length > 1 && (
+          <div className="segmented tiny" role="radiogroup" aria-label="How the effects are listed">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={view === "order"}
+              className={view === "order" ? "selected" : ""}
+              title="Top to bottom, as they are drawn over one another, with their folders"
+              onClick={() => chooseView("order")}
+            >
+              In order
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={view === "lights"}
+              className={view === "lights" ? "selected" : ""}
+              title="Under the lights and groups each one plays on"
+              onClick={() => chooseView("lights")}
+            >
+              By lights
+            </button>
+          </div>
+        )}
+      </div>
 
-      {adding ? (
+      <div className="add-row">
+        <button
+          type="button"
+          className={`button wide${adding ? " quiet" : ""}`}
+          aria-expanded={adding !== null}
+          onClick={() => setAdding(adding ? null : { group: null })}
+        >
+          {adding ? <X size={15} /> : <Plus size={15} />} {adding ? "Close the list of effects" : "Add an effect"}
+        </button>
+        {!adding && (
+          <button
+            type="button"
+            className="button quiet folder-new"
+            title="A folder keeps effects that belong together in one place: switch them all, dim them all, or point them all at the same lights. Drag effects onto it."
+            onClick={newFolder}
+          >
+            <FolderPlus size={15} /> New folder
+          </button>
+        )}
+      </div>
+      {adding && (
         <div className="add-effect">
           {addingTo && <p className="hint">Adding to the folder {addingTo.name}.</p>}
           <EffectPicker
@@ -1448,36 +1620,39 @@ export function LayerPanel() {
               engine.send({ type: "use_pattern", id, group: addingTo?.id ?? null });
             }}
           />
-          <button type="button" className="text-button" onClick={() => setAdding(null)}>
-            Cancel
-          </button>
-        </div>
-      ) : (
-        <div className="add-row">
-          <button type="button" className="button wide" onClick={() => setAdding({ group: null })}>
-            <Plus size={15} /> Add an effect
-          </button>
-          {advanced && (
-            <button
-              type="button"
-              className="button square"
-              aria-label="New folder"
-              title="New folder, to keep effects that belong together in one place"
-              onClick={newFolder}
-            >
-              <FolderPlus size={16} />
-            </button>
-          )}
         </div>
       )}
       {show.layers.length === 0 && !adding && (
         <p className="hint">No effects, so the lights are dark. Add one to get started.</p>
       )}
 
-      <ul className={`layer-list ${drag ? "dragging" : ""} ${dropClass("end")}`}>
-        {items.map((item) => (item.folder ? folderBlock(item.folder, item.layers) : layerRow(item.layer, null)))}
-      </ul>
-      {show.layers.length > 1 && <p className="hint">Effects higher in the list are drawn on top of those below.</p>}
+      {view === "lights" && show.layers.length > 1 ? (
+        <>
+          {byLights(show).map((bucket) => (
+            <section key={bucket.key} className="by-lights">
+              <h3>
+                {bucket.name} <span className="count">{bucket.layers.length}</span>
+              </h3>
+              <ul className="layer-list">
+                {bucket.layers.map((layer) =>
+                  layerRow(layer, show.layer_groups.find((g) => g.id === layer.group) ?? null),
+                )}
+              </ul>
+            </section>
+          ))}
+          <p className="hint">
+            An effect that plays on several things is listed under each. To reorder effects or use folders, list
+            them in order.
+          </p>
+        </>
+      ) : (
+        <>
+          <ul className={`layer-list ${drag ? "dragging" : ""} ${dropClass("end")}`}>
+            {items.map((item) => (item.folder ? folderBlock(item.folder, item.layers) : layerRow(item.layer, null)))}
+          </ul>
+          {show.layers.length > 1 && <p className="hint">Effects higher in the list are drawn on top of those below.</p>}
+        </>
+      )}
     </aside>
   );
 }

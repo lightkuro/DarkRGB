@@ -915,7 +915,15 @@ input.number {
 
 /* What a light is connected to. The button that opens the form stays
    where it is and closes it again. */
+.connect-toggle {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+}
+
 .connect-toggle .chevron {
+  flex: none;
+  margin-left: auto;
   transition: transform 0.12s;
 }
 
@@ -3823,4 +3831,313 @@ input.number {
   * {
     transition: none !important;
   }
+}
+
+/* ------------------------------------------------- the scene in the panel */
+
+.scene-head {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.scene-head.blind {
+  border-color: var(--teal);
+  background: rgba(56, 214, 196, 0.08);
+}
+
+.scene-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.scene-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.scene-state {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--raised-2);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.scene-head.blind .scene-state {
+  background: rgba(56, 214, 196, 0.18);
+  color: var(--teal);
+}
+
+.scene-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.name-form {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.name-form input {
+  flex: 1;
+  min-width: 90px;
+  padding: 4px 8px;
+}
+
+.segmented.tiny {
+  flex: none;
+}
+
+.segmented.tiny button {
+  padding: 3px 8px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.button.folder-new {
+  flex: none;
+  gap: 6px;
+}
+
+.by-lights {
+  display: grid;
+  gap: 6px;
+}
+
+.by-lights h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.by-lights .count {
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.stage-flag.blind {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+
+.scene.editing > .chip {
+  border-style: dashed;
+  border-color: var(--teal);
+}
+
+.set-select {
+  flex: none;
+  max-width: 150px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+/* --------------------------------------------------------- scene manager */
+
+.dialog.scene-manager {
+  width: min(760px, 100%);
+  height: min(680px, 100%);
+}
+
+.manage-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 6px 0 10px;
+  background: var(--panel);
+}
+
+.manage-top .picker-search {
+  flex: 1;
+  min-width: 160px;
+}
+
+.manage-sets {
+  display: grid;
+  gap: 6px;
+}
+
+.set-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.manage-list,
+.preset-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.manage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+}
+
+.manage-row.playing {
+  border-color: var(--accent);
+}
+
+.effect-thumb.small {
+  flex: none;
+  width: 34px;
+}
+
+.manage-name {
+  flex: 1;
+  min-width: 90px;
+  display: grid;
+}
+
+.manage-row select {
+  flex: none;
+  width: 130px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.manage-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manage-new {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.scene-manager h3 {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.preset-grid {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+.preset {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+}
+
+.preset > .effect-thumb {
+  flex: none;
+  width: 52px;
+}
+
+.preset-words {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.preset.have {
+  opacity: 0.6;
+}
+
+.chip.manage {
+  flex: none;
+}
+
+/* ---------------------------------------- closing from where it was opened */
+
+/* The heading of an open card stays in view while its settings scroll,
+   so the place that opened it is always there to close it. */
+.layer.open > .layer-row,
+.device.open > .device-row {
+  position: sticky;
+  top: -14px;
+  z-index: 2;
+  background: var(--raised);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.connect.open > .connect-toggle {
+  color: var(--text);
+}
+
+.connect.open > .virtual-form {
+  margin-top: 6px;
+}
+
+/* ------------------------------------------------------------------ help */
+
+.dialog.settings.help {
+  width: min(860px, 100%);
+  height: min(680px, 100%);
+  grid-template-columns: 210px minmax(0, 1fr);
+}
+
+.help .settings-nav .picker-search {
+  margin-bottom: 6px;
+}
+
+.help-body {
+  gap: 10px;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.help-body h3 {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.help-body p {
+  color: var(--text);
+  max-width: 62ch;
+}
+
+.help-body ol,
+.help-body ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  max-width: 62ch;
+  color: var(--text);
+}
+
+.help-body li::marker {
+  color: var(--accent);
 }

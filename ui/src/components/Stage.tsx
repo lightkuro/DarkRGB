@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Sparkles,
   ZapOff,
+  EyeOff,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
@@ -682,6 +683,11 @@ export function Stage() {
                   <ShieldCheck size={12} /> Flash limit is softening this
                 </button>
               )
+            )}
+            {liveState.blind && (
+              <span className="stage-flag blind" title="The stage shows the scene you are changing. The lights are playing something else.">
+                <EyeOff size={12} /> Preview only: the lights play something else
+              </span>
             )}
             {pixels.toLocaleString()} LEDs
             {status ? ` · ${Math.round(status.render.fps)} frames per second` : ""}

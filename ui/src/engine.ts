@@ -82,7 +82,7 @@ export interface Hello {
   /** Frame rates the engine can run at. */
   frame_rates: number[];
   /** Every starter scene there is. */
-  looks: { name: string; description: string }[];
+  looks: { name: string; description: string; mood?: Mood; effect?: string }[];
   /** The kinds of show, and the starter scenes each gets. */
   kinds: { id: Kind; name: string; description: string; looks: string[] }[];
   effects: EffectInfo[];
@@ -289,6 +289,20 @@ export interface Scene {
   auto: boolean;
   /** The parts of a song autopilot uses it for. */
   mood: Mood;
+  /** The set it is filed in. In no set, it is offered whichever set is in use. */
+  set?: number | null;
+}
+
+/** A named set of scenes. One is in use at a time. */
+export interface SceneSet {
+  id: number;
+  name: string;
+}
+
+/** Whether a scene is on offer with the set of scenes in use. */
+export function inUse(show: Show, scene: Scene): boolean {
+  const using = show.live.scene_set ?? null;
+  return using === null || scene.set == null || scene.set === using;
 }
 
 /** The parts of a song a scene suits. */
@@ -305,6 +319,8 @@ export interface Show {
   layers: Layer[];
   layer_groups: LayerGroup[];
   scenes: Scene[];
+  /** Named sets of scenes. Left out when there are none. */
+  scene_sets?: SceneSet[];
   bindings: Binding[];
   master: { brightness: number; blackout: boolean; limit: number };
   audio: {
@@ -326,6 +342,8 @@ export interface Show {
     faders: number[];
     /** The scene to change to when the music stops, and after how many seconds. */
     idle: { scene: number | null; after: number };
+    /** The set of scenes in use; absent or null for every scene. */
+    scene_set?: number | null;
     /** Knobs and faders of a MIDI controller, and what each moves. Left out when there are none. */
     knobs?: { channel: number; cc: number; target: KnobTarget }[];
     /** The page of pads that is showing, 1 to 4. */
@@ -373,6 +391,14 @@ export interface Live {
   timeline?: { playing: boolean; recording: boolean; position: number };
   /** Where the beat comes from, and how it has been corrected by hand. */
   clock?: { source: "music" | "tapped" | "midi"; scale: number; nudge: number; midi_bpm: number | null };
+  /** The scene being changed in the effects panel while the lights play something else. */
+  editing?: number | null;
+  /** The lights are playing something other than what the effects panel shows. */
+  blind?: boolean;
+  /** The scene the lights went to last, while that is so. */
+  on_air_scene?: number | null;
+  /** The scene last switched to, whatever has been changed since. */
+  last_scene?: number | null;
 }
 
 /** What a clip on the timeline plays: a scene from then on, or a pad held for its length. */
@@ -714,6 +740,17 @@ export type Command =
   | { type: "set_audio"; source?: string; sensitivity?: number; delay_ms?: number; dynamics?: number; lead_ms?: number }
   | { type: "save_scene"; name: string }
   | { type: "recall_scene"; id: number }
+  | { type: "update_scene"; id: number }
+  | { type: "add_scene"; name: string }
+  | { type: "add_look"; name: string }
+  | { type: "edit_scene"; id: number }
+  | { type: "finish_edit"; play: boolean }
+  | { type: "add_scene_set"; name: string }
+  | { type: "rename_scene_set"; id: number; name: string }
+  | { type: "remove_scene_set"; id: number }
+  | { type: "file_scene"; scene: number; set: number | null }
+  | { type: "use_scene_set"; id: number | null }
+  | { type: "update_folder_layers"; group: number; targets?: number[]; only?: "any" | "strips" | "matrices" }
   | { type: "delete_scene"; id: number }
   | { type: "rename_show"; name: string }
   | { type: "dismiss_notice" };
@@ -783,6 +820,8 @@ class Engine {
   });
   /** The scene that is playing exactly as it was saved, if any. */
   readonly currentScene = new Store<number | null>(null);
+  /** The scene that what is playing was last the same as: where changes since came from. */
+  readonly baseScene = new Store<number | null>(null);
   /** Whether there is a change to take back, and one to put back. */
   readonly history = new Store({ undo: false, redo: false });
   readonly toasts = new Store<Toast[]>([]);
@@ -874,6 +913,7 @@ class Engine {
         break;
       case "state":
         this.currentScene.set((message.current_scene as number | null) ?? null);
+        this.baseScene.set((message.base_scene as number | null) ?? null);
         this.history.set({ undo: message.can_undo === true, redo: message.can_redo === true });
         this.show.set(message.show as Show);
         break;
@@ -1115,6 +1155,7 @@ export const useSettingsPage = () => useSyncExternalStore(settingsPage.subscribe
 
 export const useLive = () => useSyncExternalStore(engine.live.subscribe, engine.live.get);
 export const useCurrentScene = () => useSyncExternalStore(engine.currentScene.subscribe, engine.currentScene.get);
+export const useBaseScene = () => useSyncExternalStore(engine.baseScene.subscribe, engine.baseScene.get);
 
 export function sameAction(a: Action, b: Action): boolean {
   return a.type === b.type && ("id" in a ? a.id : 0) === ("id" in b ? b.id : 0);

@@ -1,9 +1,10 @@
 // Scenes along the bottom: saved looks, one click (or one key) each.
 
-import { Bookmark, ChevronUp, Plus, RefreshCw, Shuffle, Sparkles, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Bookmark, ChevronUp, LayoutGrid, Pencil, Plus, RefreshCw, Shuffle, Sparkles, Trash2 } from "lucide-react";
+import { useCallback, useState } from "react";
 import {
   engine,
+  inUse,
   settingsPage,
   useCurrentScene,
   useLibrary,
@@ -14,48 +15,14 @@ import {
   type Scene,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
+import { NameButton, managingScenes } from "./ScenePanel";
 import { ConfirmButton, NameField, Switch, useDismiss } from "./ui";
 
 function SaveScene() {
-  const [name, setName] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (name !== null) inputRef.current?.focus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name === null]);
-  if (name === null) {
-    return (
-      <button type="button" className="chip add" onClick={() => setName("")}>
-        <Plus size={14} /> Save as scene
-      </button>
-    );
-  }
-  const save = () => {
-    if (name.trim()) engine.send({ type: "save_scene", name: name.trim() });
-    setName(null);
-  };
   return (
-    <form
-      className="scene-form"
-      onSubmit={(e) => {
-        e.preventDefault();
-        save();
-      }}
-    >
-      <input
-        ref={inputRef}
-        value={name}
-        maxLength={80}
-        placeholder="Scene name"
-        aria-label="Scene name"
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => e.key === "Escape" && setName(null)}
-        onBlur={() => !name.trim() && setName(null)}
-      />
-      <button type="submit" className="button small" disabled={!name.trim()}>
-        Save
-      </button>
-    </form>
+    <NameButton label="Save as scene" placeholder="Scene name" className="chip add" onName={(name) => engine.send({ type: "save_scene", name })}>
+      <Plus size={14} />
+    </NameButton>
   );
 }
 
@@ -117,6 +84,17 @@ function SceneMenu({
           </div>
         </div>
       )}
+      <button
+        type="button"
+        className="text-button"
+        title="Open it in the effects panel to change it, while the lights go on playing what they are playing"
+        onClick={() => {
+          engine.send({ type: "edit_scene", id: scene.id });
+          close();
+        }}
+      >
+        <Pencil size={13} /> Change it without playing it
+      </button>
       <div className="layer-footer">
         <button
           type="button"
@@ -170,9 +148,36 @@ export function ScenesBar() {
   const auto = show.live.auto;
   const ownLooks = hello?.kinds.find((k) => k.id === show.kind)?.looks ?? [];
   const missingLooks = ownLooks.filter((look) => !show.scenes.some((s) => s.name === look));
+  const sets = show.scene_sets ?? [];
+  // While a scene is changed out of sight, the one the lights are on is marked.
+  const playing = live.blind ? (live.on_air_scene ?? null) : current;
   return (
     <footer className="scenes">
       <span className="scenes-label">Scenes</span>
+      {sets.length > 0 && (
+        <select
+          className="set-select"
+          aria-label="Set of scenes in use"
+          title="The set of scenes in use. The buttons here, the next and previous keys and autopilot keep to it."
+          value={show.live.scene_set ?? ""}
+          onChange={(e) => engine.send({ type: "use_scene_set", id: e.target.value === "" ? null : Number(e.target.value) })}
+        >
+          <option value="">All scenes</option>
+          {sets.map((set) => (
+            <option key={set.id} value={set.id}>
+              {set.name}
+            </option>
+          ))}
+        </select>
+      )}
+      <button
+        type="button"
+        className="chip manage"
+        title="Find and add ready-made scenes, file scenes in sets, and open a scene to change it without playing it"
+        onClick={() => managingScenes.set(true)}
+      >
+        <LayoutGrid size={14} /> Manage scenes
+      </button>
       {show.scenes.length > 1 && (
         <button
           type="button"
@@ -189,21 +194,21 @@ export function ScenesBar() {
         </button>
       )}
       <div className="scene-list">
-        {show.scenes.map((scene) => {
+        {show.scenes.filter((scene) => inUse(show, scene)).map((scene) => {
           const binding = show.bindings.find((b) => b.action.type === "scene" && b.action.id === scene.id);
           const waiting = live.pending_scene === scene.id;
           return (
             <span
               key={scene.id}
-              className={`scene ${current === scene.id ? "current" : ""} ${waiting ? "waiting" : ""} ${
+              className={`scene ${playing === scene.id ? "current" : ""} ${waiting ? "waiting" : ""} ${
                 scene.auto ? "" : "skipped"
-              }`}
+              } ${live.blind && live.editing === scene.id ? "editing" : ""}`}
             >
               <button
                 type="button"
                 className="chip"
                 title={waiting ? `${scene.name} starts on the beat` : `Switch to ${scene.name}`}
-                aria-pressed={current === scene.id}
+                aria-pressed={playing === scene.id}
                 onClick={() => engine.send({ type: "recall_scene", id: scene.id })}
               >
                 {binding && <Keycap binding={binding} />}

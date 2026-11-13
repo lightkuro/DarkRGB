@@ -450,14 +450,27 @@ fn hello() -> String {
 }
 
 fn state_message(shared: &Shared, revision: u64) -> String {
+    // While a scene is changed out of sight, the show holds that scene
+    // and not what the lights play.
+    let blind = shared.live.lock().unwrap().on_air.is_some();
     let show = shared.show.lock().unwrap();
     let (can_undo, can_redo) = shared.history.lock().unwrap().can();
+    let current = show.current_scene();
+    let base = {
+        let mut base = shared.base_scene.lock().unwrap();
+        if !blind && current.is_some() {
+            *base = current;
+        }
+        base.filter(|id| show.scenes.iter().any(|s| s.id == *id))
+    };
     json!({
         "type": "state",
         "revision": revision,
         "show": &*show,
         // The scene that is playing exactly as it was saved, if any.
-        "current_scene": show.current_scene(),
+        "current_scene": current,
+        // The scene that what is playing was last the same as.
+        "base_scene": base,
         "can_undo": can_undo,
         "can_redo": can_redo,
     })

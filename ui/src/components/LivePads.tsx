@@ -40,6 +40,7 @@ import {
   type Hello,
   type Layer,
   type Show,
+  inUse as sceneInUse,
 } from "../engine";
 import { KeyAssign, Keycap, behaviours, modeNote } from "./Keys";
 import { swatch } from "./LayerPanel";
@@ -640,7 +641,7 @@ export function LivePads() {
           </p>
         ) : (
           <div className="pad-grid">
-            {show.scenes.map((scene) => {
+            {show.scenes.filter((scene) => sceneInUse(show, scene)).map((scene) => {
               const action: Action = { type: "scene", id: scene.id };
               return (
                 <Pad
