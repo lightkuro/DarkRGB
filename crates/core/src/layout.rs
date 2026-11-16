@@ -339,6 +339,38 @@ pub struct Fixture {
     /// The line through `path` runs on from its last corner to its first.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
+    /// For a matrix: where its first LED is and which way the LEDs run.
+    #[serde(default, skip_serializing_if = "Wiring::is_usual")]
+    pub wiring: Wiring,
+}
+
+/// A corner of a matrix, as it is seen with the matrix the right way up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Corner {
+    #[default]
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+/// How the LEDs of a matrix are wired: the corner the first one is in,
+/// and whether they run along the rows or up and down the columns.
+/// Whether each line turns back on the one before it (a strip snaked
+/// into a matrix) is the shape's `serpentine`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Wiring {
+    #[serde(default)]
+    pub start: Corner,
+    #[serde(default)]
+    pub vertical: bool,
+}
+
+impl Wiring {
+    fn is_usual(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// The most corners a strip's path can have.
@@ -457,13 +489,22 @@ impl Fixture {
                 .collect(),
             Shape::Matrix { cols, rows, serpentine } => {
                 let mut out = Vec::with_capacity((cols * rows) as usize);
-                for row in 0..rows {
-                    for col in 0..cols {
-                        let col = if serpentine && row % 2 == 1 {
-                            cols - 1 - col
+                // The LEDs run in lines: rows, or columns when wired up
+                // and down. A snaked matrix turns back on every other line.
+                let Wiring { start, vertical } = self.wiring;
+                let (lines, per_line) = if vertical { (cols, rows) } else { (rows, cols) };
+                let from_right = matches!(start, Corner::TopRight | Corner::BottomRight);
+                let from_bottom = matches!(start, Corner::BottomLeft | Corner::BottomRight);
+                for line in 0..lines {
+                    for step in 0..per_line {
+                        let step = if serpentine && line % 2 == 1 {
+                            per_line - 1 - step
                         } else {
-                            col
+                            step
                         };
+                        let (col, row) = if vertical { (line, step) } else { (step, line) };
+                        let col = if from_right { cols - 1 - col } else { col };
+                        let row = if from_bottom { rows - 1 - row } else { row };
                         out.push(place(cell(col, cols, self.width), cell(row, rows, self.height)));
                     }
                 }
@@ -492,7 +533,78 @@ mod tests {
             group: None,
             path: Vec::new(),
             closed: false,
+            wiring: Wiring::default(),
         }
+    }
+
+    #[test]
+    fn a_matrix_can_be_wired_from_any_corner_along_rows_or_columns_snaked_or_not() {
+        // Three wide and two high, in a box 3 by 2 centred on (10, 5):
+        // cells are one apart, so a cell is named by its column and row.
+        let cells = |serpentine: bool, start: Corner, vertical: bool| -> Vec<(i32, i32)> {
+            let mut f = fixture(Shape::Matrix {
+                cols: 3,
+                rows: 2,
+                serpentine,
+            });
+            (f.width, f.height) = (3.0, 2.0);
+            f.wiring = Wiring { start, vertical };
+            f.pixel_positions()
+                .iter()
+                .map(|[x, y]| ((x - 9.0).round() as i32, (y - 4.5).round() as i32))
+                .collect()
+        };
+        use Corner::*;
+        // Plain: row by row from the top left.
+        assert_eq!(
+            cells(false, TopLeft, false),
+            [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)]
+        );
+        // Snaked: the second row runs back.
+        assert_eq!(
+            cells(true, TopLeft, false),
+            [(0, 0), (1, 0), (2, 0), (2, 1), (1, 1), (0, 1)]
+        );
+        // A strip that starts bottom right and snakes upward.
+        assert_eq!(
+            cells(true, BottomRight, false),
+            [(2, 1), (1, 1), (0, 1), (0, 0), (1, 0), (2, 0)]
+        );
+        // Wired in columns, snaked, from the top left: down, then up.
+        assert_eq!(
+            cells(true, TopLeft, true),
+            [(0, 0), (0, 1), (1, 1), (1, 0), (2, 0), (2, 1)]
+        );
+        // Columns from the bottom left, not snaked: every column runs up.
+        assert_eq!(
+            cells(false, BottomLeft, true),
+            [(0, 1), (0, 0), (1, 1), (1, 0), (2, 1), (2, 0)]
+        );
+        assert_eq!(
+            cells(false, TopRight, false),
+            [(2, 0), (1, 0), (0, 0), (2, 1), (1, 1), (0, 1)]
+        );
+        // Whatever the wiring, every cell is lit once.
+        for (serpentine, start, vertical) in [
+            (true, TopRight, true),
+            (false, BottomRight, true),
+            (true, BottomLeft, false),
+        ] {
+            let mut seen = cells(serpentine, start, vertical);
+            seen.sort_unstable();
+            assert_eq!(seen, [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]);
+        }
+        // The usual wiring is left out of files, and old files open.
+        let plain = serde_json::to_string(&fixture(Shape::Strip {
+            count: 4,
+            reverse: false,
+        }))
+        .unwrap();
+        assert!(!plain.contains("wiring"));
+        assert_eq!(
+            serde_json::from_str::<Fixture>(&plain).unwrap().wiring,
+            Wiring::default()
+        );
     }
 
     #[test]

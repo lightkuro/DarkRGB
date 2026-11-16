@@ -613,6 +613,7 @@ impl Show {
                 enabled: true,
                 group: None,
                 each: part.each,
+                chain: false,
                 // Kept as a rule, not as a list of lights, so the look
                 // lands where it should on lights added later too.
                 only: part.only,

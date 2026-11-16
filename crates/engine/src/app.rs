@@ -2174,6 +2174,7 @@ mod tests {
             kaleido: None,
             spread: None,
             hue: None,
+            chain: None,
         })
         .unwrap();
         run(Command::SetLink {

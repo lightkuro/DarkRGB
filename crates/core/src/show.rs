@@ -295,6 +295,11 @@ pub struct Layer {
     /// matrix, however the lights are laid out.
     #[serde(default)]
     pub each: bool,
+    /// Lay the effect along the LEDs in the order they are wired, light
+    /// after light, as one long line: where the lights are on the stage
+    /// is ignored. It wins over `each`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chain: bool,
     /// Keep to one kind of light, among whatever `targets` allows.
     #[serde(default)]
     pub only: Only,
@@ -1133,6 +1138,7 @@ impl Show {
                 enabled: true,
                 group,
                 each: false,
+                chain: false,
                 only: Only::Any,
                 angle: 0.0,
                 spin: 0.0,
@@ -1465,9 +1471,189 @@ impl Show {
             group: None,
             path: Vec::new(),
             closed: false,
+            wiring: Default::default(),
         });
         self.devices.push(device);
         device_id
+    }
+
+    /// Cuts a straight strip into zones of the given numbers of LEDs,
+    /// first LED first. Each zone is a light of its own from then on:
+    /// it can be moved, named, grouped and given its own effects. The
+    /// zones lie where the strip lay, and whatever played on the strip
+    /// plays on all of them. Returns the zones' ids.
+    pub fn split_strip(&mut self, fixture: u32, parts: &[u32]) -> Result<Vec<u32>, String> {
+        let at = self
+            .fixtures
+            .iter()
+            .position(|f| f.id == fixture)
+            .ok_or("that light no longer exists")?;
+        let whole = self.fixtures[at].clone();
+        let Shape::Strip { count, reverse } = whole.shape else {
+            return Err("only a strip can be cut into zones".into());
+        };
+        if whole.bent() {
+            return Err(
+                "make the strip straight before cutting it into zones; each zone can be bent afterwards".into(),
+            );
+        }
+        if parts.len() < 2 || parts.contains(&0) {
+            return Err("give at least two zones, each with at least one LED".into());
+        }
+        if parts.iter().map(|p| *p as u64).sum::<u64>() != count as u64 {
+            return Err(format!("the zones must add up to the strip's {count} LEDs"));
+        }
+        // Along the strip's own line: its first LED is at the left end,
+        // or at the right when the strip is reversed.
+        let (sin, cos) = whole.rotation.to_radians().sin_cos();
+        let direction = if reverse { -1.0 } else { 1.0 };
+        let mut zones = Vec::with_capacity(parts.len());
+        let mut before = 0u32;
+        for (n, part) in parts.iter().enumerate() {
+            let middle = (before as f32 + *part as f32 / 2.0) / count as f32 - 0.5;
+            let along = middle * whole.width * direction;
+            zones.push(Fixture {
+                // The first zone keeps the strip's id, so a key or a
+                // timeline that named the strip still finds a light.
+                id: if n == 0 { whole.id } else { self.alloc_id() },
+                name: format!("{} {}", whole.name, n + 1),
+                start: whole.start + before,
+                shape: Shape::Strip { count: *part, reverse },
+                x: whole.x + along * cos,
+                y: whole.y + along * sin,
+                width: whole.width * *part as f32 / count as f32,
+                ..whole.clone()
+            });
+            before += part;
+        }
+        let ids: Vec<u32> = zones.iter().map(|z| z.id).collect();
+        self.fixtures.splice(at..=at, zones);
+        // What played on the strip plays on every zone of it.
+        let spread = |layers: &mut Vec<Layer>| {
+            for layer in layers {
+                if layer.targets.contains(&whole.id) {
+                    layer.targets.extend(ids.iter().skip(1));
+                    layer.targets.sort_unstable();
+                }
+            }
+        };
+        spread(&mut self.layers);
+        for scene in &mut self.scenes {
+            spread(&mut scene.layers);
+        }
+        Ok(ids)
+    }
+
+    /// Makes one strip again of a device's zones. It takes the first
+    /// zone's id and name stem, lies from the first zone's start to the
+    /// last one's end, and whatever played on any zone plays on it.
+    pub fn join_strip(&mut self, device: u32) -> Result<u32, String> {
+        let zones: Vec<Fixture> = self.fixtures.iter().filter(|f| f.device == device).cloned().collect();
+        if zones.len() < 2 {
+            return Err("that light is not cut into zones".into());
+        }
+        let mut count = 0u32;
+        for (n, zone) in zones.iter().enumerate() {
+            let Shape::Strip { count: part, .. } = zone.shape else {
+                return Err("only zones of a strip can be joined".into());
+            };
+            if zone.start != count {
+                return Err(format!("zone {} does not follow on from the one before", n + 1));
+            }
+            count += part;
+        }
+        let (first, last) = (&zones[0], &zones[zones.len() - 1]);
+        let reverse = matches!(first.shape, Shape::Strip { reverse: true, .. });
+        // From the outer end of the first zone to the outer end of the last.
+        let end = |zone: &Fixture, sign: f32| {
+            let (sin, cos) = zone.rotation.to_radians().sin_cos();
+            let half = zone.width / 2.0 * sign * if reverse { -1.0 } else { 1.0 };
+            [zone.x + half * cos, zone.y + half * sin]
+        };
+        let (a, b) = (end(first, -1.0), end(last, 1.0));
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let length = dx.hypot(dy);
+        let name = self
+            .device(device)
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| first.name.clone());
+        let whole = Fixture {
+            name,
+            start: 0,
+            shape: Shape::Strip { count, reverse },
+            x: (a[0] + b[0]) / 2.0,
+            y: (a[1] + b[1]) / 2.0,
+            width: if length > 1e-4 {
+                length
+            } else {
+                zones.iter().map(|z| z.width).sum()
+            },
+            // Zones moved apart or turned: the strip runs from one end to the other.
+            rotation: if length > 1e-4 {
+                let angle = dy.atan2(dx).to_degrees() + if reverse { 180.0 } else { 0.0 };
+                angle.rem_euclid(360.0)
+            } else {
+                first.rotation
+            },
+            path: Vec::new(),
+            closed: false,
+            ..first.clone()
+        };
+        let id = whole.id;
+        let gone: Vec<u32> = zones.iter().skip(1).map(|z| z.id).collect();
+        let at = self.fixtures.iter().position(|f| f.id == id).unwrap_or(0);
+        self.fixtures.retain(|f| f.device != device);
+        self.fixtures.insert(at.min(self.fixtures.len()), whole);
+        let gather = |layers: &mut Vec<Layer>| {
+            for layer in layers {
+                if layer.targets.iter().any(|t| gone.contains(t)) {
+                    layer.targets.retain(|t| !gone.contains(t));
+                    if !layer.targets.contains(&id) {
+                        layer.targets.push(id);
+                        layer.targets.sort_unstable();
+                    }
+                }
+            }
+        };
+        gather(&mut self.layers);
+        for scene in &mut self.scenes {
+            gather(&mut scene.layers);
+        }
+        Ok(id)
+    }
+
+    /// Says that a light's LEDs are laid out another way: a strip that
+    /// is really snaked back and forth into a matrix, or a matrix that
+    /// is to be treated as one long strip. The number of LEDs must stay
+    /// the same.
+    pub fn reshape(&mut self, fixture: u32, shape: Shape) -> Result<(), String> {
+        let f = self
+            .fixtures
+            .iter_mut()
+            .find(|f| f.id == fixture)
+            .ok_or("that light no longer exists")?;
+        if shape.pixel_count() != f.pixel_count() {
+            return Err(format!(
+                "that would be {} LEDs, and this light has {}",
+                shape.pixel_count(),
+                f.pixel_count()
+            ));
+        }
+        match (&f.shape, &shape) {
+            (Shape::Strip { .. }, Shape::Matrix { cols, rows, .. }) => {
+                let aspect = *rows as f32 / *cols as f32;
+                let width = if aspect > 1.0 { 0.5 / aspect } else { 0.5 };
+                (f.width, f.height) = (width, width * aspect);
+                (f.path, f.closed) = (Vec::new(), false);
+            }
+            (Shape::Matrix { .. }, Shape::Strip { .. }) => {
+                (f.width, f.height) = (1.0, 0.0);
+                f.wiring = Default::default();
+            }
+            _ => {}
+        }
+        f.shape = shape;
+        Ok(())
     }
 
     /// Adds a light that exists only in the preview, with one fixture of
@@ -1776,6 +1962,104 @@ mod tests {
 
     fn device(name: &str, pixels: u32) -> Device {
         Device::wled(name, "127.0.0.1", 4048, pixels)
+    }
+
+    #[test]
+    fn a_strip_can_be_cut_into_zones_and_joined_again() {
+        let mut show = Show::default();
+        show.add_device(device("Shelf", 150), None);
+        let strip = show.fixtures[0].clone();
+        let layer = show.layers[0].id;
+        show.layers[0].targets = vec![strip.id];
+        show.save_scene("Saved");
+        // The edges and the middle.
+        let zones = show.split_strip(strip.id, &[30, 90, 30]).unwrap();
+        assert_eq!(zones.len(), 3);
+        assert_eq!(zones[0], strip.id, "the first zone keeps the strip's id");
+        let starts: Vec<(u32, u32)> = show.fixtures.iter().map(|f| (f.start, f.pixel_count())).collect();
+        assert_eq!(starts, [(0, 30), (30, 90), (60 + 60, 30)]);
+        let names: Vec<&str> = show.fixtures.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["Shelf 1", "Shelf 2", "Shelf 3"]);
+        // They lie where the strip lay: the same LEDs are in the same places.
+        let before = strip.pixel_positions();
+        let after: Vec<[f32; 2]> = show.fixtures.iter().flat_map(|f| f.pixel_positions()).collect();
+        assert_eq!(before.len(), after.len());
+        for (a, b) in before.iter().zip(&after) {
+            assert!((a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4, "{a:?} {b:?}");
+        }
+        // What played on the strip plays on all three, in the scene too.
+        assert_eq!(show.layer_mut(layer).unwrap().targets, zones);
+        assert_eq!(show.scenes[0].layers[0].targets, zones);
+        assert!(show.validate().is_ok());
+        // Refused: zones that do not add up, a single zone, an empty one, a matrix.
+        assert!(show.split_strip(zones[1], &[40, 40]).is_err());
+        assert!(show.split_strip(zones[1], &[90]).is_err());
+        assert!(show.split_strip(zones[1], &[90, 0]).is_err());
+        // A zone can itself be cut.
+        let more = show.split_strip(zones[1], &[45, 45]).unwrap();
+        assert_eq!(show.fixtures.len(), 4);
+        assert_eq!(more[0], zones[1]);
+        // Joined, it is one strip of 150 again where it was, and the effect plays on it.
+        show.layer_mut(layer).unwrap().targets = vec![zones[2]];
+        let whole = show.join_strip(strip.device).unwrap();
+        assert_eq!(whole, strip.id);
+        assert_eq!(show.fixtures.len(), 1);
+        let joined = &show.fixtures[0];
+        assert_eq!(
+            (joined.start, joined.pixel_count(), joined.name.as_str()),
+            (0, 150, "Shelf")
+        );
+        assert!((joined.x - strip.x).abs() < 1e-4 && (joined.width - strip.width).abs() < 1e-4);
+        assert_eq!(show.layer_mut(layer).unwrap().targets, [strip.id]);
+        assert_eq!(show.scenes[0].layers[0].targets, [strip.id]);
+        assert!(show.join_strip(strip.device).is_err(), "nothing to join");
+        // A reversed, turned strip keeps its LEDs in place too.
+        show.fixtures[0].shape = Shape::Strip {
+            count: 150,
+            reverse: true,
+        };
+        show.fixtures[0].rotation = 30.0;
+        let before = show.fixtures[0].pixel_positions();
+        show.split_strip(strip.id, &[50, 100]).unwrap();
+        let after: Vec<[f32; 2]> = show.fixtures.iter().flat_map(|f| f.pixel_positions()).collect();
+        for (a, b) in before.iter().zip(&after) {
+            assert!((a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4, "{a:?} {b:?}");
+        }
+        show.join_strip(strip.device).unwrap();
+        let again = show.fixtures[0].pixel_positions();
+        for (a, b) in before.iter().zip(&again) {
+            assert!((a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3, "{a:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn a_strip_can_be_said_to_be_a_snaked_matrix_and_back() {
+        let mut show = Show::default();
+        show.add_device(device("Panel", 64), None);
+        let id = show.fixtures[0].id;
+        let matrix = |cols, rows| Shape::Matrix {
+            cols,
+            rows,
+            serpentine: true,
+        };
+        assert!(show.reshape(id, matrix(8, 7)).is_err(), "56 is not 64");
+        show.reshape(id, matrix(16, 4)).unwrap();
+        let f = &show.fixtures[0];
+        assert_eq!(f.pixel_count(), 64);
+        assert!(
+            f.width > 0.0 && (f.height - f.width / 4.0).abs() < 1e-6,
+            "four times as wide as high"
+        );
+        assert!(show.validate().is_ok());
+        show.reshape(
+            id,
+            Shape::Strip {
+                count: 64,
+                reverse: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(show.fixtures[0].height, 0.0);
     }
 
     #[test]

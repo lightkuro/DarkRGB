@@ -3,7 +3,7 @@
 
 use darkrgb_core::color;
 use darkrgb_core::effects;
-use darkrgb_core::layout::{ColourOrder, MAX_DEVICE_DELAY_MS, MAX_MILLIAMPS, MAX_PATH_POINTS, MAX_PIXELS};
+use darkrgb_core::layout::{ColourOrder, Corner, MAX_DEVICE_DELAY_MS, MAX_MILLIAMPS, MAX_PATH_POINTS, MAX_PIXELS};
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::picture::{MAX_SIDE, Picture};
 use darkrgb_core::show::{
@@ -28,6 +28,8 @@ const MAX_LAYERS: usize = 32;
 const MAX_PINNED: usize = 16;
 const MAX_SCENES: usize = 200;
 const MAX_SCENE_SETS: usize = 16;
+/// The most zones one strip can be cut into at a time.
+const MAX_ZONES: usize = 32;
 const MAX_DEVICES: usize = 256;
 const MAX_GROUPS: usize = 64;
 const MAX_BINDINGS: usize = 128;
@@ -385,6 +387,9 @@ pub enum Command {
         /// Draw on each light by itself instead of once across all.
         #[serde(default)]
         each: Option<bool>,
+        /// Lay it along the LEDs in the order they are wired.
+        #[serde(default)]
+        chain: Option<bool>,
         /// Keep to strips, to matrices, or to neither.
         #[serde(default)]
         only: Option<Only>,
@@ -808,6 +813,38 @@ pub enum Command {
         targets: Option<Vec<u32>>,
         #[serde(default)]
         only: Option<Only>,
+        /// The part of the sound every effect in the folder listens to.
+        #[serde(default)]
+        band: Option<Band>,
+    },
+    /// Cuts a straight strip into zones of these numbers of LEDs. Each
+    /// zone is a light of its own from then on.
+    SplitStrip {
+        fixture: u32,
+        parts: Vec<u32>,
+    },
+    /// Makes one strip again of a device's zones.
+    JoinStrip {
+        device: u32,
+    },
+    /// Says a light's LEDs are laid out another way: a strip snaked into
+    /// a matrix, or a matrix treated as one strip. Same number of LEDs.
+    Reshape {
+        fixture: u32,
+        shape: VirtualShape,
+    },
+    /// How a matrix is wired.
+    SetWiring {
+        fixture: u32,
+        /// Every other line runs back the other way.
+        #[serde(default)]
+        serpentine: Option<bool>,
+        /// The corner its first LED is in.
+        #[serde(default)]
+        start: Option<Corner>,
+        /// The LEDs run up and down the columns, not along the rows.
+        #[serde(default)]
+        vertical: Option<bool>,
     },
     RecallScene {
         id: u32,
@@ -1717,6 +1754,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             enabled,
             targets,
             each,
+            chain,
             only,
             angle,
             spin,
@@ -1780,6 +1818,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(e) = each {
                 layer.each = *e;
+            }
+            if let Some(c) = chain {
+                layer.chain = *c;
             }
             if let Some(o) = only {
                 layer.only = *o;
@@ -2606,7 +2647,82 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
-        Command::UpdateFolderLayers { group, targets, only } => {
+        Command::SplitStrip { fixture, parts } => {
+            if parts.len() > MAX_ZONES {
+                return Err(format!("a strip can be cut into at most {MAX_ZONES} zones"));
+            }
+            show.split_strip(*fixture, parts).map(|_| ())
+        }
+
+        Command::JoinStrip { device } => show.join_strip(*device).map(|_| ()),
+
+        Command::Reshape { fixture, shape } => {
+            let shape = match *shape {
+                VirtualShape::Strip { count } => Shape::Strip { count, reverse: false },
+                VirtualShape::Matrix { cols, rows } if cols >= 2 && rows >= 2 && cols.checked_mul(rows).is_some() => {
+                    // A strip laid out as a matrix is nearly always snaked.
+                    Shape::Matrix {
+                        cols,
+                        rows,
+                        serpentine: true,
+                    }
+                }
+                VirtualShape::Matrix { .. } => return Err("a matrix needs at least 2 by 2 LEDs".into()),
+            };
+            let zones = show
+                .fixtures
+                .iter()
+                .find(|f| f.id == *fixture)
+                .map(|f| show.fixtures.iter().filter(|o| o.device == f.device).count());
+            if zones.is_some_and(|n| n > 1) {
+                return Err("join its zones into one strip before changing its shape".into());
+            }
+            show.reshape(*fixture, shape)
+        }
+
+        Command::SetWiring {
+            fixture,
+            serpentine,
+            start,
+            vertical,
+        } => {
+            let f = show
+                .fixtures
+                .iter_mut()
+                .find(|f| f.id == *fixture)
+                .ok_or("that light no longer exists")?;
+            let Shape::Matrix { serpentine: snaked, .. } = &mut f.shape else {
+                return Err("only a matrix has wiring to set; a strip has Reverse".into());
+            };
+            if let Some(s) = serpentine {
+                *snaked = *s;
+            }
+            if let Some(s) = start {
+                f.wiring.start = *s;
+            }
+            if let Some(v) = vertical {
+                f.wiring.vertical = *v;
+            }
+            Ok(())
+        }
+
+        Command::UpdateFolderLayers {
+            group,
+            targets,
+            only,
+            band,
+        } => {
+            let band = match band {
+                Some(Band::Range { low, high }) => {
+                    let (low, high) = (finite(*low, "The range")?, finite(*high, "The range")?);
+                    let (low, high) = (low.clamp(0.0, 1.0), high.clamp(0.0, 1.0));
+                    Some(Band::Range {
+                        low: low.min(high),
+                        high: low.max(high),
+                    })
+                }
+                other => *other,
+            };
             if !show.layer_groups.iter().any(|g| g.id == *group) {
                 return Err("that folder no longer exists".into());
             }
@@ -2628,6 +2744,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 }
                 if let Some(o) = only {
                     layer.only = *o;
+                }
+                if let Some(b) = band {
+                    layer.sound.band = b;
                 }
             }
             Ok(())
@@ -2947,6 +3066,7 @@ mod tests {
             kaleido: None,
             spread: None,
             hue: None,
+            chain: None,
         };
         apply(&mut show, &turn(Some(45.0), Some(20.0), Some(true))).unwrap();
         let l = &show.layers[0];
@@ -3413,6 +3533,93 @@ mod tests {
     }
 
     #[test]
+    fn zones_wiring_and_shape_are_set_by_commands_and_refused_when_they_make_no_sense() {
+        let mut show = Show::default();
+        apply(
+            &mut show,
+            &parse(r#"{"type":"add_virtual","name":"Shelf","shape":{"type":"strip","count":120}}"#),
+        )
+        .unwrap();
+        let (device, strip) = (show.devices[0].id, show.fixtures[0].id);
+        apply(
+            &mut show,
+            &parse(&format!(
+                r#"{{"type":"split_strip","fixture":{strip},"parts":[30,60,30]}}"#
+            )),
+        )
+        .unwrap();
+        assert_eq!(show.fixtures.len(), 3);
+        // Cut into zones, it cannot be made a matrix until it is one strip again.
+        let before = show.clone();
+        let matrix = |fixture: u32, cols: u32, rows: u32| {
+            parse(&format!(
+                r#"{{"type":"reshape","fixture":{fixture},"shape":{{"type":"matrix","cols":{cols},"rows":{rows}}}}}"#
+            ))
+        };
+        assert!(apply(&mut show, &matrix(strip, 5, 6)).is_err());
+        let too_many = Command::SplitStrip {
+            fixture: show.fixtures[1].id,
+            parts: vec![1; 33],
+        };
+        assert!(apply(&mut show, &too_many).is_err());
+        assert_eq!(show, before);
+        apply(
+            &mut show,
+            &parse(&format!(r#"{{"type":"join_strip","device":{device}}}"#)),
+        )
+        .unwrap();
+        assert_eq!(show.fixtures.len(), 1);
+        // 120 LEDs snaked into 12 by 10. Wiring is only for a matrix.
+        let wire = |fixture: u32| {
+            parse(&format!(
+                r#"{{"type":"set_wiring","fixture":{fixture},"start":"bottom_right","vertical":true,"serpentine":false}}"#
+            ))
+        };
+        assert!(apply(&mut show, &wire(strip)).is_err());
+        assert!(apply(&mut show, &matrix(strip, 12, 11)).is_err());
+        apply(&mut show, &matrix(strip, 12, 10)).unwrap();
+        assert_eq!(
+            show.fixtures[0].shape,
+            Shape::Matrix {
+                cols: 12,
+                rows: 10,
+                serpentine: true
+            }
+        );
+        apply(&mut show, &wire(strip)).unwrap();
+        let f = &show.fixtures[0];
+        assert_eq!((f.wiring.start, f.wiring.vertical), (Corner::BottomRight, true));
+        assert!(matches!(f.shape, Shape::Matrix { serpentine: false, .. }));
+        let saved = serde_json::to_string(&show).unwrap();
+        assert_eq!(serde_json::from_str::<Show>(&saved).unwrap(), show);
+        // The device's bytes follow the wiring: its first LED is bottom right.
+        let positions = f.pixel_positions();
+        assert!(positions[0][0] > f.x && positions[0][1] > f.y);
+        // A folder sets what all its effects listen to, and how they are laid on the lights.
+        let folder = show.add_layer_group("Edges");
+        let inside = [
+            show.add_layer_in("sparkle", Some(folder)),
+            show.add_layer_in("meter", Some(folder)),
+        ];
+        apply(
+            &mut show,
+            &parse(&format!(
+                r#"{{"type":"update_folder_layers","group":{folder},"band":{{"type":"bass"}}}}"#
+            )),
+        )
+        .unwrap();
+        for id in inside {
+            assert_eq!(show.layers.iter().find(|l| l.id == id).unwrap().sound.band, Band::Bass);
+        }
+        apply(
+            &mut show,
+            &parse(&format!(r#"{{"type":"update_layer","id":{},"chain":true}}"#, inside[0])),
+        )
+        .unwrap();
+        assert!(show.layers.iter().find(|l| l.id == inside[0]).unwrap().chain);
+    }
+
+    #[test]
     fn commands_parse_from_what_the_ui_sends() {
         assert_eq!(
             parse(r#"{"type":"add_device","address":"192.168.1.50"}"#),
@@ -3531,6 +3738,7 @@ mod tests {
             kaleido: None,
             spread: None,
             hue: None,
+            chain: None,
         };
         // Same effect: settings stay.
         apply(&mut show, &update("flow")).unwrap();
@@ -3945,6 +4153,7 @@ mod tests {
                     kaleido: None,
                     spread: None,
                     hue: None,
+                    chain: None,
                 },
             )
         };
@@ -4275,6 +4484,7 @@ mod tests {
             kaleido: None,
             spread: None,
             hue: None,
+            chain: None,
         };
         assert!(apply(&mut show, &target(vec![9999])).is_err());
         apply(&mut show, &target(vec![fixture, fixture])).unwrap();
@@ -4365,7 +4575,40 @@ mod tests {
             let clip = r.id(show.timeline.clips.iter().map(|c| c.id).collect());
             let set = r.id(show.scene_sets.iter().map(|s| s.id).collect());
             let scene_id = r.id(show.scenes.iter().map(|s| s.id).collect());
-            let command = match r.next() % 70 {
+            let command = match r.next() % 74 {
+                70 => Command::SplitStrip {
+                    fixture,
+                    parts: (0..r.next() % 4)
+                        .map(|_| [0, 1, 5, 10, 30][r.next() as usize % 5])
+                        .collect(),
+                },
+                71 => Command::JoinStrip { device },
+                72 => Command::Reshape {
+                    fixture,
+                    shape: if r.flag() {
+                        VirtualShape::Strip {
+                            count: [0, 10, 30, 64][r.next() as usize % 4],
+                        }
+                    } else {
+                        VirtualShape::Matrix {
+                            cols: [0, 2, 5, 8, 65536][r.next() as usize % 5],
+                            rows: [0, 2, 6, 8, 65536][r.next() as usize % 5],
+                        }
+                    },
+                },
+                73 => Command::SetWiring {
+                    fixture,
+                    serpentine: r.maybe(Awkward::flag),
+                    start: r.maybe(|r| {
+                        [
+                            Corner::TopLeft,
+                            Corner::TopRight,
+                            Corner::BottomLeft,
+                            Corner::BottomRight,
+                        ][r.next() as usize % 4]
+                    }),
+                    vertical: r.maybe(Awkward::flag),
+                },
                 62 => Command::UpdateScene { id: scene_id },
                 63 => Command::AddScene { name: r.text() },
                 64 => Command::AddLook {
@@ -4391,6 +4634,7 @@ mod tests {
                     group: folder,
                     targets: r.maybe(|r| vec![fixture, r.next() % 50]),
                     only: r.maybe(|r| [Only::Any, Only::Strips, Only::Matrices][r.next() as usize % 3]),
+                    band: r.maybe(|r| [Band::All, Band::Bass, Band::Treble][r.next() as usize % 3]),
                 },
                 61 => Command::Connect {
                     device,
@@ -4741,6 +4985,7 @@ mod tests {
                     kaleido: r.maybe(|r| [0, 1, 2, 12, 13, 255][r.next() as usize % 6]),
                     spread: r.maybe(Awkward::number),
                     hue: r.maybe(Awkward::number),
+                    chain: None,
                 },
                 5 => Command::RemoveDevice { id: device },
                 6 | 7 => Command::SetParam {
@@ -5092,6 +5337,7 @@ mod tests {
                 kaleido: None,
                 spread: None,
                 hue: None,
+                chain: None,
             },
         )
         .unwrap();

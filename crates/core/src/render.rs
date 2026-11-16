@@ -260,7 +260,13 @@ impl Renderer {
             .layers
             .iter()
             // Which lights, each by itself or not, turning with them or not.
-            .map(|l| (l.id * 2 + l.turns as u32, l.targets.clone(), l.each))
+            .map(|l| {
+                (
+                    l.id * 4 + l.turns as u32 * 2 + l.chain as u32,
+                    l.targets.clone(),
+                    l.each,
+                )
+            })
             .collect();
         let targets_changed = layout_changed || target_key != self.target_key;
         self.target_key = target_key;
@@ -621,7 +627,7 @@ struct Moved {
 }
 
 fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Segment> {
-    if !layer.each {
+    if !layer.each || layer.chain {
         let (targets, aspect, flat) = build_targets(show, layer, positions);
         return if targets.is_empty() {
             Vec::new()
@@ -714,6 +720,21 @@ fn build_targets(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> (Vec<Tar
     }
     if picked.is_empty() {
         return (Vec::new(), 1.0, true);
+    }
+    // End to end: one line through every LED in the order they are
+    // wired, light after light, wherever the lights are on the stage.
+    if layer.chain {
+        let n = picked.len() as f32;
+        let targets = picked
+            .iter()
+            .enumerate()
+            .map(|(i, (index, _))| Target {
+                index: *index,
+                x: (i as f32 + 0.5) / n,
+                y: 0.5,
+            })
+            .collect();
+        return (targets, 1.0, true);
     }
 
     if let (1, Some(strip)) = (fixtures_hit, lone_strip) {
@@ -1251,6 +1272,62 @@ mod tests {
             r.device_bytes(&show, dev, &mut bytes);
             assert!(bytes.iter().all(|b| *b == 0));
         }
+    }
+
+    #[test]
+    fn a_pattern_can_run_end_to_end_through_the_lights_in_the_order_they_are_wired() {
+        use crate::layout::Shape;
+        // Two strips of four, the second placed to the LEFT of the first
+        // on the stage. A ramp from dark to bright shows which way a
+        // pattern is laid: the level meter at a fixed level would do, but
+        // a picture of two colours is plainer.
+        let mut show = Show::default();
+        show.layers.clear();
+        let id = show.add_layer("picture");
+        show.layer_mut(id)
+            .unwrap()
+            .params
+            .insert("picture".into(), ParamValue::Text("2x1:/wAAAAD/".into()));
+        show.add_virtual(
+            "first",
+            &Shape::Strip {
+                count: 4,
+                reverse: false,
+            },
+            false,
+        );
+        show.add_virtual(
+            "second",
+            &Shape::Strip {
+                count: 4,
+                reverse: false,
+            },
+            false,
+        );
+        show.fixtures[0].x = 2.0;
+        show.fixtures[1].x = 0.0;
+        (show.fixtures[0].y, show.fixtures[1].y) = (0.0, 0.0);
+        let colours = |show: &Show| -> Vec<[u8; 3]> { render(show).1.iter().map(|c| c.to_bytes()).collect() };
+        let (red, blue) = ([255, 0, 0], [0, 0, 255]);
+        // Across the stage: the left half is red, and the second strip is on the left.
+        let across = colours(&show);
+        assert!(
+            across[..4].iter().all(|c| *c == blue) && across[4..].iter().all(|c| *c == red),
+            "{across:?}"
+        );
+        // End to end: red on the first strip's LEDs, blue on the second's, wherever they are.
+        show.layers[0].chain = true;
+        let chained = colours(&show);
+        assert!(
+            chained[..4].iter().all(|c| *c == red) && chained[4..].iter().all(|c| *c == blue),
+            "{chained:?}"
+        );
+        // It wins over "each light on its own", which would put both colours on each strip.
+        show.layers[0].each = true;
+        assert_eq!(colours(&show), chained);
+        show.layers[0].chain = false;
+        let each = colours(&show);
+        assert_eq!((each[0], each[3], each[4], each[7]), (red, blue, red, blue));
     }
 
     #[test]
