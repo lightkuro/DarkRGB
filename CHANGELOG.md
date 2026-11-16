@@ -1,6 +1,26 @@
 # What's new
 
-## 0.9.0 (in development)
+## 0.10.0 (in development)
+
+More ways to say what your lights are and how a pattern lies on them. Several came from a comparison with
+LedFx; see [docs/research.md](docs/research.md).
+
+- Zones. A strip can be cut into parts that are lights of their own, so the ends can play one effect and
+  the middle another, each listening to a different part of the sound. Open the strip in the Lights panel
+  and choose **Cut into zones**; **Make it one strip again** undoes it. The LEDs stay where they were on
+  the stage, and whatever played on the strip plays on all its zones.
+- A strip snaked into a matrix. Open the strip and choose **It is snaked into a matrix**, then say how
+  many LEDs are in a row.
+- Matrix wiring. Say which corner the first LED is in, whether the LEDs run along the rows or up and down
+  the columns, and whether they snake. A small drawing shows the order.
+- Three ways to lay an effect on several lights (full layout): **Across the stage**, by where the lights
+  are; **On each light**; or **End to end**, one line through every LED in the order they are wired.
+- **Blocks**: a pattern made of a few blocks, so several LEDs act as one. **Slide along**: move a pattern
+  along its lights. Both in the full layout, for any effect.
+- A folder can give all its effects the same part of the sound: "Everything inside listens to".
+- A matrix made from a strip is put below the other lights, not on top of them.
+
+## 0.9.0
 
 Easier to find your way round: scenes you can see and manage, effects you can browse, lights you can plan
 before they exist, and help built in.

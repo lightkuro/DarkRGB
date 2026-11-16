@@ -1,6 +1,6 @@
 # Architecture
 
-Decided on 2026-11-10, and kept up to date since; this describes version 0.9.0. The engine, the app window,
+Decided on 2026-11-10, and kept up to date since; this describes version 0.10.0. The engine, the app window,
 the UI, live mode, MIDI, the timeline and the device simulator exist. Sections say which parts are built. Items marked **(to verify)** are
 assumptions that the checks in [roadmap.md](roadmap.md) test.
 
@@ -430,6 +430,26 @@ all of it.
   [WLED E1.31](https://kno.wled.ge/interfaces/e1.31-dmx/) A device has a colour order. On exit, sACN
   receivers get the stream-terminated packet three times for each universe. Not built: multicast, a start
   channel inside a universe, sACN priority and synchronisation.
+
+### Zones, and strips that are matrices
+
+A device may have several fixtures, each a run of its pixels (`Fixture.start`). `Show::split_strip` cuts a
+straight strip into such runs, placing each along the strip's own line so every LED stays where it was; the
+first zone keeps the strip's id, and every effect that named the strip names all the zones.
+`Show::join_strip` is the way back: one strip from the outer end of the first zone to the outer end of the
+last. A zone is an ordinary light from then on, which is why nothing else had to learn about zones.
+
+`Show::reshape` says a strip is a matrix of the same number of LEDs, or the reverse. A matrix's `Wiring`
+(the corner of its first LED, rows or columns) and its shape's `serpentine` are honoured in one place,
+`Fixture::pixel_positions`, which gives the stage position of each LED in wired order. Everything else
+works from those positions.
+
+### How a pattern is laid on the lights
+
+Three ways (`Layer.each`, `Layer.chain`): across the stage, where a light's place in the pattern is its
+place on the stage; on each light, where every light is the whole pattern; and end to end, where the
+pattern is one line through the LEDs in wired order (`build_targets`). `Layer.blocks` and `Layer.slide`
+are two more steps in `Fold`: the place asked about is snapped to the middle of its block, or moved along.
 
 ### From a plan to hardware
 

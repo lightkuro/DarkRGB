@@ -105,6 +105,35 @@ only some channels.
   [Troubleshooting](https://ledfx.readthedocs.io/en/latest/trouble.html)
 - No timeline, and limited manual performance control.
 
+**Compared with darkRGB 0.10.0 (2026-11-16)**
+
+Checked against LedFx's documentation for virtuals and its documentation index; the effect settings and
+device list are from the earlier reading of its source and were not re-checked this time.
+[Virtuals](https://docs.ledfx.app/en/latest/howto/virtuals.html), [index](https://docs.ledfx.app/en/latest/)
+
+| LedFx has | darkRGB |
+|---|---|
+| A virtual made of segments: any pixel range of any device, each flippable and reorderable | A strip can be cut into zones, each a light of its own, and any lights can be grouped. A zone is always a run of one device; there is no reordering of pieces inside one light. |
+| Mapping: span (one effect across all segments) or copy (on each) | Across the stage, on each light, or end to end. "Span" is end to end; "copy" is on each light; across the stage is by position, which LedFx does not have. |
+| Grouping: several pixels act as one | Blocks, as a setting of an effect. |
+| Centre offset | Slide along, as a setting of an effect. |
+| Frequency min and max for a virtual | A band or any range, for each effect or a whole folder. |
+| Transition time and eight modes (dissolve, push, slide, iris, through white or black) | A fade between scenes, one kind. **Behind.** |
+| Rows, to make a virtual a matrix | A strip can be said to be snaked into a matrix, with the first LED's corner, rows or columns, and snaking. |
+| Max brightness, preview only | Brightness limit; virtual lights. |
+| Per-effect blur, flip, mirror, background colour | Mirror, repeat, kaleidoscope, angle, spin, colour shift. No blur and no background colour (a solid effect underneath does it). **Blur is missing.** |
+| About 70 effects, with a GIF player, digital rain, game of life and other 2D ones | 30 effects, with words and still pictures. No animated GIF. **Behind in number.** |
+| Devices: WLED, E1.31, Art-Net, DDP, UDP, OpenRGB, Nanoleaf, LIFX, Hue, Govee, serial, Launchpad and more | WLED, sACN (E1.31) and Art-Net. **Behind.** |
+| Integrations: Spotify, QLC+, Home Assistant, MQTT; a REST API | A WebSocket API and a phone remote. **Missing.** |
+| Pitch and onset methods to choose; melbank settings | Fixed analysis: 32 bands, hits in three bands, tempo with a beat that is held. No pitch. **Pitch is missing.** |
+| Playlists of scenes | Autopilot, sets of scenes, and a timeline against a song. |
+| Runs headless on a Raspberry Pi, macOS, Windows, Linux | Windows and Linux, x86-64. The command-line program runs without a window. **Behind on platforms.** |
+| Audio from another device over the network (Sendspin) | The computer's own sound, or any input. |
+
+Where darkRGB is ahead: no audio setup at all; a stage where lights are placed and patterns cross them by
+position; bent strips; a beat that is kept through breakdowns, with bars, nudge and tap; live pads, keys
+and MIDI; a timeline; undo; a flash limit; a power limit by current.
+
 ## Other tools, one idea each (unverified)
 
 - **Jinx!, Glediator, MADRIX:** two effect decks with a crossfader for live mixing on matrices.

@@ -1,6 +1,6 @@
 # Roadmap
 
-Written on 2026-11-10, last updated 2026-11-13 for version 0.9.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
+Written on 2026-11-10, last updated 2026-11-16 for version 0.10.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
 features. The design targets room/desk setups (a few WLED devices, up to a few thousand pixels) and house/yard
 shows (many controllers, 5k to 50k pixels). See [architecture.md](architecture.md) for the design.
 
@@ -224,6 +224,12 @@ each stands after 0.8.0:
 0.9.0 did not take up any of these points. It was the owner's own list after using 0.8.0: finding scenes,
 effects, folders and groups, planning lights before the hardware, and help. Unattended running was put
 aside by the owner for now.
+
+0.10.0 came from a comparison with LedFx that the owner asked for (the table is in
+[research.md](research.md)): zones of a strip, snaked matrices and their wiring, laying a pattern end to
+end, blocks and slide. What that comparison leaves open, most useful first: more kinds of transition
+between scenes, a blur for any effect, animated GIFs on matrices, pitch, more kinds of device, and
+integrations such as Home Assistant.
 
 It also advised: stop adding features until a real device and real music have been through the loop; call
 autopilot's "bars" what they are (four beats from an arbitrary start) until there is a downbeat; reconsider

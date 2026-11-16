@@ -29,7 +29,7 @@ Or start blank. The kind of show only decides what it begins with; everything ca
 
 ## Status
 
-Version 0.9.0, in development. Audio-reactive mode and live control are both complete enough to run a show
+Version 0.10.0, in development. Audio-reactive mode and live control are both complete enough to run a show
 with: twenty-five ready-made scenes, thirty effects, pads, keys and MIDI controllers, autopilot, any slider
 tied to the music, and undo. The timeline plays, records and edits, and has not yet been used for a whole
 show by anyone. This version is about finding your way round: help built in, effects chosen from moving
@@ -85,7 +85,10 @@ What works today:
 - Any pattern can be mirrored, repeated, wrapped into a kaleidoscope, staggered from light to light, and
   have its colours turned round the colour wheel.
 - Strips can be bent into shapes: arches, circles, stars, zigzags, outlines, or anything drawn corner by
-  corner.
+  corner. A strip can be cut into zones that take their own effects, or said to be snaked into a matrix,
+  with the wiring (first LED's corner, rows or columns, snaked or not) set and drawn.
+- An effect on several lights is laid across the stage, on each light, or end to end through the LEDs in
+  the order they are wired.
 - A timeline: a song, a lane for scenes and a lane for every pad. Clips are placed by hand, snapping to the
   beat, or recorded by playing the show while the song runs.
 - Any slider can follow the music (loudness, bass, mids, highs, the beat, hits, the song's energy), a shape
@@ -159,6 +162,13 @@ A light planned on screen being connected to hardware, and the help window:
 ![A virtual strip's settings with the form that connects it to a WLED device](docs/images/connect.png)
 
 ![The help window open on the quick start](docs/images/help.png)
+
+A shelf strip cut into three zones, the edges on the bass and the middle on the highs, and a strip snaked
+into a 16 by 16 sign with its wiring drawn:
+
+![A strip in three named zones with different effects on the edges and the middle](docs/images/zones.png)
+
+![A matrix's wiring: a drawing of the LED order, snaked, first LED bottom left](docs/images/wiring.png)
 
 The beat in the Live view: four boxes for the bar, the tempo, and the corrections beside it:
 
