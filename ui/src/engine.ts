@@ -148,7 +148,12 @@ export interface Fixture {
   path?: [number, number][];
   /** The path runs on from its last corner to its first. */
   closed?: boolean;
+  /** For a matrix: the corner its first LED is in, and whether its LEDs run in columns. Left out when usual. */
+  wiring?: { start?: Corner; vertical?: boolean };
 }
+
+/** A corner of a matrix, seen with the matrix the right way up. */
+export type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
 
 /** A named set of lights that can be aimed at, dimmed or switched as one. */
 export interface LightGroup {
@@ -258,6 +263,12 @@ export interface Layer {
   group: number | null;
   /** Drawn on each light by itself instead of once across all of them. */
   each: boolean;
+  /** Laid along the LEDs in the order they are wired, light after light. Wins over `each`. */
+  chain?: boolean;
+  /** The pattern in this many blocks across, each one colour. 0 or absent: smooth. */
+  blocks?: number;
+  /** How far the pattern is slid along, 0 to 1. */
+  slide?: number;
   /** Kept to strips or to matrices, among whatever it plays on. */
   only: Only;
   /** Settings that follow something. Left out when there are none. */
@@ -708,6 +719,9 @@ export type Command =
       enabled?: boolean;
       targets?: number[];
       each?: boolean;
+      chain?: boolean;
+      blocks?: number;
+      slide?: number;
       only?: Only;
       angle?: number;
       spin?: number;
@@ -750,7 +764,11 @@ export type Command =
   | { type: "remove_scene_set"; id: number }
   | { type: "file_scene"; scene: number; set: number | null }
   | { type: "use_scene_set"; id: number | null }
-  | { type: "update_folder_layers"; group: number; targets?: number[]; only?: "any" | "strips" | "matrices" }
+  | { type: "update_folder_layers"; group: number; targets?: number[]; only?: "any" | "strips" | "matrices"; band?: Band }
+  | { type: "split_strip"; fixture: number; parts: number[] }
+  | { type: "join_strip"; device: number }
+  | { type: "reshape"; fixture: number; shape: { type: "strip"; count: number } | { type: "matrix"; cols: number; rows: number } }
+  | { type: "set_wiring"; fixture: number; serpentine?: boolean; start?: Corner; vertical?: boolean }
   | { type: "delete_scene"; id: number }
   | { type: "rename_show"; name: string }
   | { type: "dismiss_notice" };

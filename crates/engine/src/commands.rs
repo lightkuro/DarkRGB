@@ -415,6 +415,12 @@ pub enum Command {
         /// Degrees every colour is shifted round the colour wheel.
         #[serde(default)]
         hue: Option<f32>,
+        /// The pattern in this many blocks across: 0 for smooth, or 2 to 64.
+        #[serde(default)]
+        blocks: Option<u8>,
+        /// How far the pattern is slid along, 0..1.
+        #[serde(default)]
+        slide: Option<f32>,
     },
     /// Gives a layer a label. An empty name goes back to the effect's own.
     RenameLayer {
@@ -1764,11 +1770,17 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             kaleido,
             spread,
             hue,
+            blocks,
+            slide,
         } => {
             let angle = angle.map(|a| finite(a, "The angle")).transpose()?;
             let spin = spin.map(|s| finite(s, "The spin")).transpose()?;
             let spread = spread.map(|s| finite(s, "The spread")).transpose()?;
             let hue = hue.map(|h| finite(h, "The hue")).transpose()?;
+            let slide = slide.map(|s| finite(s, "The slide")).transpose()?;
+            if blocks.is_some_and(|b| b > 64) {
+                return Err("a pattern can be made of at most 64 blocks".into());
+            }
             if repeat.is_some_and(|r| !(1..=8).contains(&r)) {
                 return Err("a pattern can be repeated up to 8 times".into());
             }
@@ -1848,6 +1860,13 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(h) = hue {
                 layer.hue = h.rem_euclid(360.0);
+            }
+            if let Some(b) = blocks {
+                // One block is no blocks at all.
+                layer.blocks = if *b < 2 { 0 } else { *b };
+            }
+            if let Some(s) = slide {
+                layer.slide = s.rem_euclid(1.0);
             }
             Ok(())
         }
@@ -3067,6 +3086,8 @@ mod tests {
             spread: None,
             hue: None,
             chain: None,
+            blocks: None,
+            slide: None,
         };
         apply(&mut show, &turn(Some(45.0), Some(20.0), Some(true))).unwrap();
         let l = &show.layers[0];
@@ -3739,6 +3760,8 @@ mod tests {
             spread: None,
             hue: None,
             chain: None,
+            blocks: None,
+            slide: None,
         };
         // Same effect: settings stay.
         apply(&mut show, &update("flow")).unwrap();
@@ -4154,6 +4177,8 @@ mod tests {
                     spread: None,
                     hue: None,
                     chain: None,
+                    blocks: None,
+                    slide: None,
                 },
             )
         };
@@ -4485,6 +4510,8 @@ mod tests {
             spread: None,
             hue: None,
             chain: None,
+            blocks: None,
+            slide: None,
         };
         assert!(apply(&mut show, &target(vec![9999])).is_err());
         apply(&mut show, &target(vec![fixture, fixture])).unwrap();
@@ -4985,7 +5012,9 @@ mod tests {
                     kaleido: r.maybe(|r| [0, 1, 2, 12, 13, 255][r.next() as usize % 6]),
                     spread: r.maybe(Awkward::number),
                     hue: r.maybe(Awkward::number),
-                    chain: None,
+                    chain: r.maybe(Awkward::flag),
+                    blocks: r.maybe(|r| [0, 1, 2, 64, 65, 255][r.next() as usize % 6]),
+                    slide: r.maybe(Awkward::number),
                 },
                 5 => Command::RemoveDevice { id: device },
                 6 | 7 => Command::SetParam {
@@ -5338,6 +5367,8 @@ mod tests {
                 spread: None,
                 hue: None,
                 chain: None,
+                blocks: None,
+                slide: None,
             },
         )
         .unwrap();

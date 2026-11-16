@@ -11,10 +11,12 @@ import {
   Grid3x3,
   GripVertical,
   Minus,
+  Merge,
   Network,
   Plug,
   Plus,
   Radar,
+  Scissors,
   Search,
   Settings2,
   Trash2,
@@ -34,6 +36,7 @@ import {
   useShow,
   useStatus,
   type ColourOrder,
+  type Corner,
   type Device,
   type DeviceStats,
   type Discovered,
@@ -327,6 +330,298 @@ function ConnectHardware({ device }: { device: Device }) {
   );
 }
 
+/** A few numbers that add up to `total`, as equal as whole numbers allow. */
+function equalParts(total: number, parts: number): number[] {
+  const base = Math.floor(total / parts);
+  return Array.from({ length: parts }, (_, i) => base + (i < total - base * parts ? 1 : 0));
+}
+
+/**
+ * Cutting a strip into zones: parts of it that are lights of their own,
+ * so the ends can do one thing and the middle another. And, once cut,
+ * the zones with their names, and the way back to one strip.
+ */
+function Zones({ device, own }: { device: Device; own: Fixture[] }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const first = own[0];
+  if (!first || own.some((f) => f.shape.type !== "strip")) return null;
+  const total = own.reduce((sum, f) => sum + (f.shape.type === "strip" ? f.shape.count : 0), 0);
+
+  if (own.length > 1) {
+    return (
+      <div className="zones">
+        <span className="field-head">
+          <span>Zones</span>
+        </span>
+        <ul className="zone-list">
+          {own.map((zone) => (
+            <li key={zone.id}>
+              <NameField
+                value={zone.name}
+                label={`Name of the zone ${zone.name}`}
+                onCommit={(name) => engine.send({ type: "update_fixture", id: zone.id, name })}
+              />
+              <span className="hint">
+                LEDs {zone.start + 1} to {zone.start + (zone.shape.type === "strip" ? zone.shape.count : 0)}
+              </span>
+            </li>
+          ))}
+        </ul>
+        <p className="hint">
+          Each zone is a light of its own: move it on the stage, put it in a group, and choose it under an effect's
+          "Plays on".
+        </p>
+        <button type="button" className="text-button" onClick={() => engine.send({ type: "join_strip", device: device.id })}>
+          <Merge size={13} /> Make it one strip again
+        </button>
+      </div>
+    );
+  }
+  if (total < 2) return null;
+  const parts = text
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .map(Number);
+  const sum = parts.reduce((a, b) => a + b, 0);
+  const valid = parts.length >= 2 && parts.every((n) => Number.isInteger(n) && n > 0) && sum === total;
+  const split = async () => {
+    const result = await engine.request({ type: "split_strip", fixture: first.id, parts });
+    if (!result.ok) return setError(result.error ?? "Could not cut it like that.");
+    setError(null);
+    setOpen(false);
+  };
+  return (
+    <div className={`connect${open ? " open" : ""}`}>
+      <button
+        type="button"
+        className="text-button connect-toggle"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) setText(equalParts(total, 3).join(", "));
+          setOpen(!open);
+        }}
+      >
+        <Scissors size={13} /> Cut into zones
+        <ChevronRight size={13} className="chevron" aria-hidden />
+      </button>
+      {open && (
+        <form
+          className="connect-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (valid) void split();
+          }}
+        >
+          <p className="hint">
+            Zones are parts of the strip that act as lights of their own, so the ends can play one effect and the
+            middle another. Give the number of LEDs in each, from the strip's first LED.
+          </p>
+          <div className="chips">
+            {[2, 3, 4, 5].filter((n) => n <= total).map((n) => (
+              <button key={n} type="button" className="chip" onClick={() => setText(equalParts(total, n).join(", "))}>
+                {n} equal
+              </button>
+            ))}
+          </div>
+          <input
+            type="text"
+            aria-label="LEDs in each zone"
+            placeholder="e.g. 30, 90, 30"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
+          />
+          <p className={`hint${parts.length >= 2 && sum !== total ? " warn" : ""}`}>
+            {parts.length < 2
+              ? `Two or more numbers that add up to ${total}.`
+              : sum === total
+                ? `${parts.length} zones, ${total} LEDs in all.`
+                : `These add up to ${sum}; the strip has ${total}.`}
+          </p>
+          {error && <p className="callout error">{error}</p>}
+          <div className="form-actions">
+            <button type="submit" className="button small" disabled={!valid}>
+              Cut
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+const CORNERS: [Corner, string][] = [
+  ["top_left", "Top left"],
+  ["top_right", "Top right"],
+  ["bottom_left", "Bottom left"],
+  ["bottom_right", "Bottom right"],
+];
+
+/** A small drawing of the order a matrix's LEDs are wired in. */
+function WiringDiagram({ fixture }: { fixture: Fixture }) {
+  if (fixture.shape.type !== "matrix") return null;
+  // A few lines are enough to show the way it goes.
+  const cols = Math.min(fixture.shape.cols, 6);
+  const rows = Math.min(fixture.shape.rows, 5);
+  const { serpentine } = fixture.shape;
+  const start = fixture.wiring?.start ?? "top_left";
+  const vertical = fixture.wiring?.vertical ?? false;
+  const [lines, perLine] = vertical ? [cols, rows] : [rows, cols];
+  const points: [number, number][] = [];
+  for (let line = 0; line < lines; line++) {
+    for (let step = 0; step < perLine; step++) {
+      const s = serpentine && line % 2 === 1 ? perLine - 1 - step : step;
+      let [col, row] = vertical ? [line, s] : [s, line];
+      if (start.endsWith("right")) col = cols - 1 - col;
+      if (start.startsWith("bottom")) row = rows - 1 - row;
+      points.push([14 + col * 22, 14 + row * 22]);
+    }
+  }
+  const [fx, fy] = points[0]!;
+  return (
+    <svg
+      className="wiring-diagram"
+      width={28 + (cols - 1) * 22}
+      height={28 + (rows - 1) * 22}
+      role="img"
+      aria-label="The order the LEDs are wired in, from the ringed one"
+    >
+      <polyline points={points.map((p) => p.join(",")).join(" ")} />
+      {points.map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r={3} />
+      ))}
+      <circle className="first" cx={fx} cy={fy} r={7} />
+    </svg>
+  );
+}
+
+/** How a matrix is wired, and the way back to a plain strip. */
+function MatrixWiring({ fixture, full }: { fixture: Fixture; full: boolean }) {
+  if (fixture.shape.type !== "matrix") return null;
+  const start = fixture.wiring?.start ?? "top_left";
+  const vertical = fixture.wiring?.vertical ?? false;
+  const set = (change: { serpentine?: boolean; start?: Corner; vertical?: boolean }) =>
+    engine.send({ type: "set_wiring", fixture: fixture.id, ...change });
+  return (
+    <div className="wiring">
+      <span className="field-head">
+        <span>Wiring</span>
+      </span>
+      <div className="wiring-row">
+        <WiringDiagram fixture={fixture} />
+        <p className="hint">
+          Say how the LEDs are wired, so pictures and words come out the right way round. The ring is the first LED.
+          If WLED's own 2D settings already describe the wiring, leave these as they are.
+        </p>
+      </div>
+      <div className="field inline">
+        <span>
+          Snaked
+          <span className="hint">One strip folded back and forth: every other line runs the other way.</span>
+        </span>
+        <Switch checked={fixture.shape.serpentine} label="Snaked: every other line runs the other way" onChange={(serpentine) => set({ serpentine })} />
+      </div>
+      <label className="field inline">
+        <span>First LED</span>
+        <select aria-label="Corner of the first LED" value={start} onChange={(e) => set({ start: e.target.value as Corner })}>
+          {CORNERS.map(([id, name]) => (
+            <option key={id} value={id}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="segmented" role="radiogroup" aria-label="Which way the LEDs run">
+        <button type="button" role="radio" aria-checked={!vertical} className={!vertical ? "selected" : ""} onClick={() => set({ vertical: false })}>
+          Along the rows
+        </button>
+        <button type="button" role="radio" aria-checked={vertical} className={vertical ? "selected" : ""} onClick={() => set({ vertical: true })}>
+          Up and down the columns
+        </button>
+      </div>
+      {full && (
+        <button
+          type="button"
+          className="text-button"
+          title="Treat these LEDs as one long strip again"
+          onClick={() => engine.send({ type: "reshape", fixture: fixture.id, shape: { type: "strip", count: fixture.shape.type === "matrix" ? fixture.shape.cols * fixture.shape.rows : 0 } })}
+        >
+          <Minus size={13} /> Make it a plain strip
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Saying that a strip is really snaked back and forth into a matrix. */
+function AsMatrix({ fixture }: { fixture: Fixture }) {
+  const [open, setOpen] = useState(false);
+  const [cols, setCols] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  if (fixture.shape.type !== "strip" || fixture.shape.count < 4) return null;
+  const count = fixture.shape.count;
+  const across = Number(cols);
+  const rows = Number.isInteger(across) && across >= 2 ? count / across : NaN;
+  const valid = Number.isInteger(rows) && rows >= 2;
+  // Widths that divide the strip evenly, nearest to square first.
+  const fits = Array.from({ length: count }, (_, i) => i + 2)
+    .filter((n) => count % n === 0 && count / n >= 2)
+    .sort((a, b) => Math.abs(a - count / a) - Math.abs(b - count / b))
+    .slice(0, 4);
+  const make = async () => {
+    const result = await engine.request({ type: "reshape", fixture: fixture.id, shape: { type: "matrix", cols: across, rows } });
+    if (!result.ok) return setError(result.error ?? "Could not arrange it like that.");
+    setError(null);
+    setOpen(false);
+  };
+  return (
+    <div className={`connect${open ? " open" : ""}`}>
+      <button type="button" className="text-button connect-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Grid3x3 size={13} /> It is snaked into a matrix
+        <ChevronRight size={13} className="chevron" aria-hidden />
+      </button>
+      {open && (
+        <form
+          className="connect-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (valid) void make();
+          }}
+        >
+          <p className="hint">
+            For a strip folded back and forth into rows. Give how many LEDs are in one row; the {count} LEDs must
+            fill whole rows. The wiring can be set afterwards.
+          </p>
+          {fits.length > 0 && (
+            <div className="chips">
+              {fits.map((n) => (
+                <button key={n} type="button" className="chip" onClick={() => setCols(String(n))}>
+                  {n} × {count / n}
+                </button>
+              ))}
+            </div>
+          )}
+          <label className="field inline">
+            <span>LEDs in a row</span>
+            <input className="number" type="text" inputMode="numeric" aria-label="LEDs in a row" value={cols} onChange={(e) => setCols(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+          </label>
+          <p className={`hint${cols !== "" && !valid ? " warn" : ""}`}>
+            {cols === "" ? `${count} LEDs.` : valid ? `${across} across and ${rows} down.` : `${count} LEDs do not make whole rows of ${cols}.`}
+          </p>
+          {error && <p className="callout error">{error}</p>}
+          <div className="form-actions">
+            <button type="submit" className="button small" disabled={!valid}>
+              Arrange as a matrix
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
 /** The angle of one light, to read off or type. */
 export function AngleField({ fixture }: { fixture: Fixture }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -457,6 +752,9 @@ function DeviceRow({
               </button>
             </div>
           )}
+          {own.length === 1 && own[0]!.shape.type === "matrix" && <MatrixWiring fixture={own[0]!} full={full} />}
+          {own.length === 1 && own[0]!.shape.type === "strip" && (own[0]!.path?.length ?? 0) < 2 && <AsMatrix fixture={own[0]!} />}
+          {(own.length > 1 || (own[0]?.path?.length ?? 0) < 2) && <Zones device={device} own={own} />}
           {show.light_groups.length > 0 && (
             <label className="field inline">
               <span>Group</span>

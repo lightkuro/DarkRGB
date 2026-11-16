@@ -2175,6 +2175,8 @@ mod tests {
             spread: None,
             hue: None,
             chain: None,
+            blocks: None,
+            slide: None,
         })
         .unwrap();
         run(Command::SetLink {

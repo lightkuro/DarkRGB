@@ -424,10 +424,12 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
   const kaleido = layer.kaleido ?? 0;
   const spread = layer.spread ?? 0;
   const hue = layer.hue ?? 0;
+  const blocks = layer.blocks ?? 0;
+  const slide = layer.slide ?? 0;
   const linked = (param: string) => layer.links?.some((l) => l.param === param) ?? false;
   const update = (change: Partial<Extract<Parameters<typeof engine.send>[0], { type: "update_layer" }>>) =>
     engine.send({ type: "update_layer", id: layer.id, ...change });
-  const slide = (key: string, make: (value: number) => Parameters<typeof engine.quiet>[0]) =>
+  const slider = (key: string, make: (value: number) => Parameters<typeof engine.quiet>[0]) =>
     numberSender(`${layer.id}:${key}`, make);
   // The simple layout shows what is set, and offers the angle once there
   // is a matrix for it to show on.
@@ -448,7 +450,7 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
             step={full ? 1 : 45}
             value={angle}
             format={(v) => `${Math.round(v) % 360}°`}
-            onChange={slide("angle", (value) => ({ type: "update_layer", id: layer.id, angle: value }))}
+            onChange={slider("angle", (value) => ({ type: "update_layer", id: layer.id, angle: value }))}
           />
           <div className="tool-group angle-steps">
             <button type="button" className="tool" aria-label="Turn the pattern 45 degrees anticlockwise" title="Turn 45° anticlockwise" onClick={() => step(-1)}>
@@ -468,7 +470,7 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
           step={1}
           value={spin}
           format={(v) => (v === 0 ? "Still" : `${Math.abs(Math.round(v))}° a second${v < 0 ? ", backwards" : ""}`)}
-          onChange={slide("spin", (value) => ({ type: "update_layer", id: layer.id, spin: value }))}
+          onChange={slider("spin", (value) => ({ type: "update_layer", id: layer.id, spin: value }))}
         />
       )}
       {layer.each && (full || layer.turns) && (
@@ -509,7 +511,7 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
           step={1}
           value={repeat}
           format={(v) => (v <= 1 ? "Once" : `${Math.round(v)} times`)}
-          onChange={slide("repeat", (value) => ({ type: "update_layer", id: layer.id, repeat: Math.round(value) }))}
+          onChange={slider("repeat", (value) => ({ type: "update_layer", id: layer.id, repeat: Math.round(value) }))}
         />
       )}
       {(full || kaleido > 0) && (
@@ -520,7 +522,29 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
           step={1}
           value={kaleido === 0 ? 1 : kaleido}
           format={(v) => (v <= 1 ? "Off" : `${Math.round(v)} wedges`)}
-          onChange={slide("kaleido", (value) => ({ type: "update_layer", id: layer.id, kaleido: value <= 1 ? 0 : Math.round(value) }))}
+          onChange={slider("kaleido", (value) => ({ type: "update_layer", id: layer.id, kaleido: value <= 1 ? 0 : Math.round(value) }))}
+        />
+      )}
+      {(full || slide > 0) && (
+        <Slider
+          label="Slide along"
+          min={0}
+          max={1}
+          step={0.01}
+          value={slide}
+          format={(v) => (v === 0 ? "None" : `${Math.round(v * 100)}%`)}
+          onChange={slider("slide", (value) => ({ type: "update_layer", id: layer.id, slide: value >= 1 ? 0.999 : value }))}
+        />
+      )}
+      {(full || blocks >= 2) && (
+        <Slider
+          label="Blocks"
+          min={1}
+          max={32}
+          step={1}
+          value={blocks < 2 ? 1 : blocks}
+          format={(v) => (v <= 1 ? "Smooth" : `${Math.round(v)} across`)}
+          onChange={slider("blocks", (value) => ({ type: "update_layer", id: layer.id, blocks: value <= 1 ? 0 : Math.round(value) }))}
         />
       )}
       {layer.each && (full || spread > 0) && (
@@ -531,7 +555,7 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
           step={0.01}
           value={spread}
           format={(v) => (v === 0 ? "None" : `${Math.round(v * 100)}%`)}
-          onChange={slide("spread", (value) => ({ type: "update_layer", id: layer.id, spread: value }))}
+          onChange={slider("spread", (value) => ({ type: "update_layer", id: layer.id, spread: value }))}
         />
       )}
       {(full || hue !== 0 || linked(HUE)) && (
@@ -545,7 +569,7 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
           step={1}
           value={hue}
           format={(v) => (Math.round(v) % 360 === 0 ? "None" : `${Math.round(v)}°`)}
-          onChange={slide("hue", (value) => ({ type: "update_layer", id: layer.id, hue: value }))}
+          onChange={slider("hue", (value) => ({ type: "update_layer", id: layer.id, hue: value }))}
         />
       )}
     </>
@@ -580,6 +604,7 @@ function Targets({
     const everyLight = fixtures.every((f) => next.includes(f.id));
     engine.send({ type: "update_layer", id: layer.id, targets: everyLight ? [] : next });
   };
+  const laid = layer.chain ? "chain" : layer.each ? "each" : "stage";
   // The single lights this plays on, which can be given a name as a group.
   const chosenLights = layer.targets.filter((t) => fixtures.some((f) => f.id === t));
   const nameGroup = async (name: string) => {
@@ -667,15 +692,31 @@ function Targets({
       {
         // Only a choice when it plays on more than one light.
         full && (all || layer.targets.length > 1 || layer.targets.some((id) => groups.some((g) => g.id === id))) && (
-          <div className="field inline each">
-            <span title="Off: the effect is drawn once across all of these lights, wherever they are. On: every light gets the whole effect to itself.">
-              Each light on its own
+          <div className="field">
+            <span className="field-head">
+              <span>Laid on the lights</span>
             </span>
-            <Switch
-              checked={layer.each}
-              label="Draw the effect on each light by itself"
-              onChange={(each) => engine.send({ type: "update_layer", id: layer.id, each })}
-            />
+            <div className="segmented" role="radiogroup" aria-label="How the effect is laid on the lights">
+              {(
+                [
+                  ["stage", "Across the stage", "Drawn once across all of these lights, by where they are on the stage."],
+                  ["each", "On each light", "Every light gets the whole effect to itself."],
+                  ["chain", "End to end", "One line through every LED in the order they are wired, light after light. Where the lights are on the stage is ignored."],
+                ] as const
+              ).map(([id, name, hint]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={laid === id}
+                  className={laid === id ? "selected" : ""}
+                  title={hint}
+                  onClick={() => engine.send({ type: "update_layer", id: layer.id, each: id === "each", chain: id === "chain" })}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
           </div>
         )
       }
@@ -1148,7 +1189,9 @@ function FolderTargets({ folder }: { folder: LayerGroup }) {
   const show = useShow();
   if (!show) return null;
   const inside = show.layers.filter((l) => l.group === folder.id);
-  if (inside.length === 0 || (show.fixtures.length < 2 && show.light_groups.length === 0)) return null;
+  if (inside.length === 0) return null;
+  // With one light and no groups there is nothing to choose between.
+  const choosable = show.fixtures.length >= 2 || show.light_groups.length > 0;
   const first = inside[0]!;
   const same = inside.every(
     (l) => l.only === first.only && l.targets.length === first.targets.length && l.targets.every((t) => first.targets.includes(t)),
@@ -1165,8 +1208,12 @@ function FolderTargets({ folder }: { folder: LayerGroup }) {
   };
   const strips = show.fixtures.filter((f) => f.shape.type === "strip").length;
   const kinds = strips > 0 && strips < show.fixtures.length;
+  // The part of the sound they all listen to, when they agree.
+  const sameBand = inside.every((l) => l.sound.band.type === first.sound.band.type) ? first.sound.band.type : null;
   return (
     <div className="field">
+      {choosable && (
+        <>
       <span className="field-head">
         <span>Everything inside plays on</span>
       </span>
@@ -1202,6 +1249,26 @@ function FolderTargets({ folder }: { folder: LayerGroup }) {
           ? `Changes all ${inside.length} ${inside.length === 1 ? "effect" : "effects"} in this folder at once.`
           : "The effects in this folder play on different lights now. Choosing here sets them all alike."}
       </p>
+        </>
+      )}
+      <span className="field-head">
+        <span>Everything inside listens to</span>
+      </span>
+      <div className="segmented" role="radiogroup" aria-label="What everything in the folder listens to">
+        {BANDS.map((b) => (
+          <button
+            key={b.type}
+            type="button"
+            role="radio"
+            aria-checked={sameBand === b.type}
+            className={sameBand === b.type ? "selected" : ""}
+            onClick={() => engine.send({ type: "update_folder_layers", group: folder.id, band: { type: b.type } })}
+          >
+            {b.name}
+          </button>
+        ))}
+      </div>
+      {sameBand === null && <p className="hint">The effects in this folder listen to different parts of the sound now.</p>}
     </div>
   );
 }

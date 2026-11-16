@@ -338,6 +338,14 @@ pub struct Layer {
     /// wheel, 0..360.
     #[serde(default, skip_serializing_if = "is_nought")]
     pub hue: f32,
+    /// The pattern is made of this many blocks across, each one colour,
+    /// so several LEDs act as one. Nought is as fine as the LEDs are.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub blocks: u8,
+    /// How far the pattern is slid along, 0..1 of its length, coming
+    /// round again at the end.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub slide: f32,
 }
 
 fn once() -> u8 {
@@ -1148,6 +1156,8 @@ impl Show {
                 kaleido: 0,
                 spread: 0.0,
                 hue: 0.0,
+                blocks: 0,
+                slide: 0.0,
                 links: Vec::new(),
             },
         );
@@ -1627,6 +1637,13 @@ impl Show {
     /// is to be treated as one long strip. The number of LEDs must stay
     /// the same.
     pub fn reshape(&mut self, fixture: u32, shape: Shape) -> Result<(), String> {
+        // Where a matrix can go without landing on another light: below them all.
+        let below = self
+            .fixtures
+            .iter()
+            .filter(|f| f.id != fixture)
+            .map(|f| f.y + f.height.max(0.04) / 2.0)
+            .fold(f32::NEG_INFINITY, f32::max);
         let f = self
             .fixtures
             .iter_mut()
@@ -1645,6 +1662,10 @@ impl Show {
                 let width = if aspect > 1.0 { 0.5 / aspect } else { 0.5 };
                 (f.width, f.height) = (width, width * aspect);
                 (f.path, f.closed) = (Vec::new(), false);
+                // A strip is a line and a matrix is not: it needs room.
+                if below.is_finite() && f.y - f.height / 2.0 < below + 0.1 {
+                    f.y = below + 0.1 + f.height / 2.0;
+                }
             }
             (Shape::Matrix { .. }, Shape::Strip { .. }) => {
                 (f.width, f.height) = (1.0, 0.0);

@@ -625,6 +625,8 @@ impl Show {
                 kaleido: part.kaleido,
                 spread: 0.0,
                 hue: 0.0,
+                blocks: 0,
+                slide: 0.0,
                 links: part
                     .links
                     .iter()

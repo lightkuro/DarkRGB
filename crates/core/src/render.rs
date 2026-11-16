@@ -70,11 +70,13 @@ struct Fold {
     /// Width over height of the lights, for a round kaleidoscope.
     aspect: f32,
     flat: bool,
+    /// The pattern in this many blocks across, or nought for smooth.
+    blocks: u8,
 }
 
 impl Fold {
     fn does_something(&self) -> bool {
-        self.mirror != Mirror::Off || self.repeat > 1.0 || self.wraps() || self.shift != 0.0
+        self.mirror != Mirror::Off || self.repeat > 1.0 || self.wraps() || self.shift != 0.0 || self.blocks >= 2
     }
 
     /// Whether the pattern is wrapped round the middle. A line of lights
@@ -109,6 +111,17 @@ impl Fold {
             Mirror::Across => x = fold(x),
             Mirror::Down => y = fold(y),
             Mirror::Both => (x, y) = (fold(x), fold(y)),
+        }
+        if self.blocks >= 2 {
+            // Every place in a block is asked about as the block's middle.
+            let block = |v: f32, n: f32| ((v * n).floor().min(n - 1.0) + 0.5) / n;
+            let across = self.blocks as f32;
+            x = block(x, across);
+            if !self.flat {
+                // Square blocks: as many down as the lights' shape gives.
+                let down = (across / self.aspect.clamp(0.05, 20.0)).round().max(1.0);
+                y = block(y, down);
+            }
         }
         (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))
     }
@@ -424,13 +437,12 @@ impl Renderer {
                     repeat: layer.repeat.clamp(1, 8) as f32,
                     kaleido: layer.kaleido.min(12),
                     // From one light to the next, when each has the pattern to itself.
-                    shift: if layer.each {
-                        (nth as f32 * layer.spread).rem_euclid(1.0)
-                    } else {
-                        0.0
-                    },
+                    // Sliding moves the pattern itself along, so a place shows what
+                    // was that far behind it.
+                    shift: (if layer.each { nth as f32 * layer.spread } else { 0.0 } - layer.slide).rem_euclid(1.0),
                     aspect: ctx.aspect,
                     flat: segment.flat,
+                    blocks: layer.blocks.min(64),
                 };
                 let fold = fold.does_something().then_some(fold);
                 // Wrapped round the middle, the pattern is as wide as it is high.
@@ -1328,6 +1340,46 @@ mod tests {
         show.layers[0].chain = false;
         let each = colours(&show);
         assert_eq!((each[0], each[3], each[4], each[7]), (red, blue, red, blue));
+    }
+
+    #[test]
+    fn a_pattern_can_be_made_of_blocks_and_slid_along() {
+        use crate::layout::Shape;
+        // A two-colour picture on a strip of twelve: six red, six blue.
+        let mut show = Show::default();
+        show.layers.clear();
+        let id = show.add_layer("picture");
+        show.layer_mut(id)
+            .unwrap()
+            .params
+            .insert("picture".into(), ParamValue::Text("2x1:/wAAAAD/".into()));
+        show.add_virtual(
+            "strip",
+            &Shape::Strip {
+                count: 12,
+                reverse: false,
+            },
+            false,
+        );
+        let reds = |show: &Show| -> Vec<bool> { render(show).1.iter().map(|c| c.r > 0.5).collect() };
+        let plain = reds(&show);
+        assert_eq!(plain.iter().filter(|r| **r).count(), 6);
+        assert!(plain[..6].iter().all(|r| *r));
+        // Slid a quarter of the way along, the red starts a quarter in
+        // and the blue comes round to the front.
+        show.layers[0].slide = 0.25;
+        let slid = reds(&show);
+        assert!(slid[3..9].iter().all(|r| *r) && !slid[0] && !slid[11], "{slid:?}");
+        // Three blocks: each four LEDs wide and all one colour. The
+        // middle block straddles the two colours and takes the colour
+        // at its own middle.
+        show.layers[0].slide = 0.0;
+        show.layers[0].blocks = 3;
+        let frame = render(&show).1;
+        for block in frame.chunks(4) {
+            assert!(block.iter().all(|c| c.to_bytes() == block[0].to_bytes()), "{block:?}");
+        }
+        assert!(frame[0].r > 0.5 && frame[11].b > 0.5);
     }
 
     #[test]

@@ -4141,3 +4141,55 @@ input.number {
 .help-body li::marker {
   color: var(--accent);
 }
+
+/* ------------------------------------------------------ zones and wiring */
+
+.zones,
+.wiring {
+  display: grid;
+  gap: 8px;
+}
+
+.zone-list {
+  display: grid;
+  gap: 6px;
+}
+
+.zone-list li {
+  display: grid;
+  gap: 2px;
+}
+
+.zone-list .field-head {
+  display: none;
+}
+
+.wiring-row {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.wiring-diagram {
+  flex: none;
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.wiring-diagram polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  opacity: 0.8;
+}
+
+.wiring-diagram circle {
+  fill: var(--text);
+}
+
+.wiring-diagram circle.first {
+  fill: none;
+  stroke: var(--teal);
+  stroke-width: 2;
+}
