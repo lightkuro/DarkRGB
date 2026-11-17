@@ -10,6 +10,7 @@ pub mod effects;
 mod extra_effects;
 pub mod font;
 pub mod layout;
+mod ledfx_effects;
 pub mod looks;
 mod more_effects;
 pub mod movie;

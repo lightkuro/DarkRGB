@@ -278,6 +278,53 @@ pub fn palettes() -> &'static [Palette] {
                 true,
                 &["#3a0ca3", "#7209b7", "#f72585", "#4361ee"],
             ),
+            // LedFx's own gradients (GPL-3.0, the LedFx contributors), for
+            // the effects ported from it.
+            make(
+                "lf_rainbow",
+                "Rainbow (LedFx)",
+                false,
+                &[
+                    "#ff0000", "#ff7800", "#ffc800", "#00ff00", "#00c78c", "#0000ff", "#800080", "#ff00b2",
+                ],
+            ),
+            make("lf_dancefloor", "Dancefloor", false, &["#ff0000", "#ff00b2", "#0000ff"]),
+            make(
+                "lf_plasma",
+                "Plasma",
+                false,
+                &["#0000ff", "#800080", "#ff0000", "#ff2800", "#ffc800"],
+            ),
+            make("lf_ocean", "Ocean (LedFx)", false, &["#00ffff", "#0000ff"]),
+            make(
+                "lf_viridis",
+                "Viridis",
+                false,
+                &["#800080", "#0000ff", "#008080", "#00ff00", "#ffc800"],
+            ),
+            make("lf_jungle", "Jungle", false, &["#00ff00", "#228b22", "#ff7800"]),
+            make("lf_spring", "Spring", false, &["#ff00b2", "#ff2800", "#ffc800"]),
+            make("lf_winter", "Winter", false, &["#00c78c", "#00ff32"]),
+            make(
+                "lf_frost",
+                "Frost",
+                false,
+                &["#0000ff", "#00ffff", "#800080", "#ff00b2"],
+            ),
+            make("lf_sunset", "Sunset (LedFx)", false, &["#000080", "#ff7800", "#ff0000"]),
+            make(
+                "lf_borealis",
+                "Borealis",
+                false,
+                &["#ff2800", "#800080", "#00c78c", "#00ff00"],
+            ),
+            make("lf_rust", "Rust", false, &["#ff2800", "#ff0000"]),
+            make(
+                "lf_winamp",
+                "Winamp",
+                false,
+                &["#00ff00", "#ffc800", "#ff7800", "#ff2800", "#ff0000"],
+            ),
         ]
     })
 }

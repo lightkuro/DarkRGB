@@ -17,32 +17,35 @@ pub fn registry() -> &'static [EffectDef] {
     static REGISTRY: OnceLock<Vec<EffectDef>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         // Listed in the order the picker shows them, group by group.
-        vec![
-            Spectrum::def(),
-            Energy::def(),
-            Scroll::def(),
-            Meter::def(),
-            Fire::def(),
-            BeatPulse::def(),
-            Ripple::def(),
-            Sweep::def(),
-            Chase::def(),
-            Meteors::def(),
-            Sparkle::def(),
-            Strobe::def(),
-        ]
-        .into_iter()
-        .chain(crate::extra_effects::follows())
-        .chain(crate::stage_effects::follows())
-        .chain(crate::more_effects::hits_and_beats())
-        .chain(crate::extra_effects::hits_and_beats())
-        .chain(crate::stage_effects::hits_and_beats())
-        .chain([Plasma::def(), Flow::def()])
-        .chain(crate::more_effects::ambient())
-        .chain(crate::extra_effects::ambient())
-        .chain(crate::stage_effects::ambient())
-        .chain([Solid::def()])
-        .collect()
+        // LedFx's own first: the classics people know, kept as close to
+        // the originals as darkRGB allows.
+        crate::ledfx_effects::all()
+            .into_iter()
+            .chain([
+                Spectrum::def(),
+                Energy::def(),
+                Scroll::def(),
+                Meter::def(),
+                Fire::def(),
+                BeatPulse::def(),
+                Ripple::def(),
+                Sweep::def(),
+                Chase::def(),
+                Meteors::def(),
+                Sparkle::def(),
+                Strobe::def(),
+            ])
+            .chain(crate::extra_effects::follows())
+            .chain(crate::stage_effects::follows())
+            .chain(crate::more_effects::hits_and_beats())
+            .chain(crate::extra_effects::hits_and_beats())
+            .chain(crate::stage_effects::hits_and_beats())
+            .chain([Plasma::def(), Flow::def()])
+            .chain(crate::more_effects::ambient())
+            .chain(crate::extra_effects::ambient())
+            .chain(crate::stage_effects::ambient())
+            .chain([Solid::def()])
+            .collect()
     })
 }
 
