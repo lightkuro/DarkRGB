@@ -57,6 +57,7 @@ impl Alternate {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::Capped,
+                reacts: &[],
                 params: vec![
                     ParamSpec::color("colour", "Colour", "#ff2030"),
                     ParamSpec::color("second", "Other colour", "#2050ff"),
@@ -179,6 +180,7 @@ impl Beams {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("count", "Beams", 1.0, 8.0, 4.0),
@@ -333,6 +335,7 @@ impl Notes {
                 category: FOLLOWS_SOUND,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::choice(
                         "mode",
@@ -442,6 +445,7 @@ impl Waterfall {
                 category: FOLLOWS_SOUND,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "fire"),
                     ParamSpec::float("speed", "Speed", 0.1, 4.0, 1.0),
@@ -528,6 +532,7 @@ impl Glitch {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::Capped,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("amount", "How much breaks up", 0.05, 1.0, 0.45),
@@ -624,6 +629,7 @@ impl Film {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::movie("movie", "Moving picture"),
                     ParamSpec::float("speed", "Speed", 0.1, 4.0, 1.0),
@@ -749,6 +755,7 @@ impl Lava {
                 category: AMBIENT,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "sunset"),
                     ParamSpec::float("speed", "Speed", 0.02, 2.0, 0.25),
@@ -827,6 +834,7 @@ impl CodeRain {
                 category: AMBIENT,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::color("colour", "Colour", "#20ff50"),
                     ParamSpec::float("speed", "Speed", 0.05, 3.0, 0.6),
@@ -921,6 +929,7 @@ impl Life {
                 category: AMBIENT,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours, by age", "aurora"),
                     ParamSpec::float("speed", "Generations a second", 1.0, 20.0, 6.0),

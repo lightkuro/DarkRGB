@@ -290,6 +290,17 @@ pub enum Command {
     RemoveMovie {
         id: String,
     },
+    /// Shows an effect first in the picker, or no longer. Kept on this
+    /// computer, not in the show.
+    PinEffect {
+        effect: String,
+        pinned: bool,
+    },
+    /// Keeps an effect out of the picker's sections, or puts it back.
+    HideEffect {
+        effect: String,
+        hidden: bool,
+    },
     /// Asks an OpenRGB server what devices it has and adds each as a
     /// light. The address is the computer OpenRGB runs on.
     AddOpenRgb {
@@ -383,6 +394,9 @@ pub enum Command {
         effect: String,
         #[serde(default)]
         group: Option<u32>,
+        /// The lights and groups it plays on; all of them when left out.
+        #[serde(default)]
+        targets: Option<Vec<u32>>,
     },
     RemoveLayer {
         id: u32,
@@ -1403,6 +1417,8 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
         Command::RemoveMovie { .. }
+        | Command::PinEffect { .. }
+        | Command::HideEffect { .. }
         | Command::AddOpenRgb { .. }
         | Command::Trigger { .. }
         | Command::Perform { .. }
@@ -1689,7 +1705,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
 
-        Command::AddLayer { effect, group } => {
+        Command::AddLayer { effect, group, targets } => {
             if effects::find(effect).is_none() {
                 return Err(format!("unknown effect {effect:?}"));
             }
@@ -1698,7 +1714,20 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             {
                 return Err("that folder no longer exists".into());
             }
-            show.add_layer_in(effect, *group);
+            if let Some(targets) = targets {
+                let known = |id: &u32| {
+                    show.fixtures.iter().any(|f| f.id == *id) || show.light_groups.iter().any(|g| g.id == *id)
+                };
+                if targets.len() > 1024 || !targets.iter().all(known) {
+                    return Err("those lights are not all in the show".into());
+                }
+            }
+            let id = show.add_layer_in(effect, *group);
+            if let Some(targets) = targets
+                && let Some(layer) = show.layer_mut(id)
+            {
+                layer.targets = targets.clone();
+            }
             Ok(())
         }
 
@@ -4195,6 +4224,7 @@ mod tests {
             &Command::AddLayer {
                 effect: "sparkle".into(),
                 group: Some(folder),
+                targets: None,
             },
         )
         .unwrap();
@@ -4204,7 +4234,8 @@ mod tests {
                 &mut show,
                 &Command::AddLayer {
                     effect: "sparkle".into(),
-                    group: Some(9999)
+                    group: Some(9999),
+                    targets: None,
                 }
             )
             .is_err()
@@ -4433,6 +4464,7 @@ mod tests {
             &Command::AddLayer {
                 effect: "flow".into(),
                 group: None,
+                targets: None,
             },
         )
         .unwrap();
@@ -5121,6 +5153,7 @@ mod tests {
                 2 => Command::AddLayer {
                     effect: r.text(),
                     group: r.maybe(|_| folder),
+                    targets: None,
                 },
                 3 => Command::RemoveLayer { id: layer },
                 4 => Command::UpdateLayer {
@@ -5279,6 +5312,7 @@ mod tests {
                 &Command::AddLayer {
                     effect: "solid".into(),
                     group,
+                    targets: None,
                 },
             )
         };
@@ -5411,6 +5445,47 @@ mod tests {
         let mut mended = show.clone();
         mended.repair();
         assert_eq!(mended, show);
+    }
+
+    #[test]
+    fn an_effect_can_be_added_for_chosen_lights_in_one_step() {
+        let mut show = Show::default();
+        show.add_virtual(
+            "a",
+            &Shape::Strip {
+                count: 4,
+                reverse: false,
+            },
+            false,
+        );
+        show.add_virtual(
+            "b",
+            &Shape::Strip {
+                count: 4,
+                reverse: false,
+            },
+            false,
+        );
+        let (a, b) = (show.fixtures[0].id, show.fixtures[1].id);
+        let add = |show: &mut Show, targets| {
+            apply(
+                show,
+                &Command::AddLayer {
+                    effect: "lf_energy".into(),
+                    group: None,
+                    targets,
+                },
+            )
+        };
+        add(&mut show, Some(vec![b])).unwrap();
+        let layer = show.layers.last().unwrap();
+        assert_eq!((layer.effect.as_str(), layer.targets.clone()), ("lf_energy", vec![b]));
+        assert!(Show::layer_hits(layer, &show.fixtures[1]) && !Show::layer_hits(layer, &show.fixtures[0]));
+        let count = show.layers.len();
+        assert!(add(&mut show, Some(vec![a, 9999])).is_err());
+        assert_eq!(show.layers.len(), count, "nothing added when a light is unknown");
+        add(&mut show, None).unwrap();
+        assert!(show.layers.last().unwrap().targets.is_empty());
     }
 
     #[test]

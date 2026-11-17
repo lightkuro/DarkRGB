@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 
 use crate::color::{Pal, Rgb, palette};
 use crate::effect::{
-    AMBIENT, Effect, EffectDef, EffectInfo, FOLLOWS_SOUND, FlashUse, FrameCtx, HITS_AND_BEATS, HitWatch, hash2, noise2,
-    smoothstep,
+    AMBIENT, Effect, EffectDef, EffectInfo, FOLLOWS_SOUND, FlashUse, FrameCtx, HITS_AND_BEATS, HitWatch, OLDER, hash2,
+    noise2, smoothstep,
 };
 use crate::params::{ParamReader, ParamSpec};
 
@@ -19,7 +19,7 @@ pub fn registry() -> &'static [EffectDef] {
         // Listed in the order the picker shows them, group by group.
         // LedFx's own first: the classics people know, kept as close to
         // the originals as darkRGB allows.
-        crate::ledfx_effects::all()
+        let mut defs = crate::ledfx_effects::all()
             .into_iter()
             .chain([
                 Spectrum::def(),
@@ -45,8 +45,65 @@ pub fn registry() -> &'static [EffectDef] {
             .chain(crate::extra_effects::ambient())
             .chain(crate::stage_effects::ambient())
             .chain([Solid::def()])
-            .collect()
+            .map(|mut def| {
+                def.info.reacts = reacts_of(def.info.id);
+                if RETIRED.contains(&def.info.id) {
+                    def.info.category = OLDER;
+                }
+                def
+            })
+            .collect::<Vec<_>>();
+        // The older ones last, in the order they were.
+        defs.sort_by_key(|d| d.info.category == OLDER);
+        defs
     })
+}
+
+/// Effects moved to the "Older effects" section: our first Energy and
+/// Scroll, which LedFx's own do better, and those that mostly flash or
+/// shuffle at random.
+const RETIRED: [&str; 11] = [
+    "energy",
+    "scroll",
+    "sparkle",
+    "tiles",
+    "steps",
+    "glitch",
+    "meteors",
+    "fireworks",
+    "life",
+    "code_rain",
+    "chase",
+];
+
+/// What each effect reacts to.
+fn reacts_of(id: &str) -> &'static [&'static str] {
+    const BANDS3: &[&str] = &["bass", "mids", "highs"];
+    match id {
+        "spectrum" | "energy" | "scroll" | "peaks" | "waterfall" | "lf_energy" | "lf_scroll" | "lf_wavelength"
+        | "lf_rain" | "lf_bands" | "lf_blocks" | "lf_spectrum" => BANDS3,
+        "lf_power" => &["bass", "mids", "highs", "hits"],
+        "lf_pitch_spectrum" => &["tune", "bass", "mids", "highs"],
+        "beat_pulse" | "sweep" | "chase" | "ripple" | "tiles" | "steps" | "lightning" | "alternate" | "beams"
+        | "strobe" | "scanner" | "marquee" | "lf_bar" | "lf_multibar" | "lf_bpm_strobe" => &["beat"],
+        "lf_strobe" => &["beat", "hits"],
+        "fire"
+        | "rings"
+        | "lava"
+        | "code_rain"
+        | "lf_magnitude"
+        | "lf_scan"
+        | "lf_energy2"
+        | "lf_melt"
+        | "lf_marching"
+        | "lf_crawler"
+        | "lf_block_reflections" => &["bass"],
+        "meteors" | "fireworks" | "glitch" | "life" => &["hits"],
+        "sparkle" => &["highs"],
+        "notes" => &["tune"],
+        "plasma" | "meter" => &["whole"],
+        _ => &["none"],
+    }
 }
 
 pub fn find(id: &str) -> Option<&'static EffectDef> {
@@ -74,6 +131,7 @@ impl Plasma {
                 category: AMBIENT,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("speed", "Speed", 0.0, 2.0, 0.5),
@@ -142,6 +200,7 @@ impl Spectrum {
                 category: FOLLOWS_SOUND,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "rainbow"),
                     ParamSpec::bool("mirror", "Mirror from centre", false).advanced(),
@@ -192,11 +251,12 @@ impl Energy {
         EffectDef {
             info: EffectInfo {
                 id: "energy",
-                name: "Energy",
+                name: "Energy (first darkRGB one)",
                 description: "Three colours grow from the centre: one each for bass, mids and treble.",
                 category: FOLLOWS_SOUND,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::color("low", "Bass colour", "#ff2a2a"),
                     ParamSpec::color("mid", "Mid colour", "#22ff66"),
@@ -277,6 +337,7 @@ impl BeatPulse {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "candy"),
                     ParamSpec::float("decay", "Fade time (s)", 0.05, 1.5, 0.35),
@@ -378,6 +439,7 @@ impl Sweep {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("time", "Crossing time (s)", 0.1, 2.0, 0.45),
@@ -503,6 +565,7 @@ impl Chase {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "candy"),
                     ParamSpec::float("blocks", "Blocks", 1.0, 12.0, 4.0),
@@ -601,6 +664,7 @@ impl Fire {
                 category: FOLLOWS_SOUND,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "fire"),
                     ParamSpec::float("height", "Height", 0.2, 1.0, 0.6),
@@ -694,6 +758,7 @@ impl Meteors {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "ice"),
                     ParamSpec::float("speed", "Speed", 0.2, 3.0, 1.1),
@@ -808,6 +873,7 @@ impl Strobe {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::Capped,
+                reacts: &[],
                 params: vec![
                     ParamSpec::color("colour", "Colour", "#ffffff"),
                     ParamSpec::float("rate", "Flashes per second", 1.0, 20.0, 6.0),
@@ -885,11 +951,12 @@ impl Scroll {
         EffectDef {
             info: EffectInfo {
                 id: "scroll",
-                name: "Scroll",
+                name: "Scroll (first darkRGB one)",
                 description: "The sound's colour is fed in at one point and travels along the lights.",
                 category: FOLLOWS_SOUND,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::color("low", "Bass colour", "#ff3d2e"),
                     ParamSpec::color("mid", "Mid colour", "#2eff8a"),
@@ -986,6 +1053,7 @@ impl Ripple {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "ocean"),
                     ParamSpec::float("speed", "Speed", 0.2, 3.0, 1.0),
@@ -1083,6 +1151,7 @@ impl Sparkle {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::color("colour", "Colour", "#ffffff"),
                     ParamSpec::float("density", "Amount", 0.0, 1.0, 0.25),
@@ -1152,6 +1221,7 @@ impl Meter {
                 category: FOLLOWS_SOUND,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "fire"),
                     ParamSpec::bool("hold", "Peak marker", true).advanced(),
@@ -1214,6 +1284,7 @@ impl Flow {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "rainbow"),
                     ParamSpec::float("speed", "Speed", -2.0, 2.0, 0.2),
@@ -1271,6 +1342,7 @@ impl Solid {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![ParamSpec::color("colour", "Colour", "#ff7a18")],
             },
             make: || Box::new(Solid { colour: Rgb::WHITE }),
@@ -1342,6 +1414,29 @@ mod tests {
             }
         }
         max
+    }
+
+    #[test]
+    fn every_effect_says_what_it_reacts_to_and_the_older_ones_come_last() {
+        let all = registry();
+        for def in all {
+            assert!(!def.info.reacts.is_empty(), "{}", def.info.id);
+            // An effect that hears nothing says so; one that only keeps
+            // to the tempo may say "beat".
+            if !def.info.audio {
+                assert!(
+                    def.info.reacts == ["none"] || def.info.reacts == ["beat"],
+                    "{}",
+                    def.info.id
+                );
+            } else {
+                assert!(!def.info.reacts.contains(&"none"), "{} hears sound", def.info.id);
+            }
+        }
+        let first_older = all.iter().position(|d| d.info.category == OLDER).unwrap();
+        assert!(all[first_older..].iter().all(|d| d.info.category == OLDER));
+        assert_eq!(all.iter().filter(|d| d.info.category == OLDER).count(), RETIRED.len());
+        assert_eq!(all[0].info.id, "lf_energy", "LedFx's come first");
     }
 
     #[test]

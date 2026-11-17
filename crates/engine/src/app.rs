@@ -379,6 +379,24 @@ impl Shared {
             }
             Command::RemoveMovie { id } => return self.remove_movie(id),
             Command::AddOpenRgb { address } => return self.add_open_rgb(address),
+            Command::PinEffect { effect, pinned } => {
+                return self.change_picker(effect, |saved| {
+                    saved.pinned_effects.retain(|e| e != effect);
+                    if *pinned {
+                        saved.pinned_effects.push(effect.clone());
+                        saved.hidden_effects.retain(|e| e != effect);
+                    }
+                });
+            }
+            Command::HideEffect { effect, hidden } => {
+                return self.change_picker(effect, |saved| {
+                    saved.hidden_effects.retain(|e| e != effect);
+                    if *hidden {
+                        saved.hidden_effects.push(effect.clone());
+                        saved.pinned_effects.retain(|e| e != effect);
+                    }
+                });
+            }
             Command::Undo => return self.step_history(true),
             Command::Redo => return self.step_history(false),
             Command::MidiLearn { target } => {
@@ -537,6 +555,8 @@ impl Shared {
                     "patterns": patterns,
                     "palettes": saved.palettes,
                     "movies": self.movies_status(),
+                    "pinned_effects": saved.pinned_effects,
+                    "hidden_effects": saved.hidden_effects,
                 })
             }
             None => serde_json::json!({
@@ -547,6 +567,8 @@ impl Shared {
                 "patterns": [],
                 "palettes": [],
                 "movies": self.movies_status(),
+                "pinned_effects": self.saved.lock().unwrap().pinned_effects,
+                "hidden_effects": self.saved.lock().unwrap().hidden_effects,
             }),
         }
     }
@@ -788,6 +810,23 @@ impl Shared {
             };
             let _ = self.execute(&command);
         }
+    }
+
+    /// Changes which effects the picker pins or hides. Kept with the
+    /// library; without one, for as long as the program runs.
+    fn change_picker(&self, effect: &str, change: impl FnOnce(&mut Saved)) -> Result<Option<String>, String> {
+        if darkrgb_core::effects::find(effect).is_none() {
+            return Err(format!("there is no effect called {effect:?}"));
+        }
+        if self.library.is_some() {
+            return self.change_saved(|saved| {
+                change(saved);
+                Ok(())
+            });
+        }
+        change(&mut self.saved.lock().unwrap());
+        self.library_rev.send_modify(|r| *r += 1);
+        Ok(None)
     }
 
     /// Changes what is kept, writes it to disk and tells the clients.
@@ -2308,6 +2347,7 @@ mod tests {
         run(Command::AddLayer {
             effect: "sparkle".into(),
             group: None,
+            targets: None,
         })
         .unwrap();
         run(Command::SaveLook { name: "Evening".into() }).unwrap();
@@ -2593,6 +2633,7 @@ mod tests {
             run(Command::AddLayer {
                 effect: "solid".into(),
                 group: None,
+                targets: None,
             })
             .unwrap()
         };
@@ -2658,6 +2699,46 @@ mod tests {
         // Another show starts with a clean memory.
         shared.replace_show(Show::default());
         assert_eq!(shared.history.lock().unwrap().can(), (false, false));
+    }
+
+    #[test]
+    fn effects_can_be_pinned_and_hidden_with_or_without_a_library() {
+        let (shared, library) = with_library("pins");
+        let pin = |effect: &str, pinned| Command::PinEffect {
+            effect: effect.into(),
+            pinned,
+        };
+        let hide = |effect: &str, hidden| Command::HideEffect {
+            effect: effect.into(),
+            hidden,
+        };
+        shared.execute(&pin("lf_energy", true)).unwrap();
+        shared.execute(&pin("plasma", true)).unwrap();
+        shared.execute(&hide("sparkle", true)).unwrap();
+        assert!(shared.execute(&pin("no_such_effect", true)).is_err());
+        let status = shared.library_status();
+        assert_eq!(status["pinned_effects"], serde_json::json!(["lf_energy", "plasma"]));
+        assert_eq!(status["hidden_effects"], serde_json::json!(["sparkle"]));
+        // Kept on disk with the library.
+        assert_eq!(library.load_saved().pinned_effects, ["lf_energy", "plasma"]);
+        // Hiding a pinned effect unpins it, and pinning a hidden one shows it.
+        shared.execute(&hide("plasma", true)).unwrap();
+        shared.execute(&pin("sparkle", true)).unwrap();
+        let saved = library.load_saved();
+        assert_eq!(
+            (saved.pinned_effects, saved.hidden_effects),
+            (
+                vec!["lf_energy".to_string(), "sparkle".into()],
+                vec!["plasma".to_string()]
+            )
+        );
+        // Without a library they last as long as the program runs.
+        let alone = Shared::new(Show::default(), None, None);
+        alone.execute(&pin("lf_scroll", true)).unwrap();
+        assert_eq!(
+            alone.library_status()["pinned_effects"],
+            serde_json::json!(["lf_scroll"])
+        );
     }
 
     #[test]

@@ -18,6 +18,7 @@ import {
   Sparkles,
   ZapOff,
   EyeOff,
+  LayoutList,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
@@ -35,6 +36,8 @@ import {
   useShow,
   useStatus,
   type Fixture,
+  stageModePref,
+  useView,
 } from "../engine";
 import { StageRenderer, type View } from "../stageGl";
 import { AddByAddress, AddPixels, AngleField, FoundDevices } from "./DevicePanel";
@@ -132,6 +135,7 @@ function tidy(angle: number): number {
 }
 
 export function Stage() {
+  const mode = useView();
   const show = useShow();
   const status = useStatus();
   const picked = useSelection();
@@ -592,6 +596,16 @@ export function Stage() {
           numbers move up a line; nothing covers anything else. */}
       <div className="stage-foot">
         <div className="stage-tools" onPointerDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+          {mode === "edit" && (
+            <button
+              type="button"
+              className="tool"
+              title="See each light by itself, with the effects that play on it, as LedFx shows them"
+              onClick={() => stageModePref.set("lights")}
+            >
+              <LayoutList size={15} /> Light by light
+            </button>
+          )}
           {chosen.length > 0 && (
             <div className="tool-group">
               <span className="tool-label">{single ? single.name : `${chosen.length} lights`}</span>

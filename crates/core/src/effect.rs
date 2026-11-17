@@ -80,6 +80,10 @@ pub struct EffectInfo {
     /// What the effect has to do with fast flashing.
     pub flash: FlashUse,
     pub params: Vec<ParamSpec>,
+    /// What in the sound it reacts to, for finding effects by it: some
+    /// of "bass", "mids", "highs", "beat", "hits", "tune", "whole", or
+    /// "none". Filled in from one table when the effects are listed.
+    pub reacts: &'static [&'static str],
 }
 
 /// How an effect relates to the show's flash limit. The limit softens
@@ -103,6 +107,9 @@ pub enum FlashUse {
 pub const FOLLOWS_SOUND: &str = "Follows the sound";
 pub const HITS_AND_BEATS: &str = "Hits and beats";
 pub const AMBIENT: &str = "Ambient";
+/// Effects kept for the shows that use them, listed last: ones that
+/// LedFx's own do better, and ones that mostly flash at random.
+pub const OLDER: &str = "Older effects";
 
 pub struct EffectDef {
     pub info: EffectInfo,

@@ -51,6 +51,7 @@ impl Stripes {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "candy_cane"),
                     ParamSpec::float("count", "Stripes", 2.0, 24.0, 8.0),
@@ -131,6 +132,7 @@ impl Twinkle {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "fairy"),
                     ParamSpec::float("amount", "How many are lit", 0.05, 1.0, 0.7),
@@ -197,6 +199,7 @@ impl Snow {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::color("colour", "Colour", "#ffffff"),
                     ParamSpec::float("amount", "Amount", 0.05, 1.0, 0.45),
@@ -293,6 +296,7 @@ impl Steps {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("blocks", "Blocks", 1.0, 16.0, 4.0),
@@ -372,6 +376,7 @@ impl Lightning {
                 audio: true,
                 // A burst slowed to three flashes a second is not a burst.
                 flash: FlashUse::Needed,
+                reacts: &[],
                 params: vec![
                     ParamSpec::color("colour", "Colour", "#ffffff"),
                     ParamSpec::float("length", "Length of a burst (s)", 0.1, 1.5, 0.45),
@@ -471,6 +476,7 @@ impl Words {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::words("text", "Words", "darkRGB", 60),
                     ParamSpec::color("colour", "Colour", "#ffffff"),
@@ -576,6 +582,7 @@ impl Image {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::picture("picture", "Picture"),
                     ParamSpec::choice("fit", "Fit", &["Stretch to fill", "Keep its shape"]),

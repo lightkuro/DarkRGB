@@ -55,6 +55,8 @@ import {
   type ParamSpec,
   type ParamValue,
   type Show,
+  openEffect,
+  useOpenEffect,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
 import { ANGLE, HUE, LinkedSlider, STRENGTH } from "./Links";
@@ -1372,7 +1374,8 @@ export function LayerPanel() {
     }
   };
   // One effect is open at a time, so the list stays short.
-  const [open, setOpen] = useState<number | null>(null);
+  const open = useOpenEffect();
+  const setOpen = (id: number | null) => openEffect.set(id);
   const [openFolder, setOpenFolder] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const rows = useRef(new Map<string, HTMLElement>());

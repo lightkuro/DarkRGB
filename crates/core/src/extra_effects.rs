@@ -72,6 +72,7 @@ impl Scanner {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::color("colour", "Colour", "#ff2a2a"),
                     ParamSpec::float("width", "Width", 0.02, 0.5, 0.1),
@@ -152,6 +153,7 @@ impl Marquee {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "warm"),
                     ParamSpec::float("lights", "Bulbs across", 6.0, 120.0, 30.0),
@@ -229,6 +231,7 @@ impl Breathe {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "aurora"),
                     ParamSpec::float("period", "Seconds a breath", 1.0, 30.0, 6.0),
@@ -302,6 +305,7 @@ impl Peaks {
                 category: FOLLOWS_SOUND,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "rainbow"),
                     ParamSpec::float("bars", "Bars", 4.0, BANDS as f32, 16.0),
@@ -433,6 +437,7 @@ impl Fireworks {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "rainbow"),
                     ParamSpec::float("size", "Size", 0.2, 1.0, 0.6),
@@ -566,6 +571,7 @@ impl Rings {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("rings", "Rings", 1.0, 8.0, 3.0),
@@ -650,6 +656,7 @@ impl Pinwheel {
                 category: AMBIENT,
                 audio: false,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "rainbow"),
                     ParamSpec::float("arms", "Arms", 2.0, 12.0, 4.0),
@@ -732,6 +739,7 @@ impl Tiles {
                 category: HITS_AND_BEATS,
                 audio: true,
                 flash: FlashUse::None,
+                reacts: &[],
                 params: vec![
                     ParamSpec::palette("palette", "Colours", "neon"),
                     ParamSpec::float("across", "Tiles across", 2.0, 16.0, 6.0),

@@ -35,6 +35,8 @@ export interface EffectInfo {
    */
   flash: "none" | "capped" | "needed";
   params: ParamSpec[];
+  /** What in the sound it reacts to: some of bass, mids, highs, beat, hits, tune, whole; or none. */
+  reacts?: string[];
 }
 
 export interface Palette {
@@ -606,6 +608,9 @@ export interface Library {
   palettes: SavedPalette[];
   /** Moving pictures kept on the engine's computer: GIFs and pieces of video. */
   movies?: MovieEntry[];
+  /** Effects the picker shows first, in order, and ones it keeps out of the way. */
+  pinned_effects?: string[];
+  hidden_effects?: string[];
 }
 
 /** A moving picture there is to choose from. */
@@ -715,7 +720,7 @@ export type Command =
       rotation?: number;
       reverse?: boolean;
     }
-  | { type: "add_layer"; effect: string; group?: number | null }
+  | { type: "add_layer"; effect: string; group?: number | null; targets?: number[] }
   | { type: "remove_layer"; id: number }
   | { type: "arrange_layers"; order: { id: number; group: number | null }[] }
   | { type: "add_layer_group"; name: string; layer?: number }
@@ -824,6 +829,8 @@ export type Command =
   | { type: "edit_scene"; id: number }
   | { type: "finish_edit"; play: boolean; discard?: boolean }
   | { type: "remove_movie"; id: string }
+  | { type: "pin_effect"; effect: string; pinned: boolean }
+  | { type: "hide_effect"; effect: string; hidden: boolean }
   | { type: "add_open_rgb"; address: string }
   | { type: "add_scene_set"; name: string }
   | { type: "rename_scene_set"; id: number; name: string }
@@ -1198,6 +1205,26 @@ export const useFull = () => useSyncExternalStore(fullPref.subscribe, fullPref.g
 /** Building the show, or performing it with the panels out of the way. */
 export type View = "edit" | "live" | "timeline";
 export const viewPref = new Pref<View>("darkrgb.view", "edit");
+
+/** In the Edit view: the stage, or a card for each light as LedFx shows them. */
+export type StageMode = "stage" | "lights";
+export const stageModePref = new Pref<StageMode>("darkrgb.stageMode", "stage");
+export const useStageMode = () => useSyncExternalStore(stageModePref.subscribe, stageModePref.get);
+
+/** The effect whose settings are open in the effects panel, if any. */
+export const openEffect = new Store<number | null>(null);
+export const useOpenEffect = () => useSyncExternalStore(openEffect.subscribe, openEffect.get);
+
+/** Whether an effect plays on a light, as the engine decides it. */
+export function layerHits(layer: Layer, fixture: Fixture): boolean {
+  const shapeOk = layer.only === "any" || (layer.only === "strips") === (fixture.shape.type === "strip");
+  return (
+    shapeOk &&
+    (layer.targets.length === 0 ||
+      layer.targets.includes(fixture.id) ||
+      (fixture.group != null && layer.targets.includes(fixture.group)))
+  );
+}
 export const useView = () => useSyncExternalStore(viewPref.subscribe, viewPref.get);
 
 /** Folders and groups the user has folded shut, by id. */

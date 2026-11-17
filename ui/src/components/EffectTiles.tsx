@@ -2,9 +2,10 @@
 // picture of each, in sections that fold, with a place at the top that
 // says what the effect under the pointer does.
 
-import { Bookmark, ChevronRight, Info, Search, Volume2, Zap } from "lucide-react";
+import { Bookmark, ChevronRight, Eye, EyeOff, Info, Pin, PinOff, Plus, Search, Volume2, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useHello, useLibrary, type EffectInfo, type SavedPattern } from "../engine";
+import { engine, useHello, useLibrary, type EffectInfo, type SavedPattern } from "../engine";
+import { openMenu, SEPARATOR } from "./ContextMenu";
 
 /** The frames the engine drew of one effect. */
 interface Preview {
@@ -122,6 +123,22 @@ interface Tile {
   pick: () => void;
 }
 
+/** The sections the picker adds of its own. */
+const PINNED = "Pinned";
+const HIDDEN = "Hidden by you";
+
+/** What effects can be found by: the engine's names for it, and ours. */
+const REACTS: { id: string; name: string; hint: string }[] = [
+  { id: "bass", name: "Bass", hint: "Effects that react to the kick and the bass" },
+  { id: "mids", name: "Mids", hint: "Effects that react to voices, guitars and keys" },
+  { id: "highs", name: "Highs", hint: "Effects that react to hi-hats, cymbals and the top of the sound" },
+  { id: "beat", name: "The beat", hint: "Effects that move in time with the tempo" },
+  { id: "hits", name: "Hits", hint: "Effects set off by each hit in the sound" },
+  { id: "tune", name: "The tune", hint: "Effects that follow the note being played" },
+  { id: "whole", name: "Loudness", hint: "Effects that follow how loud it is overall" },
+  { id: "none", name: "No sound", hint: "Effects that move by themselves, whatever is playing" },
+];
+
 export function EffectPicker({
   onPick,
   onUse,
@@ -147,8 +164,21 @@ export function EffectPicker({
     }
   };
 
+  const pinnedIds = library.pinned_effects ?? [];
+  const hiddenIds = library.hidden_effects ?? [];
+  const [reacting, setReacting] = useState<string | null>(null);
+
   const sections = useMemo(() => {
     const effects = hello?.effects ?? [];
+    const tileOf = (effect: EffectInfo): Tile => ({
+      key: effect.id,
+      name: effect.name,
+      effect: effect.id,
+      description: effect.description,
+      info: effect,
+      kept: false,
+      pick: () => onPick(effect.id),
+    });
     const describe = (pattern: SavedPattern) =>
       pattern.look
         ? `A look of ${pattern.layers.length} effects. Added as a scene.`
@@ -167,27 +197,50 @@ export function EffectPicker({
         })),
       });
     }
-    for (const category of new Set(effects.map((e) => e.category))) {
-      out.push({
-        name: category,
-        tiles: effects
-          .filter((e) => e.category === category)
-          .map((effect) => ({
-            key: effect.id,
-            name: effect.name,
-            effect: effect.id,
-            description: effect.description,
-            info: effect,
-            kept: false,
-            pick: () => onPick(effect.id),
-          })),
-      });
+    // Pinned ones first, in the order they were pinned.
+    const pinnedTiles = pinnedIds
+      .map((id) => effects.find((e) => e.id === id))
+      .filter((e): e is EffectInfo => e !== undefined)
+      .map(tileOf);
+    if (pinnedTiles.length > 0) out.unshift({ name: PINNED, tiles: pinnedTiles });
+    const visible = effects.filter((e) => !hiddenIds.includes(e.id));
+    for (const category of new Set(visible.map((e) => e.category))) {
+      out.push({ name: category, tiles: visible.filter((e) => e.category === category).map(tileOf) });
     }
+    const hidden = effects.filter((e) => hiddenIds.includes(e.id));
+    if (hidden.length > 0) out.push({ name: HIDDEN, tiles: hidden.map(tileOf) });
     return out;
-  }, [hello, library.patterns, onPick, onUse]);
+  }, [hello, library.patterns, onPick, onUse, pinnedIds, hiddenIds]);
+
+  const pin = (id: string, pinned: boolean) => engine.send({ type: "pin_effect", effect: id, pinned });
+  const hide = (id: string, hidden: boolean) => engine.send({ type: "hide_effect", effect: id, hidden });
+  const tileMenu = (e: React.MouseEvent, tile: Tile) => {
+    if (!tile.info) return;
+    const id = tile.info.id;
+    const isPinned = pinnedIds.includes(id);
+    const isHidden = hiddenIds.includes(id);
+    openMenu(
+      e,
+      [
+        { label: "Use it", icon: <Plus size={13} />, action: tile.pick },
+        { label: "About it", icon: <Info size={13} />, action: () => setPinned(tile.key) },
+        SEPARATOR,
+        isPinned
+          ? { label: "Unpin", icon: <PinOff size={13} />, action: () => pin(id, false) }
+          : { label: "Pin to the top", icon: <Pin size={13} />, action: () => pin(id, true) },
+        isHidden
+          ? { label: "Show it again", icon: <Eye size={13} />, action: () => hide(id, false) }
+          : { label: "Hide it", icon: <EyeOff size={13} />, action: () => hide(id, true) },
+      ],
+      tile.name,
+    );
+  };
 
   const words = search.trim().toLowerCase();
-  const matches = (tile: Tile) => words === "" || `${tile.name} ${tile.description}`.toLowerCase().includes(words);
+  const matches = (tile: Tile) =>
+    (words === "" || `${tile.name} ${tile.description}`.toLowerCase().includes(words)) &&
+    (reacting === null || (tile.info?.reacts ?? []).includes(reacting) || (tile.kept && reacting === null));
+  const filtering = words !== "" || reacting !== null;
   const all = sections.flatMap((s) => s.tiles);
   const shown = all.find((t) => t.key === (hover ?? pinned ?? current));
   const found = all.filter(matches).length;
@@ -234,12 +287,29 @@ export function EffectPicker({
           )}
         </div>
       </div>
-      {words !== "" && found === 0 && <p className="hint">Nothing called that.</p>}
+      <div className="reacts-filter" role="radiogroup" aria-label="Show effects that react to">
+        <span className="hint">Reacts to</span>
+        {REACTS.map((r) => (
+          <button
+            key={r.id}
+            type="button"
+            role="radio"
+            aria-checked={reacting === r.id}
+            className={`chip small${reacting === r.id ? " selected" : ""}`}
+            title={r.hint}
+            onClick={() => setReacting(reacting === r.id ? null : r.id)}
+          >
+            {r.name}
+          </button>
+        ))}
+      </div>
+      {filtering && found === 0 && <p className="hint">{words !== "" ? "Nothing called that." : "None of these react to that."}</p>}
       {sections.map((section) => {
         const tiles = section.tiles.filter(matches);
         if (tiles.length === 0) return null;
-        const folded = words === "" && memory.folded.includes(section.name);
-        const everything = words !== "" || memory.all.includes(section.name) || tiles.length <= FEW;
+        // The hidden ones stay folded until asked for.
+        const folded = !filtering && (section.name === HIDDEN ? !memory.folded.includes(section.name) : memory.folded.includes(section.name));
+        const everything = filtering || memory.all.includes(section.name) || tiles.length <= FEW;
         // The one in use is always among those shown.
         const few = tiles.slice(0, FEW);
         const chosen = tiles.find((t) => t.key === current);
@@ -252,12 +322,13 @@ export function EffectPicker({
                 className="section-toggle"
                 aria-expanded={!folded}
                 onClick={() => remember({ ...memory, folded: toggled(memory.folded, section.name) })}
+                title={section.name === HIDDEN ? "Effects you hid. Right-click one to show it again." : undefined}
               >
                 <ChevronRight size={13} className="chevron" aria-hidden />
                 {section.name}
                 <span className="count">{tiles.length}</span>
               </button>
-              {!folded && words === "" && tiles.length > FEW && (
+              {!folded && !filtering && tiles.length > FEW && (
                 <button
                   type="button"
                   className="text-button"
@@ -275,6 +346,7 @@ export function EffectPicker({
                     className={`effect-tile${tile.key === current ? " selected" : ""}${tile.kept ? " kept" : ""}`}
                     onPointerEnter={() => setHover(tile.key)}
                     onPointerLeave={() => setHover((h) => (h === tile.key ? null : h))}
+                    onContextMenu={(e) => tileMenu(e, tile)}
                   >
                     <button
                       type="button"
@@ -290,6 +362,18 @@ export function EffectPicker({
                         {tile.name}
                       </span>
                     </button>
+                    {tile.info && (
+                      <button
+                        type="button"
+                        className={`tile-pin${pinnedIds.includes(tile.info.id) ? " on" : ""}`}
+                        aria-label={pinnedIds.includes(tile.info.id) ? `Unpin ${tile.name}` : `Pin ${tile.name} to the top`}
+                        aria-pressed={pinnedIds.includes(tile.info.id)}
+                        title={pinnedIds.includes(tile.info.id) ? "Unpin" : "Pin to the top. Right-click for more."}
+                        onClick={() => pin(tile.info!.id, !pinnedIds.includes(tile.info!.id))}
+                      >
+                        <Pin size={12} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="tile-info"

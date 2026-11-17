@@ -35,6 +35,12 @@ pub struct Saved {
     pub patterns: Vec<Pattern>,
     #[serde(default)]
     pub palettes: Vec<SavedPalette>,
+    /// Effects shown first in the picker, by id, in the order pinned.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned_effects: Vec<String>,
+    /// Effects kept out of the picker's sections, by id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_effects: Vec<String>,
 }
 
 /// One effect with its settings, or a whole look of several.

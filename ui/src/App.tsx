@@ -9,7 +9,7 @@ import { ScenesBar } from "./components/ScenesBar";
 import { Settings } from "./components/Settings";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
-import { engine, useConnected, useNeedsCode, useShow, useStatus, useToasts, useView } from "./engine";
+import { engine, useConnected, useNeedsCode, useShow, useStageMode, useStatus, useToasts, useView } from "./engine";
 import { PairScreen } from "./components/PairScreen";
 import { ShapeEditor } from "./components/ShapeEditor";
 import { SceneManager } from "./components/ScenePanel";
@@ -17,6 +17,8 @@ import { Help } from "./components/Help";
 import { TimelineView } from "./components/Timeline";
 import { startSongPlayer } from "./songPlayer";
 import { startKeys } from "./keys";
+import { ContextMenuHost } from "./components/ContextMenu";
+import { LightCards } from "./components/LightCards";
 
 function Toasts() {
   const toasts = useToasts();
@@ -40,6 +42,7 @@ export function App() {
   const show = useShow();
   const status = useStatus();
   const view = useView();
+  const stageMode = useStageMode();
   useEffect(() => engine.connect(), []);
   useEffect(() => startKeys(), []);
   useEffect(() => startSongPlayer(), []);
@@ -68,7 +71,7 @@ export function App() {
       ) : (
         <main className="workspace">
           <DevicePanel />
-          <Stage />
+          {stageMode === "lights" ? <LightCards /> : <Stage />}
           <LayerPanel />
         </main>
       )}
@@ -81,6 +84,7 @@ export function App() {
       <SceneManager />
       <Help />
       <Toasts />
+      <ContextMenuHost />
       {needsCode && <PairScreen />}
       {!connected && !needsCode && (
         <div className="offline" role="alert">

@@ -278,6 +278,7 @@ fn info(
         audio,
         flash,
         params,
+        reacts: &[],
     }
 }
 
