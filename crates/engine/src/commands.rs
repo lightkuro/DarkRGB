@@ -12,7 +12,7 @@ use darkrgb_core::show::{
 use darkrgb_core::timeline::{Clip, ClipKind, MAX_CLIPS, MAX_LENGTH, MIN_CLIP};
 use darkrgb_core::{
     Action, Band, Device, DeviceKind, FlashSettings, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, Link, MidiNote,
-    Mood, Only, Rgb, SceneSet, Shape, Show, Sound, Source, Swatch,
+    Mood, NextWay, NumberKeys, Only, Rgb, SceneSet, Shape, Show, Sound, Source, Swatch, Transition,
 };
 use darkrgb_output::dmx;
 use serde::Deserialize;
@@ -208,7 +208,11 @@ fn checked_clip(show: &Show, start: f32, length: f32, what: ClipKind) -> Result<
             // to do once, not things to hold.
             if matches!(
                 pad.action,
-                Action::Scene { .. } | Action::TapTempo | Action::NextScene | Action::PrevScene
+                Action::Scene { .. }
+                    | Action::TapTempo
+                    | Action::NextScene
+                    | Action::PrevScene
+                    | Action::NextOf { .. }
             ) {
                 return Err("that pad cannot be put on the timeline".into());
             }
@@ -421,6 +425,9 @@ pub enum Command {
         /// How far the pattern is slid along, 0..1.
         #[serde(default)]
         slide: Option<f32>,
+        /// 0..1: how much the pattern is softened.
+        #[serde(default)]
+        blur: Option<f32>,
     },
     /// Gives a layer a label. An empty name goes back to the effect's own.
     RenameLayer {
@@ -633,6 +640,14 @@ pub enum Command {
         /// Take the beat from a MIDI clock when one is arriving.
         #[serde(default)]
         midi_clock: Option<bool>,
+        /// Which scene "next" goes to.
+        #[serde(default)]
+        next: Option<NextWay>,
+        #[serde(default)]
+        number_keys: Option<NumberKeys>,
+        /// How a change of scene looks while it fades.
+        #[serde(default)]
+        transition: Option<Transition>,
     },
     /// Whether autopilot may switch to a scene.
     SetSceneAuto {
@@ -788,9 +803,12 @@ pub enum Command {
         id: u32,
     },
     /// Ends that: the changes are kept in the scene, and either it goes
-    /// onto the lights or the panel returns to what the lights play.
+    /// onto the lights or the panel returns to what the lights play. With
+    /// `discard` the changes are thrown away instead.
     FinishEdit {
         play: bool,
+        #[serde(default)]
+        discard: bool,
     },
     AddSceneSet {
         name: String,
@@ -851,6 +869,10 @@ pub enum Command {
         /// The LEDs run up and down the columns, not along the rows.
         #[serde(default)]
         vertical: Option<bool>,
+        /// The device puts its LEDs in order itself, so none of the
+        /// above is applied.
+        #[serde(default)]
+        by_device: Option<bool>,
     },
     RecallScene {
         id: u32,
@@ -1772,12 +1794,14 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             hue,
             blocks,
             slide,
+            blur,
         } => {
             let angle = angle.map(|a| finite(a, "The angle")).transpose()?;
             let spin = spin.map(|s| finite(s, "The spin")).transpose()?;
             let spread = spread.map(|s| finite(s, "The spread")).transpose()?;
             let hue = hue.map(|h| finite(h, "The hue")).transpose()?;
             let slide = slide.map(|s| finite(s, "The slide")).transpose()?;
+            let blur = blur.map(|b| finite(b, "The blur")).transpose()?;
             if blocks.is_some_and(|b| b > 64) {
                 return Err("a pattern can be made of at most 64 blocks".into());
             }
@@ -1867,6 +1891,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(s) = slide {
                 layer.slide = s.rem_euclid(1.0);
+            }
+            if let Some(b) = blur {
+                layer.blur = b.clamp(0.0, 1.0);
             }
             Ok(())
         }
@@ -2098,6 +2125,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 | Action::Hit
                 | Action::NextScene
                 | Action::PrevScene
+                | Action::NextOf { .. }
                 | Action::Freeze
                 | Action::Downbeat => true,
             };
@@ -2174,6 +2202,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             shuffle,
             on_drops,
             midi_clock,
+            next,
+            number_keys,
+            transition,
         } => {
             let fade = fade.map(|f| finite(f, "The fade time")).transpose()?;
             let speed = speed.map(|s| finite(s, "The speed")).transpose()?;
@@ -2200,6 +2231,15 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(on) = midi_clock {
                 show.live.midi_clock = *on;
+            }
+            if let Some(way) = next {
+                show.live.next = *way;
+            }
+            if let Some(keys) = number_keys {
+                show.live.number_keys = *keys;
+            }
+            if let Some(kind) = transition {
+                show.live.transition = *kind;
             }
             Ok(())
         }
@@ -2704,6 +2744,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             serpentine,
             start,
             vertical,
+            by_device,
         } => {
             let f = show
                 .fixtures
@@ -2721,6 +2762,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             }
             if let Some(v) = vertical {
                 f.wiring.vertical = *v;
+            }
+            if let Some(d) = by_device {
+                f.wiring.by_device = *d;
             }
             Ok(())
         }
@@ -3088,6 +3132,7 @@ mod tests {
             chain: None,
             blocks: None,
             slide: None,
+            blur: None,
         };
         apply(&mut show, &turn(Some(45.0), Some(20.0), Some(true))).unwrap();
         let l = &show.layers[0];
@@ -3762,6 +3807,7 @@ mod tests {
             chain: None,
             blocks: None,
             slide: None,
+            blur: None,
         };
         // Same effect: settings stay.
         apply(&mut show, &update("flow")).unwrap();
@@ -4179,6 +4225,7 @@ mod tests {
                     chain: None,
                     blocks: None,
                     slide: None,
+                    blur: None,
                 },
             )
         };
@@ -4431,6 +4478,9 @@ mod tests {
                 shuffle: None,
                 on_drops: None,
                 midi_clock: None,
+                next: None,
+                number_keys: None,
+                transition: None,
             },
         )
         .unwrap();
@@ -4512,6 +4562,7 @@ mod tests {
             chain: None,
             blocks: None,
             slide: None,
+            blur: None,
         };
         assert!(apply(&mut show, &target(vec![9999])).is_err());
         apply(&mut show, &target(vec![fixture, fixture])).unwrap();
@@ -4635,6 +4686,7 @@ mod tests {
                         ][r.next() as usize % 4]
                     }),
                     vertical: r.maybe(Awkward::flag),
+                    by_device: r.maybe(Awkward::flag),
                 },
                 62 => Command::UpdateScene { id: scene_id },
                 63 => Command::AddScene { name: r.text() },
@@ -4774,8 +4826,11 @@ mod tests {
                         ["KeyA", "KeyB", "Digit1", "Space", "Escape", "", "Keyzz"][r.next() as usize % 7].into()
                     }),
                     label: r.text(),
-                    action: match r.next() % 10 {
+                    action: match r.next() % 11 {
                         0 => Action::Scene { id: scene },
+                        9 => Action::NextOf {
+                            mood: [Mood::Calm, Mood::Steady, Mood::Big][r.next() as usize % 3],
+                        },
                         1 => Action::Layer { id: layer },
                         2 => Action::LayerGroup { id: folder },
                         3 => Action::LightGroup { id: group },
@@ -4817,6 +4872,9 @@ mod tests {
                     shuffle: r.maybe(Awkward::flag),
                     on_drops: r.maybe(Awkward::flag),
                     midi_clock: None,
+                    next: None,
+                    number_keys: None,
+                    transition: None,
                 },
                 39 => Command::SetSceneAuto {
                     id: scene,
@@ -4851,7 +4909,7 @@ mod tests {
                 },
                 46 => Command::SetSceneMood {
                     id: scene,
-                    mood: [Mood::Any, Mood::Calm, Mood::Big][r.next() as usize % 3],
+                    mood: [Mood::Any, Mood::Calm, Mood::Steady, Mood::Big][r.next() as usize % 4],
                 },
                 47 => Command::SetIdle {
                     scene: r.maybe(|_| scene),
@@ -5015,6 +5073,7 @@ mod tests {
                     chain: r.maybe(Awkward::flag),
                     blocks: r.maybe(|r| [0, 1, 2, 64, 65, 255][r.next() as usize % 6]),
                     slide: r.maybe(Awkward::number),
+                    blur: r.maybe(Awkward::number),
                 },
                 5 => Command::RemoveDevice { id: device },
                 6 | 7 => Command::SetParam {
@@ -5369,6 +5428,7 @@ mod tests {
                 chain: None,
                 blocks: None,
                 slide: None,
+                blur: None,
             },
         )
         .unwrap();

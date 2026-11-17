@@ -361,6 +361,9 @@ pub struct Live {
     pub on_air: Option<(Vec<darkrgb_core::Layer>, Vec<darkrgb_core::LayerGroup>)>,
     /// The scene being changed out of sight.
     pub editing: Option<u32>,
+    /// That scene's effects and folders as they were when its changing
+    /// began, to go back to if the changes are thrown away.
+    pub editing_from: Option<(Vec<darkrgb_core::Layer>, Vec<darkrgb_core::LayerGroup>)>,
     /// Hits fired by hand for single layers: when the last one was, and
     /// how many there have been. Kept, because an effect tells a new hit
     /// by the count going up.
@@ -635,23 +638,11 @@ impl Live {
         // Scenes say which parts of a song they suit. In a big part the
         // calm ones are passed over, and in a quiet part the big ones,
         // as long as that leaves something to change to.
-        let energy = if features.active { features.intensity } else { 0.5 };
-        let part = if features.drop > 0.5 || energy > 0.75 {
-            Mood::Big
-        } else if energy < 0.35 {
-            Mood::Calm
-        } else {
-            Mood::Any
-        };
-        let suits = |mood: Mood| match part {
-            Mood::Big => mood != Mood::Calm,
-            Mood::Calm => mood != Mood::Big,
-            Mood::Any => true,
-        };
+        let part = Mood::of_song(features);
         let fitting: Vec<u32> = show
             .scenes
             .iter()
-            .filter(|s| s.auto && suits(s.mood) && Some(s.id) != current)
+            .filter(|s| s.auto && show.in_use(s) && show.suits(s.mood, part) && Some(s.id) != current)
             .map(|s| s.id)
             .collect();
         let usable = if fitting.is_empty() { usable } else { fitting };
@@ -932,6 +923,7 @@ impl Live {
                 | Action::Hit
                 | Action::NextScene
                 | Action::PrevScene
+                | Action::NextOf { .. }
                 | Action::Freeze
                 | Action::Downbeat => {}
             }

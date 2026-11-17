@@ -149,7 +149,7 @@ export interface Fixture {
   /** The path runs on from its last corner to its first. */
   closed?: boolean;
   /** For a matrix: the corner its first LED is in, and whether its LEDs run in columns. Left out when usual. */
-  wiring?: { start?: Corner; vertical?: boolean };
+  wiring?: { start?: Corner; vertical?: boolean; by_device?: boolean };
 }
 
 /** A corner of a matrix, seen with the matrix the right way up. */
@@ -184,6 +184,7 @@ export type Action =
   | { type: "hit" }
   | { type: "next_scene" }
   | { type: "prev_scene" }
+  | { type: "next_of"; mood: Mood }
   | { type: "freeze" }
   | { type: "downbeat" }
   | { type: "colours"; id: number };
@@ -269,6 +270,8 @@ export interface Layer {
   blocks?: number;
   /** How far the pattern is slid along, 0 to 1. */
   slide?: number;
+  /** How much the pattern is softened, 0 to 1. */
+  blur?: number;
   /** Kept to strips or to matrices, among whatever it plays on. */
   only: Only;
   /** Settings that follow something. Left out when there are none. */
@@ -317,7 +320,23 @@ export function inUse(show: Show, scene: Scene): boolean {
 }
 
 /** The parts of a song a scene suits. */
-export type Mood = "any" | "calm" | "big";
+export type Mood = "any" | "calm" | "steady" | "big";
+
+/** Which scene Next goes to: the next in the list, the next of the same kind, or one that suits the song now. */
+export type NextWay = "order" | "alike" | "song";
+
+/** What the number keys play: each scene's own key, or the scenes of the set in use by their place. */
+export type NumberKeys = "own" | "set";
+
+/** How a change of scene looks while it fades. */
+export type Transition = "fade" | "brighten" | "through_black" | "through_white" | "wipe" | "iris" | "dissolve";
+
+/** The part of the song that is playing, by how big it is: the engine uses the same limits. */
+export function partOfSong(audio: { intensity: number; drop: number; active: boolean }): Mood {
+  const energy = audio.active ? audio.intensity : 0.5;
+  if (audio.drop > 0.5 || energy > 0.75) return "big";
+  return energy < 0.35 ? "calm" : "steady";
+}
 
 export interface Show {
   version: number;
@@ -365,6 +384,12 @@ export interface Show {
     colours?: number;
     /** Take the beat from a MIDI clock when one is arriving. */
     midi_clock?: boolean;
+    /** Which scene Next goes to. Absent: the next in the list. */
+    next?: NextWay;
+    /** What the number keys play. Absent: each scene's own key. */
+    number_keys?: NumberKeys;
+    /** How a change of scene looks while it fades. Absent: a plain fade. */
+    transition?: Transition;
   };
   output: {
     frame_rate: number;
@@ -690,7 +715,10 @@ export type Command =
       every_bars?: number;
       shuffle?: boolean;
       on_drops?: boolean;
-  midi_clock?: boolean;
+      midi_clock?: boolean;
+      next?: NextWay;
+      number_keys?: NumberKeys;
+      transition?: Transition;
     }
   | { type: "set_output"; frame_rate?: number }
   | { type: "set_flash"; limit?: number; strict?: boolean; decided?: boolean }
@@ -722,6 +750,7 @@ export type Command =
       chain?: boolean;
       blocks?: number;
       slide?: number;
+      blur?: number;
       only?: Only;
       angle?: number;
       spin?: number;
@@ -758,7 +787,7 @@ export type Command =
   | { type: "add_scene"; name: string }
   | { type: "add_look"; name: string }
   | { type: "edit_scene"; id: number }
-  | { type: "finish_edit"; play: boolean }
+  | { type: "finish_edit"; play: boolean; discard?: boolean }
   | { type: "add_scene_set"; name: string }
   | { type: "rename_scene_set"; id: number; name: string }
   | { type: "remove_scene_set"; id: number }
@@ -768,7 +797,7 @@ export type Command =
   | { type: "split_strip"; fixture: number; parts: number[] }
   | { type: "join_strip"; device: number }
   | { type: "reshape"; fixture: number; shape: { type: "strip"; count: number } | { type: "matrix"; cols: number; rows: number } }
-  | { type: "set_wiring"; fixture: number; serpentine?: boolean; start?: Corner; vertical?: boolean }
+  | { type: "set_wiring"; fixture: number; serpentine?: boolean; start?: Corner; vertical?: boolean; by_device?: boolean }
   | { type: "delete_scene"; id: number }
   | { type: "rename_show"; name: string }
   | { type: "dismiss_notice" };

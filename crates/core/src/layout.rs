@@ -365,6 +365,11 @@ pub struct Wiring {
     pub start: Corner,
     #[serde(default)]
     pub vertical: bool,
+    /// The device itself puts the LEDs in order (WLED with its own 2D
+    /// set-up): it is sent plain rows from the top left, whatever the
+    /// rest of this says.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub by_device: bool,
 }
 
 impl Wiring {
@@ -491,7 +496,16 @@ impl Fixture {
                 let mut out = Vec::with_capacity((cols * rows) as usize);
                 // The LEDs run in lines: rows, or columns when wired up
                 // and down. A snaked matrix turns back on every other line.
-                let Wiring { start, vertical } = self.wiring;
+                let Wiring {
+                    start,
+                    vertical,
+                    by_device,
+                } = self.wiring;
+                let (start, vertical, serpentine) = if by_device {
+                    (Corner::TopLeft, false, false)
+                } else {
+                    (start, vertical, serpentine)
+                };
                 let (lines, per_line) = if vertical { (cols, rows) } else { (rows, cols) };
                 let from_right = matches!(start, Corner::TopRight | Corner::BottomRight);
                 let from_bottom = matches!(start, Corner::BottomLeft | Corner::BottomRight);
@@ -548,11 +562,26 @@ mod tests {
                 serpentine,
             });
             (f.width, f.height) = (3.0, 2.0);
-            f.wiring = Wiring { start, vertical };
-            f.pixel_positions()
+            f.wiring = Wiring {
+                start,
+                vertical,
+                by_device: false,
+            };
+            let mine: Vec<(i32, i32)> = f
+                .pixel_positions()
                 .iter()
                 .map(|[x, y]| ((x - 9.0).round() as i32, (y - 4.5).round() as i32))
-                .collect()
+                .collect();
+            // Left to the device, none of it applies: plain rows from
+            // the top left.
+            f.wiring.by_device = true;
+            let plain: Vec<[f32; 2]> = f.pixel_positions();
+            f.wiring = Wiring::default();
+            if let Shape::Matrix { serpentine, .. } = &mut f.shape {
+                *serpentine = false;
+            }
+            assert_eq!(plain, f.pixel_positions());
+            mine
         };
         use Corner::*;
         // Plain: row by row from the top left.

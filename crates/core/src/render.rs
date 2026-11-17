@@ -8,7 +8,7 @@ use crate::effect::{Effect, FlashUse, FrameCtx};
 use crate::effects;
 use crate::layout::{Fixture, Shape};
 use crate::params::{ParamKind, ParamReader, ParamSpec, ParamValue, Params};
-use crate::show::{Blend, Layer, Show};
+use crate::show::{Blend, Layer, Show, Transition};
 use crate::show::{LINK_ANGLE, LINK_HUE, LINK_STRENGTH, Link, Mirror};
 
 /// A hit fired by hand for one layer.
@@ -126,6 +126,28 @@ impl Fold {
         (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))
     }
 }
+
+/// Where a softened pattern is looked at around each place, and how much
+/// each look counts: along a line of lights, and on lights with an area.
+/// Offsets are in blur widths; the weights add up to one.
+const BLUR_LINE: [(f32, f32, f32); 5] = [
+    (-1.0, 0.0, 1.0 / 16.0),
+    (-0.5, 0.0, 4.0 / 16.0),
+    (0.0, 0.0, 6.0 / 16.0),
+    (0.5, 0.0, 4.0 / 16.0),
+    (1.0, 0.0, 1.0 / 16.0),
+];
+const BLUR_PLANE: [(f32, f32, f32); 9] = [
+    (0.0, 0.0, 4.0 / 16.0),
+    (-0.6, 0.0, 2.0 / 16.0),
+    (0.6, 0.0, 2.0 / 16.0),
+    (0.0, -0.6, 2.0 / 16.0),
+    (0.0, 0.6, 2.0 / 16.0),
+    (-0.7, -0.7, 1.0 / 16.0),
+    (0.7, -0.7, 1.0 / 16.0),
+    (-0.7, 0.7, 1.0 / 16.0),
+    (0.7, 0.7, 1.0 / 16.0),
+];
 
 /// Every colour shifted round the colour wheel by an angle. How strong
 /// and how pure a colour is stay as they were, so red becomes an equally
@@ -419,6 +441,8 @@ impl Renderer {
             state.effect.update(&ctx);
             // "Brightness follows sound": dim the layer by how quiet its
             // part of the sound is. Zero leaves the effect as it is.
+            // The widest blur reaches this share of the pattern each way.
+            let blur = layer.blur.clamp(0.0, 1.0) * 0.12;
             let pulse = layer.sound.pulse.clamp(0.0, 1.0);
             let follow = 1.0 - pulse + pulse * heard.level;
             for (nth, segment) in state.segments.iter().enumerate() {
@@ -458,7 +482,19 @@ impl Renderer {
                         Some(fold) => fold.apply(x, y),
                         None => (x, y),
                     };
-                    let mut src = state.effect.shade(x, y, &ctx).clamp();
+                    let mut src = if blur > 0.0 {
+                        // Softened: a mix of what is around this place in
+                        // the pattern, the place itself counting most.
+                        let taps: &[(f32, f32, f32)] = if segment.flat { &BLUR_LINE } else { &BLUR_PLANE };
+                        let mut sum = Rgb::BLACK;
+                        for (dx, dy, weight) in taps {
+                            let (sx, sy) = ((x + dx * blur).clamp(0.0, 1.0), (y + dy * blur).clamp(0.0, 1.0));
+                            sum = sum.add(state.effect.shade(sx, sy, &ctx).clamp().scale(*weight));
+                        }
+                        sum.clamp()
+                    } else {
+                        state.effect.shade(x, y, &ctx).clamp()
+                    };
                     if let Some(hue) = &hue {
                         src = hue.apply(src).clamp();
                     }
@@ -522,6 +558,63 @@ impl Renderer {
         let amount = amount.clamp(0.0, 1.0);
         for (px, from) in self.frame.iter_mut().zip(other) {
             *px = px.lerp(*from, amount);
+        }
+    }
+
+    /// Lets the scene being left show through the last rendered frame.
+    /// `left` is that scene's frame and `t` how far the change has got,
+    /// 0 at its start and 1 when the new scene has taken over. Does
+    /// nothing if the sizes differ.
+    pub fn change_from(&mut self, left: &[Rgb], t: f32, kind: Transition) {
+        if left.len() != self.frame.len() {
+            return;
+        }
+        let t = t.clamp(0.0, 1.0);
+        // Ease in and out, so the change has no hard edge in time.
+        let eased = t * t * (3.0 - 2.0 * t);
+        // The stage's box, for the changes that travel across it.
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        if matches!(kind, Transition::Wipe | Transition::Iris) {
+            for p in &self.positions {
+                for axis in 0..2 {
+                    lo[axis] = lo[axis].min(p[axis]);
+                    hi[axis] = hi[axis].max(p[axis]);
+                }
+            }
+        }
+        let (width, height) = ((hi[0] - lo[0]).max(1e-3), (hi[1] - lo[1]).max(1e-3));
+        let centre = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+        let reach = (width * width + height * height).sqrt() / 2.0;
+        // How wide the soft edge of a travelling change is, as a share
+        // of the way it travels.
+        const EDGE: f32 = 0.2;
+        // How much of the new scene shows at a place `along` the way
+        // (0 where the change starts, 1 where it ends).
+        let passed = |along: f32| ((eased * (1.0 + EDGE) - along) / EDGE).clamp(0.0, 1.0);
+        for (i, (px, old)) in self.frame.iter_mut().zip(left).enumerate() {
+            *px = match kind {
+                Transition::Fade => old.lerp(*px, eased),
+                Transition::Brighten => old
+                    .scale((2.0 - 2.0 * eased).min(1.0))
+                    .max(px.scale((2.0 * eased).min(1.0))),
+                Transition::ThroughBlack if t < 0.5 => old.scale(1.0 - 2.0 * t),
+                Transition::ThroughBlack => px.scale(2.0 * t - 1.0),
+                Transition::ThroughWhite if t < 0.5 => old.lerp(Rgb::WHITE, 2.0 * t),
+                Transition::ThroughWhite => Rgb::WHITE.lerp(*px, 2.0 * t - 1.0),
+                Transition::Wipe => old.lerp(*px, passed((self.positions[i][0] - lo[0]) / width)),
+                Transition::Iris => {
+                    let (dx, dy) = (self.positions[i][0] - centre[0], self.positions[i][1] - centre[1]);
+                    old.lerp(*px, passed((dx * dx + dy * dy).sqrt() / reach))
+                }
+                // Each LED changes over at a moment of its own.
+                Transition::Dissolve => {
+                    if crate::effect::hash2(i as u32, 0x51ED) < t {
+                        *px
+                    } else {
+                        *old
+                    }
+                }
+            };
         }
     }
 
@@ -1383,6 +1476,47 @@ mod tests {
     }
 
     #[test]
+    fn a_pattern_can_be_softened() {
+        use crate::layout::Shape;
+        // A two-colour picture, half red and half blue, on a strip and
+        // on a matrix.
+        for shape in [
+            Shape::Strip {
+                count: 40,
+                reverse: false,
+            },
+            Shape::Matrix {
+                cols: 40,
+                rows: 4,
+                serpentine: false,
+            },
+        ] {
+            let mut show = Show::default();
+            show.layers.clear();
+            let id = show.add_layer("picture");
+            show.layer_mut(id)
+                .unwrap()
+                .params
+                .insert("picture".into(), ParamValue::Text("2x1:/wAAAAD/".into()));
+            show.add_virtual("light", &shape, false);
+            let sharp = render(&show).1;
+            assert!(sharp[19].r > 0.99 && sharp[20].r < 0.01, "a hard edge to begin with");
+            show.layers[0].blur = 1.0;
+            let soft = render(&show).1;
+            // Far from the edge nothing has changed.
+            assert!(soft[0].r > 0.99 && soft[0].b < 0.01 && soft[39].b > 0.99);
+            // At the edge the two colours run into each other, and red
+            // falls away steadily across it.
+            assert!(soft[19].b > 0.1 && soft[20].r > 0.1, "{:?} {:?}", soft[19], soft[20]);
+            let across: Vec<f32> = soft[14..26].iter().map(|c| c.r).collect();
+            assert!(across.windows(2).all(|w| w[1] <= w[0] + 1e-6), "{across:?}");
+            // No light is gained or lost by softening.
+            let total = |frame: &[Rgb]| frame[..40].iter().map(|c| c.r + c.b).sum::<f32>();
+            assert!((total(&soft) - total(&sharp)).abs() < 0.5);
+        }
+    }
+
+    #[test]
     fn layers_blend_in_order() {
         let mut show = solid_show("#400000");
         show.add_device(device(1), None);
@@ -1496,6 +1630,59 @@ mod tests {
         // A frame of another size is ignored instead of panicking.
         r.mix_in(&[Rgb::BLACK], 1.0);
         assert!((r.frame()[1].r - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_change_of_scene_can_look_seven_ways() {
+        // Ten LEDs in a row, the new scene white and the old one red.
+        let mut show = solid_show("#ffffff");
+        show.add_device(device(10), None);
+        let red = [Rgb::new(1.0, 0.0, 0.0); 10];
+        let at = |kind, t: f32| {
+            let (mut r, _) = render(&show);
+            r.change_from(&red, t, kind);
+            r.frame().to_vec()
+        };
+        let all = [
+            Transition::Fade,
+            Transition::Brighten,
+            Transition::ThroughBlack,
+            Transition::ThroughWhite,
+            Transition::Wipe,
+            Transition::Iris,
+            Transition::Dissolve,
+        ];
+        // Every kind starts on the old scene and ends on the new one.
+        for kind in all {
+            assert_eq!(at(kind, 0.0), red, "{kind:?} starts on the old scene");
+            assert_eq!(at(kind, 1.0), [Rgb::WHITE; 10], "{kind:?} ends on the new scene");
+            for px in at(kind, 0.37) {
+                assert!([px.r, px.g, px.b].iter().all(|c| (0.0..=1.0).contains(c)));
+            }
+        }
+        let half = |kind| at(kind, 0.5);
+        // A fade is the same mix everywhere.
+        assert!(half(Transition::Fade).iter().all(|px| (px.g - 0.5).abs() < 1e-5));
+        // Brightening never dips below either scene.
+        assert!(half(Transition::Brighten).iter().all(|px| px.r >= 0.999 && px.g >= 0.999));
+        // Through black is dark half way, through white is white.
+        assert!(half(Transition::ThroughBlack).iter().all(|px| px.r < 1e-5 && px.g < 1e-5));
+        assert_eq!(half(Transition::ThroughWhite), [Rgb::WHITE; 10]);
+        // A wipe has reached the left end and not the right.
+        let wipe = half(Transition::Wipe);
+        assert!(wipe[0].g > 0.99 && wipe[9].g < 0.01, "{wipe:?}");
+        // An iris has reached the middle and not the ends.
+        let iris = half(Transition::Iris);
+        assert!(iris[4].g > 0.99 && iris[0].g < 0.01 && iris[9].g < 0.01, "{iris:?}");
+        // A dissolve has changed some LEDs outright and not others.
+        let dissolve = half(Transition::Dissolve);
+        let changed = dissolve.iter().filter(|px| px.g > 0.99).count();
+        assert!((2..=8).contains(&changed), "{changed} of 10 changed over");
+        assert!(dissolve.iter().all(|px| px.g > 0.99 || px.g < 0.01));
+        // A frame of another size is ignored instead of panicking.
+        let (mut r, _) = render(&show);
+        r.change_from(&red[..3], 0.5, Transition::Fade);
+        assert_eq!(r.frame(), [Rgb::WHITE; 10]);
     }
 
     #[test]

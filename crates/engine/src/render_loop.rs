@@ -318,9 +318,7 @@ fn frames(shared: &Arc<Shared>, stop: &AtomicBool) {
                 fade = None;
             } else {
                 leaving.from.render_with(&leaving.show, time, dt, &audio, &cues);
-                // Ease in and out, so the change has no hard edge.
-                let eased = t * t * (3.0 - 2.0 * t);
-                renderer.mix_in(leaving.from.frame(), 1.0 - eased);
+                renderer.change_from(leaving.from.frame(), t, show.live.transition);
             }
         }
         // Last of all, so nothing can get around it: the flash limit.

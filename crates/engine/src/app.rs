@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use axum::body::Bytes;
 use darkrgb_audio::{AudioCapture, InputDevice};
 use darkrgb_core::timeline::{Clip, ClipKind, MAX_CLIPS, MIN_CLIP, SONG_TYPES, Song, song_file_ok};
-use darkrgb_core::{Action, AudioFeatures, Device, KeyMode, Kind, KnobTarget, Launch, Only, Show};
+use darkrgb_core::{Action, AudioFeatures, Device, KeyMode, Kind, KnobTarget, Launch, Mood, NextWay, Only, Show};
 use darkrgb_output::scan::{self, LocalNetwork};
 use darkrgb_output::{DeviceStats, wled};
 use serde::Serialize;
@@ -308,7 +308,7 @@ impl Shared {
                 to: crate::commands::ConnectTo::Wled { address },
             } => return self.connect_wled(*device, address),
             Command::EditScene { id } => return self.edit_scene(*id),
-            Command::FinishEdit { play } => return self.finish_edit(*play),
+            Command::FinishEdit { play, discard } => return self.finish_edit(*play, *discard),
             Command::ScanNetwork { prefix } => return self.scan_network(prefix),
             Command::Trigger { binding, down } => return self.trigger(*binding, *down),
             Command::Perform { action } => return self.perform(*action),
@@ -770,6 +770,9 @@ impl Shared {
                     shuffle: None,
                     on_drops: None,
                     midi_clock: None,
+                    next: None,
+                    number_keys: None,
+                    transition: None,
                 },
                 KnobTarget::Sensitivity => Command::SetAudio {
                     source: None,
@@ -989,7 +992,11 @@ impl Shared {
         // are things to do, not things to hold.
         let never = matches!(
             action,
-            Action::Scene { .. } | Action::TapTempo | Action::NextScene | Action::PrevScene
+            Action::Scene { .. }
+                | Action::TapTempo
+                | Action::NextScene
+                | Action::PrevScene
+                | Action::NextOf { .. }
         );
         if !recording || never {
             return false;
@@ -1293,20 +1300,35 @@ impl Shared {
     fn perform(self: &Arc<Self>, action: Action) -> Result<Option<String>, String> {
         match action {
             Action::Scene { id } => self.recall_scene(id),
-            Action::NextScene | Action::PrevScene => {
-                let step = if action == Action::NextScene { 1 } else { -1 };
+            Action::NextScene | Action::PrevScene | Action::NextOf { .. } => {
+                let step = if action == Action::PrevScene { -1 } else { 1 };
+                let part = Mood::of_song(&self.features());
                 // Count from a scene that is still waiting for its beat, so
                 // quick presses step on instead of asking for the same one.
-                let (waiting, last) = {
+                // While a scene is being changed out of sight the show
+                // holds that scene, not the one the lights are on.
+                let (waiting, last, blind) = {
                     let live = self.live.lock().unwrap();
-                    (live.pending.map(|p| p.scene), live.last_scene)
+                    (live.pending.map(|p| p.scene), live.last_scene, live.on_air.is_some())
                 };
                 let next = {
                     let show = self.show.lock().unwrap();
-                    let count = show.scenes.len() as i32;
-                    match waiting.and_then(|id| show.scenes.iter().position(|s| s.id == id)) {
-                        Some(at) => Some(show.scenes[(at as i32 + step).rem_euclid(count) as usize].id),
-                        None => show.scene_after(last, step),
+                    let playing = if blind { last } else { show.current_scene().or(last) };
+                    let from = waiting.or(playing);
+                    let mood = from.and_then(|id| show.scenes.iter().find(|s| s.id == id)).map(|s| s.mood);
+                    let way = show.live.next;
+                    let chosen = match action {
+                        Action::NextOf { mood } => show.scene_step(from, step, |s| s.mood == mood),
+                        _ if way == NextWay::Alike => show.scene_step(from, step, |s| Some(s.mood) == mood),
+                        _ if way == NextWay::Song => show.scene_step(from, step, |s| show.suits(s.mood, part)),
+                        _ => None,
+                    };
+                    // A way of choosing that finds nothing falls back on
+                    // the order of the list; a pad for one kind of scene
+                    // does nothing when there is none of that kind.
+                    match action {
+                        Action::NextOf { .. } => chosen,
+                        _ => chosen.or_else(|| show.scene_step(from, step, |_| true)),
                     }
                 };
                 match next {
@@ -1364,6 +1386,7 @@ impl Shared {
             | Action::Hit
             | Action::NextScene
             | Action::PrevScene
+            | Action::NextOf { .. }
             | Action::Freeze
             | Action::Downbeat => None,
         };
@@ -1507,7 +1530,7 @@ impl Shared {
             let live = self.live.lock().unwrap();
             (live.on_air.clone(), live.editing)
         };
-        let (before, playing) = {
+        let before_playing = {
             let mut show = self.show.lock().unwrap();
             if !show.scenes.iter().any(|s| s.id == id) {
                 return Err("that scene no longer exists".into());
@@ -1519,13 +1542,16 @@ impl Shared {
                 let _ = crate::commands::apply(&mut show, &Command::UpdateScene { id: editing });
             }
             let playing = on_air.unwrap_or_else(|| (show.layers.clone(), show.layer_groups.clone()));
+            let from = show.scenes.iter().find(|s| s.id == id).map(|s| (s.layers.clone(), s.groups.clone()));
             show.recall_scene(id);
-            (before, playing)
+            (before, playing, from)
         };
+        let (before, playing, from) = before_playing;
         {
             let mut live = self.live.lock().unwrap();
             live.on_air = Some(playing);
             live.editing = Some(id);
+            live.editing_from = from;
         }
         self.history.lock().unwrap().remember_other(before);
         self.bump();
@@ -1535,11 +1561,16 @@ impl Shared {
 
     /// Ends the changing of a scene out of sight. What was changed is
     /// kept in the scene. With `play` the scene goes onto the lights;
-    /// without, the effects panel returns to what the lights play.
-    fn finish_edit(&self, play: bool) -> Result<Option<String>, String> {
-        let (on_air, editing) = {
+    /// without, the effects panel returns to what the lights play. With
+    /// `discard` nothing is kept: the scene goes back to what it was
+    /// when its changing began.
+    fn finish_edit(&self, play: bool, discard: bool) -> Result<Option<String>, String> {
+        if play && discard {
+            return Err("changes cannot be thrown away and put on the lights at once".into());
+        }
+        let (on_air, editing, from) = {
             let mut live = self.live.lock().unwrap();
-            (live.on_air.take(), live.editing.take())
+            (live.on_air.take(), live.editing.take(), live.editing_from.take())
         };
         let Some((layers, groups)) = on_air else {
             return Err("no scene is being changed out of sight".into());
@@ -1548,7 +1579,14 @@ impl Shared {
             let mut show = self.show.lock().unwrap();
             let before = show.clone();
             let kept = editing.filter(|id| show.scenes.iter().any(|s| s.id == *id));
-            if let Some(id) = kept {
+            if discard {
+                // Anything kept in the scene along the way goes too.
+                if let (Some(id), Some((layers, groups))) = (kept, from)
+                    && let Some(scene) = show.scenes.iter_mut().find(|s| s.id == id)
+                {
+                    (scene.layers, scene.groups) = (layers, groups);
+                }
+            } else if let Some(id) = kept {
                 let _ = crate::commands::apply(&mut show, &Command::UpdateScene { id });
             }
             if !play {
@@ -2177,6 +2215,7 @@ mod tests {
             chain: None,
             blocks: None,
             slide: None,
+            blur: None,
         })
         .unwrap();
         run(Command::SetLink {

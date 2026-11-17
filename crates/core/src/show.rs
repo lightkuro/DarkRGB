@@ -346,6 +346,10 @@ pub struct Layer {
     /// round again at the end.
     #[serde(default, skip_serializing_if = "is_nought")]
     pub slide: f32,
+    /// How much the pattern is softened, 0..1: each place shows a mix of
+    /// what is around it in the pattern. Nought leaves it sharp.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub blur: f32,
 }
 
 fn once() -> u8 {
@@ -364,8 +368,75 @@ pub enum Mood {
     Any,
     /// For breakdowns and quiet stretches.
     Calm,
+    /// For the parts in between: verses, a groove that is neither.
+    Steady,
     /// For drops and the loud parts.
     Big,
+}
+
+impl Mood {
+    /// The part of a song that is playing, from how big it is against
+    /// the last minute or so. Never `Any`.
+    pub fn of_song(features: &AudioFeatures) -> Mood {
+        let energy = if features.active { features.intensity } else { 0.5 };
+        if features.drop > 0.5 || energy > 0.75 {
+            Mood::Big
+        } else if energy < 0.35 {
+            Mood::Calm
+        } else {
+            Mood::Steady
+        }
+    }
+}
+
+/// Which scene "next" goes to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NextWay {
+    /// The one after it in the list.
+    #[default]
+    Order,
+    /// The next one for the same part of a song as the one playing.
+    Alike,
+    /// The next one that suits the part of the song playing now.
+    Song,
+}
+
+/// How one scene gives way to the next while the change fades.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Transition {
+    /// One fades out as the other fades in.
+    #[default]
+    Fade,
+    /// The new scene comes up on top of the old, which then fades away:
+    /// never darker than either.
+    Brighten,
+    /// Down to black, then up into the new scene.
+    ThroughBlack,
+    /// Up to white, then down into the new scene.
+    ThroughWhite,
+    /// The new scene crosses the stage from the left behind a soft edge.
+    Wipe,
+    /// The new scene opens out from the middle of the stage.
+    Iris,
+    /// LED by LED, in no order.
+    Dissolve,
+}
+
+/// What the number keys play.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NumberKeys {
+    /// Each scene has a key of its own, whichever set is in use.
+    #[default]
+    Own,
+    /// Key 1 plays the first scene of the set in use, key 2 the second.
+    Set,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 /// A saved set of layers that can be recalled in one click.
@@ -447,6 +518,11 @@ pub enum Action {
     NextScene,
     /// Switches to the scene before the one that is playing.
     PrevScene,
+    /// Switches to the next scene for one part of a song: the next calm
+    /// one, the next big one.
+    NextOf {
+        mood: Mood,
+    },
     /// Stops the picture where it is.
     Freeze,
     /// Says "this is beat one": bars are counted from the beat nearest
@@ -634,6 +710,14 @@ pub struct LiveSettings {
     /// of the beat heard in the music.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub midi_clock: bool,
+    /// Which scene the Next button and key go to.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub next: NextWay,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub number_keys: NumberKeys,
+    /// How a change of scene looks while it fades.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub transition: Transition,
 }
 
 /// A palette with a pad of its own. While it is in force, every effect
@@ -687,6 +771,9 @@ impl Default for LiveSettings {
             swatches: Vec::new(),
             colours: None,
             midi_clock: false,
+            next: NextWay::Order,
+            number_keys: NumberKeys::Own,
+            transition: Transition::Fade,
         }
     }
 }
@@ -1158,6 +1245,7 @@ impl Show {
                 hue: 0.0,
                 blocks: 0,
                 slide: 0.0,
+                blur: 0.0,
                 links: Vec::new(),
             },
         );
@@ -1318,6 +1406,7 @@ impl Show {
             | Action::Hit
             | Action::NextScene
             | Action::PrevScene
+            | Action::NextOf { .. }
             | Action::Freeze
             | Action::Downbeat => true,
         });
@@ -1394,23 +1483,44 @@ impl Show {
     /// a negative step), going round at the ends. `from` is the scene to
     /// count from when what is playing matches no scene.
     pub fn scene_after(&self, from: Option<u32>, step: i32) -> Option<u32> {
-        // Only the scenes of the set in use are stepped through.
-        let offered: Vec<u32> = self.scenes.iter().filter(|s| self.in_use(s)).map(|s| s.id).collect();
-        if offered.is_empty() {
-            return None;
-        }
+        self.scene_step(self.current_scene().or(from), step, |_| true)
+    }
+
+    /// The nearest scene after `from` (before, for a negative step) that
+    /// `pick` accepts, going round at the ends; `from` itself if it is
+    /// the only one. Only the scenes of the set in use are stepped
+    /// through.
+    pub fn scene_step(&self, from: Option<u32>, step: i32, pick: impl Fn(&Scene) -> bool) -> Option<u32> {
+        let offered: Vec<&Scene> = self.scenes.iter().filter(|s| self.in_use(s)).collect();
         let count = offered.len() as i32;
-        let at = self
-            .current_scene()
-            .or(from)
-            .and_then(|id| offered.iter().position(|s| *s == id));
-        let next = match at {
-            Some(at) => (at as i32 + step).rem_euclid(count),
-            // Nothing to count from: start at the first, or the last going back.
-            None if step >= 0 => 0,
-            None => count - 1,
+        let way = if step >= 0 { 1 } else { -1 };
+        // With nothing to count from, start at the first, or at the last
+        // going back.
+        let start = match from.and_then(|id| offered.iter().position(|s| s.id == id)) {
+            Some(at) => at as i32,
+            None if way > 0 => -1,
+            None => count,
         };
-        Some(offered[next as usize])
+        (1..=count)
+            .map(|n| offered[(start + way * n).rem_euclid(count) as usize])
+            .find(|s| pick(s))
+            .map(|s| s.id)
+    }
+
+    /// Whether a scene made for one part of a song suits the part that
+    /// is playing. In a big part the calm ones do not, and the other way
+    /// round. The parts in between take anything, unless some scenes
+    /// have been marked as made for them.
+    pub fn suits(&self, mood: Mood, part: Mood) -> bool {
+        match part {
+            Mood::Any => true,
+            Mood::Big => matches!(mood, Mood::Big | Mood::Any),
+            Mood::Calm => matches!(mood, Mood::Calm | Mood::Any),
+            Mood::Steady => {
+                matches!(mood, Mood::Steady | Mood::Any)
+                    || !self.scenes.iter().any(|s| s.mood == Mood::Steady && self.in_use(s))
+            }
+        }
     }
 
     /// Whether a scene is among those on offer: it is in the set in use,
@@ -1467,6 +1577,9 @@ impl Show {
             0.0
         };
 
+        // A matrix a device reports is one it has set up itself, so it
+        // also puts its LEDs in order.
+        let by_device = matches!(shape, Shape::Matrix { .. });
         self.fixtures.push(Fixture {
             id: fixture_id,
             name: device.name.clone(),
@@ -1481,7 +1594,10 @@ impl Show {
             group: None,
             path: Vec::new(),
             closed: false,
-            wiring: Default::default(),
+            wiring: crate::layout::Wiring {
+                by_device,
+                ..Default::default()
+            },
         });
         self.devices.push(device);
         device_id
@@ -2385,6 +2501,29 @@ mod tests {
         assert_eq!(show.scene_after(None, 1), Some(a));
         assert_eq!(show.scene_after(None, -1), Some(c));
         assert_eq!(show.scene_after(Some(9999), 1), Some(a));
+
+        // Stepping can keep to scenes of one kind, from any scene.
+        show.scenes[0].mood = Mood::Calm;
+        show.scenes[2].mood = Mood::Calm;
+        show.scenes[1].mood = Mood::Big;
+        let calm = |s: &Scene| s.mood == Mood::Calm;
+        assert_eq!(show.scene_step(Some(a), 1, calm), Some(c));
+        assert_eq!(show.scene_step(Some(c), 1, calm), Some(a));
+        assert_eq!(show.scene_step(Some(b), -1, calm), Some(a));
+        assert_eq!(show.scene_step(None, 1, calm), Some(a));
+        assert_eq!(show.scene_step(None, -1, calm), Some(c));
+        assert_eq!(show.scene_step(Some(b), 1, |s| s.mood == Mood::Big), Some(b), "the only one");
+        assert_eq!(show.scene_step(Some(a), 1, |s| s.mood == Mood::Steady), None);
+
+        // What suits which part of a song. The parts in between take
+        // anything until some scene is marked as made for them.
+        assert!(show.suits(Mood::Big, Mood::Big) && show.suits(Mood::Any, Mood::Big));
+        assert!(!show.suits(Mood::Calm, Mood::Big) && !show.suits(Mood::Steady, Mood::Big));
+        assert!(show.suits(Mood::Calm, Mood::Calm) && !show.suits(Mood::Big, Mood::Calm));
+        assert!(show.suits(Mood::Big, Mood::Steady) && show.suits(Mood::Calm, Mood::Steady));
+        show.scenes[1].mood = Mood::Steady;
+        assert!(show.suits(Mood::Steady, Mood::Steady) && show.suits(Mood::Any, Mood::Steady));
+        assert!(!show.suits(Mood::Calm, Mood::Steady) && !show.suits(Mood::Big, Mood::Steady));
     }
 
     #[test]

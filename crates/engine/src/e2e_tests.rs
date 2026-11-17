@@ -85,6 +85,7 @@ fn make_solid(shared: &Arc<Shared>, colour: &str) {
             chain: None,
             blocks: None,
             slide: None,
+            blur: None,
         })
         .unwrap();
     shared
@@ -696,7 +697,10 @@ fn a_scene_can_be_changed_while_the_lights_play_another() {
     );
 
     // Done: the change is kept in Blue, and the panel is back on Red.
-    shared.execute(&Command::FinishEdit { play: false }).unwrap();
+    shared.execute(&Command::FinishEdit {
+            play: false,
+            discard: false,
+        }).unwrap();
     {
         let show = shared.show.lock().unwrap();
         let kept = show.scenes.iter().find(|s| s.id == blue).unwrap();
@@ -705,13 +709,49 @@ fn a_scene_can_be_changed_while_the_lights_play_another() {
     }
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(colour_at(&sim), [255, 0, 0]);
-    assert!(shared.execute(&Command::FinishEdit { play: false }).is_err());
+    assert!(shared.execute(&Command::FinishEdit {
+            play: false,
+            discard: false,
+        }).is_err());
     // Changed again and put on the lights this time.
     shared.execute(&Command::EditScene { id: blue }).unwrap();
     colour("#ffffff");
-    shared.execute(&Command::FinishEdit { play: true }).unwrap();
+    shared
+        .execute(&Command::FinishEdit {
+            play: true,
+            discard: false,
+        })
+        .unwrap();
     wait_for("white", || colour_at(&sim) == [255, 255, 255]);
     assert!(!shared.live.lock().unwrap().status().blind);
+
+    // Changed once more, kept along the way, and then thrown away: Blue
+    // is as it was when it was opened, and the panel is back on what
+    // the lights play.
+    shared.execute(&Command::EditScene { id: red }).unwrap();
+    colour("#123456");
+    shared.execute(&Command::UpdateScene { id: red }).unwrap();
+    colour("#654321");
+    let both = Command::FinishEdit {
+        play: true,
+        discard: true,
+    };
+    assert!(shared.execute(&both).is_err());
+    shared
+        .execute(&Command::FinishEdit {
+            play: false,
+            discard: true,
+        })
+        .unwrap();
+    {
+        let show = shared.show.lock().unwrap();
+        let untouched = show.scenes.iter().find(|s| s.id == red).unwrap();
+        assert_eq!(untouched.layers[0].params["colour"], ParamValue::Text("#ff0000".into()));
+        assert_eq!(show.layers[0].params["colour"], ParamValue::Text("#ffffff".into()));
+    }
+    assert!(!shared.live.lock().unwrap().status().blind);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(colour_at(&sim), [255, 255, 255]);
 }
 
 #[test]
@@ -789,6 +829,7 @@ fn a_beat_fired_by_hand_sets_off_effects_that_wait_for_one() {
             chain: None,
             blocks: None,
             slide: None,
+            blur: None,
         })
         .unwrap();
     // With no sound and no beat, the pulse stays dark.
@@ -837,6 +878,9 @@ fn a_scene_waits_for_the_beat_when_asked_to() {
             shuffle: None,
             on_drops: None,
             midi_clock: None,
+            next: None,
+            number_keys: None,
+            transition: None,
         })
         .unwrap();
 
@@ -888,6 +932,9 @@ fn a_scene_change_can_fade_in() {
             shuffle: None,
             on_drops: None,
             midi_clock: None,
+            next: None,
+            number_keys: None,
+            transition: None,
         })
         .unwrap();
 
@@ -1442,6 +1489,7 @@ fn a_strobe_keeps_to_the_limit_by_itself_and_runs_free_with_it_off() {
             chain: None,
             blocks: None,
             slide: None,
+            blur: None,
         })
         .unwrap();
     shared
@@ -1515,6 +1563,7 @@ fn flashing_that_no_effect_announced_is_still_limited_at_the_device() {
             chain: None,
             blocks: None,
             slide: None,
+            blur: None,
         })
         .unwrap();
     shared
@@ -1553,6 +1602,7 @@ fn flashing_that_no_effect_announced_is_still_limited_at_the_device() {
                     chain: None,
                     blocks: None,
                     slide: None,
+                    blur: None,
                 });
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -1642,6 +1692,92 @@ fn a_fired_pad_sets_off_its_effect_and_a_held_scene_comes_and_goes() {
 }
 
 #[test]
+fn next_can_keep_to_one_kind_of_scene_or_follow_the_song() {
+    use darkrgb_core::{Mood, NextWay};
+    let (engine, sim) = engine_with_strip();
+    let shared = &engine.shared;
+    // Five scenes: red and blue are calm, green and white are big,
+    // yellow is for anything.
+    let scenes = [
+        ("Red", "#ff0000", Mood::Calm),
+        ("Green", "#00ff00", Mood::Big),
+        ("Blue", "#0000ff", Mood::Calm),
+        ("White", "#ffffff", Mood::Big),
+        ("Yellow", "#ffff00", Mood::Any),
+    ];
+    for (name, colour, mood) in scenes {
+        make_solid(shared, colour);
+        shared.execute(&Command::SaveScene { name: name.into() }).unwrap();
+        let id = shared.show.lock().unwrap().scenes.last().unwrap().id;
+        shared.execute(&Command::SetSceneMood { id, mood }).unwrap();
+    }
+    let colour = || {
+        let f = sim.frame();
+        (f[0] > 128, f[1] > 128, f[2] > 128)
+    };
+    let (red, green, blue, white, yellow) = (
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+        (true, true, true),
+        (true, true, false),
+    );
+    let perform = |action| shared.execute(&Command::Perform { action }).unwrap();
+    let way = |next| {
+        shared
+            .execute(&Command::SetLive {
+                launch: None,
+                fade: None,
+                speed: None,
+                auto: None,
+                every_bars: None,
+                shuffle: None,
+                on_drops: None,
+                midi_clock: None,
+                next: Some(next),
+                number_keys: None,
+                transition: None,
+            })
+            .unwrap();
+    };
+    wait_for("yellow", || colour() == yellow);
+
+    // A pad for one kind steps through that kind only, going round.
+    let calm = Action::NextOf { mood: Mood::Calm };
+    perform(calm);
+    wait_for("the first calm one", || colour() == red);
+    perform(calm);
+    wait_for("the next calm one", || colour() == blue);
+    perform(calm);
+    wait_for("round to the first calm one", || colour() == red);
+    // With no scene of a kind, its pad does nothing.
+    perform(Action::NextOf { mood: Mood::Steady });
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(colour(), red);
+
+    // Next of the same kind: from a calm scene to the other calm one,
+    // and back with Previous.
+    way(NextWay::Alike);
+    perform(Action::NextScene);
+    wait_for("blue", || colour() == blue);
+    perform(Action::PrevScene);
+    wait_for("red", || colour() == red);
+    perform(Action::NextOf { mood: Mood::Big });
+    wait_for("green", || colour() == green);
+    perform(Action::NextScene);
+    wait_for("the other big one", || colour() == white);
+
+    // Next for the part of the song: with no sound the song counts as
+    // in between, which every scene suits here, so it is the list's order.
+    way(NextWay::Song);
+    perform(Action::NextScene);
+    wait_for("yellow", || colour() == yellow);
+    way(NextWay::Order);
+    perform(Action::NextScene);
+    wait_for("red", || colour() == red);
+}
+
+#[test]
 fn next_scene_previous_scene_freeze_and_speed() {
     let (engine, sim) = engine_with_strip();
     let shared = &engine.shared;
@@ -1701,6 +1837,7 @@ fn next_scene_previous_scene_freeze_and_speed() {
             chain: None,
             blocks: None,
             slide: None,
+            blur: None,
         })
         .unwrap();
     let moving = |sim: &Sim| {
@@ -1743,6 +1880,9 @@ fn next_scene_previous_scene_freeze_and_speed() {
             shuffle: None,
             on_drops: None,
             midi_clock: None,
+            next: None,
+            number_keys: None,
+            transition: None,
         })
         .unwrap();
     assert_eq!(shared.show.lock().unwrap().live.speed, 0.25);
@@ -1772,6 +1912,9 @@ fn autopilot_changes_scene_by_itself_and_a_press_restarts_its_count() {
             shuffle: None,
             on_drops: None,
             midi_clock: None,
+            next: None,
+            number_keys: None,
+            transition: None,
         })
         .unwrap();
     wait_for("the first change", || current() == Some(ids[0]));
@@ -1813,6 +1956,9 @@ fn autopilot_changes_scene_by_itself_and_a_press_restarts_its_count() {
             shuffle: None,
             on_drops: None,
             midi_clock: None,
+            next: None,
+            number_keys: None,
+            transition: None,
         })
         .unwrap();
     std::thread::sleep(Duration::from_millis(2500));
