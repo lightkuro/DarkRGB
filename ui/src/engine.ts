@@ -322,6 +322,19 @@ export function inUse(show: Show, scene: Scene): boolean {
 /** The parts of a song a scene suits. */
 export type Mood = "any" | "calm" | "steady" | "big";
 
+/** What each kind of scene is called. */
+export const MOOD_NAMES: Record<Mood, string> = {
+  any: "Any part",
+  calm: "Quiet parts",
+  steady: "In between",
+  big: "Big parts",
+};
+
+/** The scenes on offer with the set in use, in order: the ones the number keys play by place. */
+export function scenesInUse(show: Show): Scene[] {
+  return show.scenes.filter((scene) => inUse(show, scene));
+}
+
 /** Which scene Next goes to: the next in the list, the next of the same kind, or one that suits the song now. */
 export type NextWay = "order" | "alike" | "song";
 

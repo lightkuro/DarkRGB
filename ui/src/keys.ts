@@ -6,7 +6,7 @@
 // keyboard layout. What is printed on the key is stored once, when the
 // key is assigned, for display.
 
-import { engine, onPage, type Binding } from "./engine";
+import { engine, onPage, scenesInUse, type Binding } from "./engine";
 
 /** The answer to "which key?": its place, and what is printed on it. */
 export interface PickedKey {
@@ -119,7 +119,21 @@ function onKeyDown(event: KeyboardEvent): void {
   if (event.ctrlKey || event.metaKey || event.altKey || typing(event.target)) return;
   // Only pads on the page that is showing answer to their keys.
   const page = engine.show.get()?.live.page ?? 1;
-  const bindings = engine.show.get()?.bindings.filter((b) => b.key === event.code && onPage(b, page)) ?? [];
+  const show = engine.show.get();
+  let bindings = show?.bindings.filter((b) => b.key === event.code && onPage(b, page)) ?? [];
+  // Number keys going by place: 1 to 9 play the scenes of the set in
+  // use in order, and the scenes' own number keys rest. A number key
+  // given to something that is not a scene keeps doing that.
+  const digit = /^(?:Digit|Numpad)([1-9])$/.exec(event.code);
+  if (show && digit && (show.live.number_keys ?? "own") === "set") {
+    bindings = bindings.filter((b) => b.action.type !== "scene");
+    const scene = bindings.length === 0 ? scenesInUse(show)[Number(digit[1]) - 1] : undefined;
+    if (scene) {
+      event.preventDefault();
+      if (!event.repeat) engine.quiet({ type: "recall_scene", id: scene.id });
+      return;
+    }
+  }
   if (bindings.length === 0) return;
   // The key belongs to the show now: no scrolling on Space, no clicking
   // whatever button happens to have focus.

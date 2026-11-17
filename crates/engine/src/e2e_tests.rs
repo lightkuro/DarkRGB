@@ -364,6 +364,9 @@ async fn a_client_can_drive_the_show_over_the_websocket() {
         state["show"]["fixtures"][0]["shape"],
         json!({ "type": "matrix", "cols": 8, "rows": 8, "serpentine": false })
     );
+    // A matrix the device reports is one it has set up itself, so its
+    // wiring is left to it.
+    assert_eq!(state["show"]["fixtures"][0]["wiring"]["by_device"], true);
 
     // Positions for all 64 pixels, then preview colours for the same layout.
     let layout = next_binary(&mut ws, MSG_LAYOUT, 8 + 64 * 8).await;

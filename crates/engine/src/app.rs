@@ -1670,7 +1670,7 @@ impl Shared {
         if duplicate {
             return Err(format!("{} is already in the show", info.name));
         }
-        show.add_device(
+        let added = show.add_device(
             Device {
                 mac: info.mac.clone(),
                 version: Some(info.version.clone()),
@@ -1678,6 +1678,11 @@ impl Shared {
             },
             info.matrix,
         );
+        // A matrix the device reports is one set up in WLED itself, which
+        // then also puts its LEDs in order.
+        for fixture in show.fixtures.iter_mut().filter(|f| f.device == added) {
+            fixture.wiring.by_device = matches!(fixture.shape, darkrgb_core::Shape::Matrix { .. });
+        }
         drop(show);
         self.history.lock().unwrap().remember_other(before);
         self.bump();

@@ -4193,3 +4193,65 @@ input.number {
   stroke: var(--teal);
   stroke-width: 2;
 }
+
+/* ------------------------------------------------- next scene, by kind */
+
+.next-scene {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.next-scene .chip.icon {
+  padding: 0 7px;
+}
+
+.next-scene .next-way {
+  margin-left: 4px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.next-menu {
+  bottom: 40px;
+  left: 0;
+  width: 330px;
+  display: grid;
+  gap: 10px;
+}
+
+.next-ways {
+  display: grid;
+  gap: 4px;
+}
+
+.next-ways button {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.next-ways button.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.next-jumps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.scene-actions .spacer {
+  flex: 1;
+}

@@ -1,10 +1,25 @@
 // Scenes along the bottom: saved looks, one click (or one key) each.
 
-import { Bookmark, ChevronUp, LayoutGrid, Pencil, Plus, RefreshCw, Shuffle, Sparkles, Trash2 } from "lucide-react";
-import { useCallback, useState } from "react";
 import {
+  Bookmark,
+  ChevronDown,
+  ChevronUp,
+  LayoutGrid,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Shuffle,
+  SkipBack,
+  SkipForward,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import {
+  MOOD_NAMES,
   engine,
-  inUse,
+  partOfSong,
+  scenesInUse,
   settingsPage,
   useCurrentScene,
   useLibrary,
@@ -15,6 +30,7 @@ import {
   type Scene,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
+import { NEXT_WAYS } from "./Settings";
 import { NameButton, managingScenes } from "./ScenePanel";
 import { ConfirmButton, NameField, Switch, useDismiss } from "./ui";
 
@@ -27,11 +43,111 @@ function SaveScene() {
 }
 
 /** Rename, key, update and delete for one scene. */
-const MOODS: { id: Mood; name: string; hint: string }[] = [
-  { id: "any", name: "Any part", hint: "Autopilot may change to it at any time" },
-  { id: "calm", name: "Quiet parts", hint: "Passed over while the song is at its biggest" },
-  { id: "big", name: "Big parts", hint: "Passed over in breakdowns and quiet stretches" },
+const MOODS: { id: Mood; hint: string }[] = [
+  { id: "any", hint: "It can be chosen at any time" },
+  { id: "calm", hint: "For breakdowns and slow stretches; passed over while the song is at its biggest" },
+  { id: "steady", hint: "For verses and the parts that are neither quiet nor big" },
+  { id: "big", hint: "For choruses and drops; passed over in quiet stretches" },
 ];
+
+/**
+ * Next and Previous, with the way Next chooses beside them: in order,
+ * the same kind of scene again, or whatever suits the song right now.
+ */
+function NextScene() {
+  const show = useShow();
+  const [open, setOpen] = useState(false);
+  const ref = useDismiss(open, () => setOpen(false));
+  // The part of the song, looked at twice a second while the menu is open.
+  const [heard, setHeard] = useState({ part: "steady" as Mood, active: false });
+  useEffect(() => {
+    if (!open) return;
+    const look = () => setHeard({ part: partOfSong(engine.audio), active: engine.audio.active });
+    look();
+    const timer = setInterval(look, 500);
+    return () => clearInterval(timer);
+  }, [open]);
+  if (!show) return null;
+  const way = show.live.next ?? "order";
+  const { part } = heard;
+  const audio = heard;
+  const chosen = NEXT_WAYS.find((w) => w.id === way);
+  return (
+    <div className="next-scene" ref={ref}>
+      <button
+        type="button"
+        className="chip icon"
+        aria-label="Previous scene"
+        title="Previous scene"
+        onClick={() => engine.send({ type: "perform", action: { type: "prev_scene" } })}
+      >
+        <SkipBack size={13} />
+      </button>
+      <button
+        type="button"
+        className="chip"
+        title={`Next scene: ${chosen?.name.toLowerCase()}`}
+        onClick={() => engine.send({ type: "perform", action: { type: "next_scene" } })}
+      >
+        <SkipForward size={13} /> Next
+        {way !== "order" && <span className="next-way">{chosen?.short}</span>}
+      </button>
+      <button
+        type="button"
+        className="chip icon"
+        aria-label="Which scene Next goes to"
+        aria-expanded={open}
+        title="Which scene Next goes to"
+        onClick={() => setOpen(!open)}
+      >
+        <ChevronDown size={13} />
+      </button>
+      {open && (
+        <div className="popover next-menu" role="dialog" aria-label="Which scene Next goes to">
+          <div role="radiogroup" aria-label="Next goes to" className="next-ways">
+            {NEXT_WAYS.map((w) => (
+              <button
+                key={w.id}
+                type="button"
+                role="radio"
+                aria-checked={way === w.id}
+                className={way === w.id ? "selected" : ""}
+                onClick={() => engine.send({ type: "set_live", next: w.id })}
+              >
+                <strong>{w.name}</strong>
+                <span className="hint">{w.hint}</span>
+              </button>
+            ))}
+          </div>
+          <p className="hint">
+            Right now the song is in {part === "steady" ? "an in-between part" : part === "big" ? "a big part" : "a quiet part"}
+            {audio.active ? "" : " (no sound is playing)"}. Say what a scene suits in its own menu, the small arrow
+            beside it.
+          </p>
+          <div className="next-jumps">
+            <span>Jump to the next scene for</span>
+            {(["calm", "steady", "big"] as Mood[]).map((mood) => (
+              <button
+                key={mood}
+                type="button"
+                className="chip"
+                disabled={!scenesInUse(show).some((s) => s.mood === mood)}
+                title={
+                  scenesInUse(show).some((s) => s.mood === mood)
+                    ? `The next scene made for ${MOOD_NAMES[mood].toLowerCase()}`
+                    : "No scene is marked for this yet"
+                }
+                onClick={() => engine.send({ type: "perform", action: { type: "next_of", mood } })}
+              >
+                {MOOD_NAMES[mood]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SceneMenu({
   scene,
@@ -62,28 +178,28 @@ function SceneMenu({
           onChange={(auto) => engine.send({ type: "set_scene_auto", id: scene.id, auto })}
         />
       </div>
-      {scene.auto && (
-        <div className="field">
-          <span className="field-head">
-            <span>Autopilot uses it for</span>
+      <div className="field">
+        <span className="field-head">
+          <span title="Autopilot chooses by this, and so does Next when it is set to go by kind or by the song">
+            It suits
           </span>
-          <div className="segmented" role="radiogroup" aria-label={`The parts of a song ${scene.name} suits`}>
-            {MOODS.map((mood) => (
-              <button
-                key={mood.id}
-                type="button"
-                role="radio"
-                aria-checked={scene.mood === mood.id}
-                className={scene.mood === mood.id ? "selected" : ""}
-                title={mood.hint}
-                onClick={() => engine.send({ type: "set_scene_mood", id: scene.id, mood: mood.id })}
-              >
-                {mood.name}
-              </button>
-            ))}
-          </div>
+        </span>
+        <div className="segmented" role="radiogroup" aria-label={`The parts of a song ${scene.name} suits`}>
+          {MOODS.map((mood) => (
+            <button
+              key={mood.id}
+              type="button"
+              role="radio"
+              aria-checked={scene.mood === mood.id}
+              className={scene.mood === mood.id ? "selected" : ""}
+              title={mood.hint}
+              onClick={() => engine.send({ type: "set_scene_mood", id: scene.id, mood: mood.id })}
+            >
+              {MOOD_NAMES[mood.id]}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
       <button
         type="button"
         className="text-button"
@@ -193,9 +309,14 @@ export function ScenesBar() {
           <Shuffle size={13} /> Autopilot
         </button>
       )}
+      {show.scenes.length > 1 && <NextScene />}
       <div className="scene-list">
-        {show.scenes.filter((scene) => inUse(show, scene)).map((scene) => {
-          const binding = show.bindings.find((b) => b.action.type === "scene" && b.action.id === scene.id);
+        {scenesInUse(show).map((scene, place) => {
+          // With number keys going by place, a scene shows the number
+          // of its place; its own key shows only if it is not a number.
+          const byPlace = (show.live.number_keys ?? "own") === "set";
+          const own = show.bindings.find((b) => b.action.type === "scene" && b.action.id === scene.id);
+          const binding = byPlace && own?.key && /^(Digit|Numpad)/.test(own.key) ? undefined : own;
           const waiting = live.pending_scene === scene.id;
           return (
             <span
@@ -211,7 +332,13 @@ export function ScenesBar() {
                 aria-pressed={playing === scene.id}
                 onClick={() => engine.send({ type: "recall_scene", id: scene.id })}
               >
-                {binding && <Keycap binding={binding} />}
+                {byPlace && place < 9 ? (
+                  <kbd className="keycap" title={`Number key ${place + 1} plays it while this set is in use`}>
+                    {place + 1}
+                  </kbd>
+                ) : (
+                  binding && <Keycap binding={binding} />
+                )}
                 {scene.name}
               </button>
               <button

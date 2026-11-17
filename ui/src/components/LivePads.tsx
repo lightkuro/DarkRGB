@@ -41,6 +41,7 @@ import {
   type Layer,
   type Show,
   inUse as sceneInUse,
+  MOOD_NAMES,
 } from "../engine";
 import { KeyAssign, Keycap, behaviours, modeNote } from "./Keys";
 import { swatch } from "./LayerPanel";
@@ -141,6 +142,8 @@ export function describe(action: Action, show: Show, hello: Hello): { name: stri
       return { name: "Next scene", icon: <SkipForward size={15} /> };
     case "prev_scene":
       return { name: "Previous scene", icon: <SkipBack size={15} /> };
+    case "next_of":
+      return { name: `Next for ${MOOD_NAMES[action.mood].toLowerCase()}`, icon: <SkipForward size={15} /> };
     case "freeze":
       return { name: "Freeze", icon: <Snowflake size={15} /> };
     case "downbeat":

@@ -1577,9 +1577,6 @@ impl Show {
             0.0
         };
 
-        // A matrix a device reports is one it has set up itself, so it
-        // also puts its LEDs in order.
-        let by_device = matches!(shape, Shape::Matrix { .. });
         self.fixtures.push(Fixture {
             id: fixture_id,
             name: device.name.clone(),
@@ -1594,10 +1591,7 @@ impl Show {
             group: None,
             path: Vec::new(),
             closed: false,
-            wiring: crate::layout::Wiring {
-                by_device,
-                ..Default::default()
-            },
+            wiring: Default::default(),
         });
         self.devices.push(device);
         device_id

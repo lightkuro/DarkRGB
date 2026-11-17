@@ -2,7 +2,7 @@
 // says which scene is in it and saves it, and the window where scenes
 // are found, added, filed in sets and opened to be changed.
 
-import { Clapperboard, EyeOff, FolderPlus, Pencil, Play, Plus, Search, Trash2, X } from "lucide-react";
+import { Clapperboard, EyeOff, FolderPlus, Pencil, Play, Plus, Search, Trash2, Undo2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   Store,
@@ -132,6 +132,15 @@ export function SceneHead() {
           <button type="button" className="text-button" onClick={() => engine.send({ type: "finish_edit", play: true })}>
             <Play size={13} /> Put it on the lights
           </button>
+          <span className="spacer" />
+          <ConfirmButton
+            label="Discard the changes"
+            confirmLabel="Discard?"
+            className="text-button"
+            onConfirm={() => engine.send({ type: "finish_edit", play: false, discard: true })}
+          >
+            <Undo2 size={13} /> Discard
+          </ConfirmButton>
         </div>
       </div>
     );

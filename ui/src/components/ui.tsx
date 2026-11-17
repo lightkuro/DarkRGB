@@ -147,11 +147,14 @@ export function ConfirmButton({
   confirmLabel,
   onConfirm,
   children,
+  className = "icon-button danger",
 }: {
   label: string;
   confirmLabel: string;
   onConfirm: () => void;
   children: ReactNode;
+  /** In place of the small red icon button. */
+  className?: string;
 }) {
   const [armed, setArmed] = useState(false);
   useEffect(() => {
@@ -162,7 +165,7 @@ export function ConfirmButton({
   return (
     <button
       type="button"
-      className={`icon-button danger ${armed ? "armed" : ""}`}
+      className={`${className} ${armed ? "armed" : ""}`}
       aria-label={armed ? confirmLabel : label}
       title={armed ? confirmLabel : label}
       onClick={() => {

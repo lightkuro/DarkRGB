@@ -337,6 +337,26 @@ function equalParts(total: number, parts: number): number[] {
 }
 
 /**
+ * Shares of a strip given in percent, as numbers of LEDs: each zone ends
+ * at the LED nearest its share, so the counts always add up to the strip.
+ * Null when the shares are not sensible or a zone would get no LED.
+ */
+export function percentParts(total: number, percents: number[]): number[] | null {
+  const sum = percents.reduce((a, b) => a + b, 0);
+  if (percents.length < 2 || percents.some((p) => !(p > 0)) || Math.abs(sum - 100) > 0.5) return null;
+  let done = 0;
+  let upTo = 0;
+  const parts = percents.map((p, i) => {
+    upTo += p;
+    const end = i === percents.length - 1 ? total : Math.round((total * upTo) / sum);
+    const count = end - done;
+    done = end;
+    return count;
+  });
+  return parts.every((n) => n >= 1) ? parts : null;
+}
+
+/**
  * Cutting a strip into zones: parts of it that are lights of their own,
  * so the ends can do one thing and the middle another. And, once cut,
  * the zones with their names, and the way back to one strip.
@@ -344,6 +364,7 @@ function equalParts(total: number, parts: number): number[] {
 function Zones({ device, own }: { device: Device; own: Fixture[] }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
+  const [percent, setPercent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const first = own[0];
   if (!first || own.some((f) => f.shape.type !== "strip")) return null;
@@ -380,12 +401,23 @@ function Zones({ device, own }: { device: Device; own: Fixture[] }) {
     );
   }
   if (total < 2) return null;
-  const parts = text
-    .split(/[\s,]+/)
+  const typed = text
+    .split(/[\s,%]+/)
     .filter(Boolean)
     .map(Number);
-  const sum = parts.reduce((a, b) => a + b, 0);
-  const valid = parts.length >= 2 && parts.every((n) => Number.isInteger(n) && n > 0) && sum === total;
+  // Typed as shares of the strip, they become numbers of LEDs here.
+  const parts = percent ? (percentParts(total, typed) ?? []) : typed;
+  const sum = typed.reduce((a, b) => a + b, 0);
+  const valid = percent
+    ? parts.length >= 2
+    : parts.length >= 2 && parts.every((n) => Number.isInteger(n) && n > 0) && sum === total;
+  const equal = (n: number) => {
+    if (!percent) return equalParts(total, n).join(", ");
+    // To one decimal place, the last share taking up what rounding left.
+    const share = Math.floor(1000 / n) / 10;
+    const last = Math.round((100 - share * (n - 1)) * 10) / 10;
+    return [...Array.from({ length: n - 1 }, () => share), last].join(", ");
+  };
   const split = async () => {
     const result = await engine.request({ type: "split_strip", fixture: first.id, parts });
     if (!result.ok) return setError(result.error ?? "Could not cut it like that.");
@@ -416,30 +448,79 @@ function Zones({ device, own }: { device: Device; own: Fixture[] }) {
         >
           <p className="hint">
             Zones are parts of the strip that act as lights of their own, so the ends can play one effect and the
-            middle another. Give the number of LEDs in each, from the strip's first LED.
+            middle another. Give the size of each, from the strip's first LED.
           </p>
+          <div className="segmented" role="radiogroup" aria-label="Sizes given in">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!percent}
+              className={!percent ? "selected" : ""}
+              onClick={() => {
+                // What was typed is kept, turned into the other measure.
+                if (percent && parts.length >= 2) setText(parts.join(", "));
+                setPercent(false);
+              }}
+            >
+              Numbers of LEDs
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={percent}
+              className={percent ? "selected" : ""}
+              onClick={() => {
+                if (!percent && valid) setText(parts.map((n) => Math.round((n / total) * 1000) / 10).join(", "));
+                setPercent(true);
+              }}
+            >
+              Percent
+            </button>
+          </div>
           <div className="chips">
             {[2, 3, 4, 5].filter((n) => n <= total).map((n) => (
-              <button key={n} type="button" className="chip" onClick={() => setText(equalParts(total, n).join(", "))}>
+              <button key={n} type="button" className="chip" onClick={() => setText(equal(n))}>
                 {n} equal
               </button>
             ))}
+            {total >= 5 && (
+              <button
+                type="button"
+                className="chip"
+                title="A fifth at each end and the rest in the middle"
+                onClick={() => setText(percent ? "20, 60, 20" : (percentParts(total, [20, 60, 20]) ?? []).join(", "))}
+              >
+                Ends and middle
+              </button>
+            )}
           </div>
           <input
             type="text"
-            aria-label="LEDs in each zone"
-            placeholder="e.g. 30, 90, 30"
+            aria-label={percent ? "Percent of the strip in each zone" : "LEDs in each zone"}
+            placeholder={percent ? "e.g. 20, 60, 20" : "e.g. 30, 90, 30"}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.stopPropagation()}
           />
-          <p className={`hint${parts.length >= 2 && sum !== total ? " warn" : ""}`}>
-            {parts.length < 2
-              ? `Two or more numbers that add up to ${total}.`
-              : sum === total
-                ? `${parts.length} zones, ${total} LEDs in all.`
-                : `These add up to ${sum}; the strip has ${total}.`}
-          </p>
+          {percent ? (
+            <p className={`hint${typed.length >= 2 && !valid ? " warn" : ""}`}>
+              {typed.length < 2
+                ? "Two or more shares that add up to 100."
+                : valid
+                  ? `${parts.length} zones of ${parts.join(", ")} LEDs.`
+                  : Math.abs(sum - 100) > 0.5
+                    ? `These add up to ${Math.round(sum * 10) / 10}%, not 100%.`
+                    : "A zone that small would have no LED."}
+            </p>
+          ) : (
+            <p className={`hint${parts.length >= 2 && sum !== total ? " warn" : ""}`}>
+              {parts.length < 2
+                ? `Two or more numbers that add up to ${total}.`
+                : sum === total
+                  ? `${parts.length} zones, ${total} LEDs in all.`
+                  : `These add up to ${sum}; the strip has ${total}.`}
+            </p>
+          )}
           {error && <p className="callout error">{error}</p>}
           <div className="form-actions">
             <button type="submit" className="button small" disabled={!valid}>
@@ -498,22 +579,66 @@ function WiringDiagram({ fixture }: { fixture: Fixture }) {
 }
 
 /** How a matrix is wired, and the way back to a plain strip. */
-function MatrixWiring({ fixture, full }: { fixture: Fixture; full: boolean }) {
+function MatrixWiring({ fixture, full, wled }: { fixture: Fixture; full: boolean; wled: boolean }) {
   if (fixture.shape.type !== "matrix") return null;
   const start = fixture.wiring?.start ?? "top_left";
   const vertical = fixture.wiring?.vertical ?? false;
-  const set = (change: { serpentine?: boolean; start?: Corner; vertical?: boolean }) =>
+  const byDevice = fixture.wiring?.by_device ?? false;
+  const set = (change: { serpentine?: boolean; start?: Corner; vertical?: boolean; by_device?: boolean }) =>
     engine.send({ type: "set_wiring", fixture: fixture.id, ...change });
+  const plain = (
+    <button
+      type="button"
+      className="text-button"
+      title="Treat these LEDs as one long strip again"
+      onClick={() => engine.send({ type: "reshape", fixture: fixture.id, shape: { type: "strip", count: fixture.shape.type === "matrix" ? fixture.shape.cols * fixture.shape.rows : 0 } })}
+    >
+      <Minus size={13} /> Make it a plain strip
+    </button>
+  );
+  // Where the wiring is described: in WLED's own 2D settings, or here
+  // with WLED left as one long strip. Either works; both at once does not.
+  const who = (wled || byDevice) && (
+    <div className="field">
+      <span className="field-head">
+        <span>The wiring is set up</span>
+      </span>
+      <div className="segmented" role="radiogroup" aria-label="Where the wiring is set up">
+        <button type="button" role="radio" aria-checked={byDevice} className={byDevice ? "selected" : ""} onClick={() => set({ by_device: true })}>
+          In WLED
+        </button>
+        <button type="button" role="radio" aria-checked={!byDevice} className={!byDevice ? "selected" : ""} onClick={() => set({ by_device: false })}>
+          Here, in darkRGB
+        </button>
+      </div>
+    </div>
+  );
+  if (byDevice) {
+    return (
+      <div className="wiring">
+        {who}
+        <p className="hint">
+          WLED's own 2D settings say how this panel is wired, and darkRGB sends it plain rows from the top left. If
+          pictures come out scrambled, either fix the 2D settings in WLED, or choose "Here" and set WLED back to one
+          plain strip.
+        </p>
+        {full && plain}
+      </div>
+    );
+  }
   return (
     <div className="wiring">
-      <span className="field-head">
-        <span>Wiring</span>
-      </span>
+      {who}
+      {!who && (
+        <span className="field-head">
+          <span>Wiring</span>
+        </span>
+      )}
       <div className="wiring-row">
         <WiringDiagram fixture={fixture} />
         <p className="hint">
           Say how the LEDs are wired, so pictures and words come out the right way round. The ring is the first LED.
-          If WLED's own 2D settings already describe the wiring, leave these as they are.
+          {wled ? " WLED itself should then be left as one plain strip, with no 2D set-up of its own." : ""}
         </p>
       </div>
       <div className="field inline">
@@ -541,16 +666,7 @@ function MatrixWiring({ fixture, full }: { fixture: Fixture; full: boolean }) {
           Up and down the columns
         </button>
       </div>
-      {full && (
-        <button
-          type="button"
-          className="text-button"
-          title="Treat these LEDs as one long strip again"
-          onClick={() => engine.send({ type: "reshape", fixture: fixture.id, shape: { type: "strip", count: fixture.shape.type === "matrix" ? fixture.shape.cols * fixture.shape.rows : 0 } })}
-        >
-          <Minus size={13} /> Make it a plain strip
-        </button>
-      )}
+      {full && plain}
     </div>
   );
 }
@@ -752,7 +868,9 @@ function DeviceRow({
               </button>
             </div>
           )}
-          {own.length === 1 && own[0]!.shape.type === "matrix" && <MatrixWiring fixture={own[0]!} full={full} />}
+          {own.length === 1 && own[0]!.shape.type === "matrix" && (
+            <MatrixWiring fixture={own[0]!} full={full} wled={device.kind === "wled"} />
+          )}
           {own.length === 1 && own[0]!.shape.type === "strip" && (own[0]!.path?.length ?? 0) < 2 && <AsMatrix fixture={own[0]!} />}
           {(own.length > 1 || (own[0]?.path?.length ?? 0) < 2) && <Zones device={device} own={own} />}
           {show.light_groups.length > 0 && (

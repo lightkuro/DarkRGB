@@ -426,6 +426,7 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
   const hue = layer.hue ?? 0;
   const blocks = layer.blocks ?? 0;
   const slide = layer.slide ?? 0;
+  const blur = layer.blur ?? 0;
   const linked = (param: string) => layer.links?.some((l) => l.param === param) ?? false;
   const update = (change: Partial<Extract<Parameters<typeof engine.send>[0], { type: "update_layer" }>>) =>
     engine.send({ type: "update_layer", id: layer.id, ...change });
@@ -545,6 +546,17 @@ function Turning({ layer, full, matrices }: { layer: Layer; full: boolean; matri
           value={blocks < 2 ? 1 : blocks}
           format={(v) => (v <= 1 ? "Smooth" : `${Math.round(v)} across`)}
           onChange={slider("blocks", (value) => ({ type: "update_layer", id: layer.id, blocks: value <= 1 ? 0 : Math.round(value) }))}
+        />
+      )}
+      {(full || blur > 0) && (
+        <Slider
+          label="Blur"
+          min={0}
+          max={1}
+          step={0.01}
+          value={blur}
+          format={(v) => (v === 0 ? "Sharp" : `${Math.round(v * 100)}%`)}
+          onChange={slider("blur", (value) => ({ type: "update_layer", id: layer.id, blur: value }))}
         />
       )}
       {layer.each && (full || spread > 0) && (

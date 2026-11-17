@@ -25,10 +25,14 @@ import {
   useSettingsPage,
   useShow,
   useStatus,
+  MOOD_NAMES,
   type Action,
   type Launch,
+  type NextWay,
+  type NumberKeys,
   type SettingsPage,
   type Show,
+  type Transition,
 } from "../engine";
 import { AudioControls, Tempo } from "./AudioMeter";
 import { DemoSwitch } from "./DevicePanel";
@@ -47,6 +51,34 @@ const PAGES: { id: SettingsPage; name: string; icon: ReactNode }[] = [
 
 const setLimit = perFrame((limit: number) => engine.quiet({ type: "set_master", limit }));
 const setDelay = perFrame((delay_ms: number) => engine.quiet({ type: "set_audio", delay_ms }));
+/** The ways a change of scene can look, as the engine names them. */
+export const TRANSITIONS: { id: Transition; name: string; hint: string }[] = [
+  { id: "fade", name: "A fade", hint: "One scene fades out as the other fades in." },
+  { id: "brighten", name: "Brighten", hint: "The new scene comes up over the old, which then fades. Never darker than either." },
+  { id: "through_black", name: "Through black", hint: "Down to dark, then up into the new scene." },
+  { id: "through_white", name: "Through white", hint: "Up to white, then down into the new scene." },
+  { id: "wipe", name: "A wipe", hint: "The new scene crosses the stage from the left." },
+  { id: "iris", name: "An iris", hint: "The new scene opens out from the middle of the stage." },
+  { id: "dissolve", name: "A dissolve", hint: "LED by LED, in no order." },
+];
+
+/** The ways Next can choose a scene. */
+export const NEXT_WAYS: { id: NextWay; name: string; short: string; hint: string }[] = [
+  { id: "order", name: "The next in the list", short: "in order", hint: "Scenes are stepped through in the order they are listed." },
+  {
+    id: "alike",
+    name: "The next of the same kind",
+    short: "same kind",
+    hint: "From a scene made for quiet parts to the next one made for quiet parts, and so on. Set what a scene suits in its menu.",
+  },
+  {
+    id: "song",
+    name: "One that suits the song right now",
+    short: "by the song",
+    hint: "A quiet part of the song brings the next scene made for quiet parts, a big part one made for big parts.",
+  },
+];
+
 const setFade = perFrame((fade: number) => engine.quiet({ type: "set_live", fade }));
 const setDynamics = perFrame((dynamics: number) => engine.quiet({ type: "set_audio", dynamics }));
 const setLead = perFrame((lead_ms: number) => engine.quiet({ type: "set_audio", lead_ms }));
@@ -442,6 +474,8 @@ export function actionName(action: Action, show: Show, effectName: (id: string) 
       return "Fire a beat";
     case "next_scene":
       return "Next scene";
+    case "next_of":
+      return `Next scene for ${MOOD_NAMES[action.mood].toLowerCase()}`;
     case "prev_scene":
       return "Previous scene";
     case "freeze":
@@ -500,7 +534,65 @@ function LivePage({ show }: { show: Show }) {
             format={(v) => (v === 0 ? "No fade" : `${v.toFixed(1)} s`)}
             onChange={setFade}
           />
+          {show.live.fade > 0 && (
+            <label className="field inline">
+              <span>
+                The change looks like
+                <span className="hint block">{TRANSITIONS.find((t) => t.id === (show.live.transition ?? "fade"))?.hint}</span>
+              </span>
+              <select
+                aria-label="How a change of scene looks"
+                value={show.live.transition ?? "fade"}
+                onChange={(e) => engine.send({ type: "set_live", transition: e.target.value as Transition })}
+              >
+                {TRANSITIONS.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </>
+      )}
+      {show.scenes.length > 1 && (
+        <label className="field inline">
+          <span>
+            Next goes to
+            <span className="hint block">{NEXT_WAYS.find((w) => w.id === (show.live.next ?? "order"))?.hint}</span>
+          </span>
+          <select
+            aria-label="Which scene Next goes to"
+            value={show.live.next ?? "order"}
+            onChange={(e) => engine.send({ type: "set_live", next: e.target.value as NextWay })}
+          >
+            {NEXT_WAYS.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {(show.scene_sets?.length ?? 0) > 0 && (
+        <label className="field inline">
+          <span>
+            Number keys play
+            <span className="hint block">
+              {(show.live.number_keys ?? "own") === "own"
+                ? "A scene keeps the key it was given, whichever set is in use."
+                : "Key 1 plays the first scene of the set in use, key 2 the second, up to 9. Scenes' own number keys rest."}
+            </span>
+          </span>
+          <select
+            aria-label="What the number keys play"
+            value={show.live.number_keys ?? "own"}
+            onChange={(e) => engine.send({ type: "set_live", number_keys: e.target.value as NumberKeys })}
+          >
+            <option value="own">Each scene's own key</option>
+            <option value="set">The set in use, by place</option>
+          </select>
+        </label>
       )}
       <Tempo />
       <p className="hint">
