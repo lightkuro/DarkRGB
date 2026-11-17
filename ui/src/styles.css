@@ -4695,3 +4695,9 @@ input.number {
 .kind-list li input {
   flex: 1;
 }
+
+.preset .pack-looks {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}

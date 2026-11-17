@@ -85,6 +85,8 @@ export interface Hello {
   frame_rates: number[];
   /** Every starter scene there is. */
   looks: { name: string; description: string; mood?: Mood; effect?: string }[];
+  /** Sets of six scenes for kinds of music: two calm, two steady, two big. */
+  packs?: { name: string; description: string; looks: string[] }[];
   /** The kinds of show, and the starter scenes each gets. */
   kinds: { id: Kind; name: string; description: string; looks: string[] }[];
   effects: EffectInfo[];
@@ -844,6 +846,7 @@ export type Command =
   | { type: "hide_effect"; effect: string; hidden: boolean }
   | { type: "add_open_rgb"; address: string }
   | { type: "add_scene_set"; name: string }
+  | { type: "add_pack"; name: string }
   | { type: "rename_scene_set"; id: number; name: string }
   | { type: "remove_scene_set"; id: number }
   | { type: "file_scene"; scene: number; set: number | null }

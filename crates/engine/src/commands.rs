@@ -866,6 +866,11 @@ pub enum Command {
     RemoveSceneSet {
         id: u32,
     },
+    /// Adds a set of six scenes for one kind of music, by its name, and
+    /// starts using it, so Next and autopilot move between its scenes.
+    AddPack {
+        name: String,
+    },
     /// Makes a kind of scene of the user's own.
     AddSceneKind {
         name: String,
@@ -1150,7 +1155,7 @@ pub(crate) fn set_up(show: &mut Show, kind: Kind) -> Result<(), String> {
         Kind::Room => {
             show.live.auto.every_bars = 8;
             show.live.fade = 1.0;
-            wait_in(show, "Calm", 30.0);
+            wait_in(show, "Sunset", 30.0);
         }
         Kind::Display => {
             // Unhurried: long scenes and slow changes, for people walking past.
@@ -2800,6 +2805,18 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             if show.live.scene_set == Some(*id) {
                 show.live.scene_set = None;
             }
+            Ok(())
+        }
+
+        Command::AddPack { name: pack_name } => {
+            let pack = darkrgb_core::looks::pack(pack_name).ok_or("there is no set of scenes called that")?;
+            if show.scene_sets.len() >= MAX_SCENE_SETS {
+                return Err(format!("a show can have at most {MAX_SCENE_SETS} sets of scenes"));
+            }
+            let set = show
+                .add_pack(pack)
+                .ok_or_else(|| format!("the show already has a set called {}", pack.name))?;
+            show.live.scene_set = Some(set);
             Ok(())
         }
 
@@ -5102,7 +5119,15 @@ mod tests {
                     id: binding,
                     page: r.next() as u8 % 6,
                 },
-                76 => Command::AddSceneKind { name: r.text() },
+                76 => {
+                    if r.next() % 2 == 0 {
+                        Command::AddPack {
+                            name: ["Rock", "Chill and lounge", "Nope"][r.next() as usize % 3].into(),
+                        }
+                    } else {
+                        Command::AddSceneKind { name: r.text() }
+                    }
+                }
                 77 => Command::RenameSceneKind {
                     id: show.scene_kinds.first().map_or(9999, |k| k.id),
                     name: r.text(),
@@ -5588,6 +5613,37 @@ mod tests {
     }
 
     #[test]
+    fn a_set_for_a_kind_of_music_is_added_and_used_once() {
+        let mut show = show_with_device();
+        apply(
+            &mut show,
+            &Command::AddPack {
+                name: "Chill and lounge".into(),
+            },
+        )
+        .unwrap();
+        let set = show
+            .scene_sets
+            .iter()
+            .find(|s| s.name == "Chill and lounge")
+            .unwrap()
+            .id;
+        assert_eq!(show.live.scene_set, Some(set), "the new set is the one in use");
+        assert_eq!(show.scenes.iter().filter(|s| s.set == Some(set)).count(), 6);
+        assert!(
+            apply(
+                &mut show,
+                &Command::AddPack {
+                    name: "Chill and lounge".into()
+                }
+            )
+            .is_err()
+        );
+        assert!(apply(&mut show, &Command::AddPack { name: "Polka".into() }).is_err());
+        assert!(show.validate().is_ok());
+    }
+
+    #[test]
     fn kinds_of_scene_can_be_made_given_renamed_and_removed() {
         let mut show = Show::default();
         let a = show.save_scene("A");
@@ -5852,7 +5908,7 @@ mod tests {
     }
 
     fn calm_id(show: &Show) -> u32 {
-        show.scenes.iter().find(|s| s.name == "Calm").unwrap().id
+        show.scenes.iter().find(|s| s.name == "Sunset").unwrap().id
     }
 
     #[test]
@@ -5882,13 +5938,6 @@ mod tests {
             "the flash choice is still to be made"
         );
         assert!(show.bindings.iter().all(|b| matches!(b.action, Action::Scene { .. })));
-        // Strip effects go on the strips and matrix effects on the matrix.
-        let chase = show.scenes.iter().find(|s| s.name == "Neon chase").unwrap();
-        let only = |effect: &str| chase.layers.iter().find(|l| l.effect == effect).unwrap().only;
-        assert_eq!(
-            (only("chase"), only("sweep"), only("plasma")),
-            (Only::Strips, Only::Matrices, Only::Any)
-        );
         // Doing it again changes nothing.
         let before = show.clone();
         apply(
@@ -5902,12 +5951,15 @@ mod tests {
         assert_eq!(show, before);
 
         // When the music stops, a room waits in its calm scene.
-        let calm = show.scenes.iter().find(|s| s.name == "Calm").unwrap();
+        let calm = show.scenes.iter().find(|s| s.name == "Sunset").unwrap();
         assert_eq!(show.live.idle.scene, Some(calm.id));
         assert_eq!(calm.mood, Mood::Calm);
-        assert_eq!(show.scenes.iter().find(|s| s.name == "Pulse").unwrap().mood, Mood::Big);
+        assert_eq!(
+            show.scenes.iter().find(|s| s.name == "Peak time").unwrap().mood,
+            Mood::Big
+        );
         // Which a command can change, or switch off; a scene that is gone is refused.
-        let fire = show.scenes.iter().find(|s| s.name == "Fire").unwrap().id;
+        let fire = show.scenes.iter().find(|s| s.name == "Riff").unwrap().id;
         let idle = |show: &mut Show, scene, after| apply(show, &Command::SetIdle { scene, after });
         idle(&mut show, Some(fire), Some(1.0)).unwrap();
         assert_eq!((show.live.idle.scene, show.live.idle.after), (Some(fire), 3.0));
@@ -5927,7 +5979,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(show.scenes.iter().find(|s| s.name == "Calm").unwrap().mood, Mood::Any);
+        assert_eq!(show.scenes.iter().find(|s| s.name == "Sunset").unwrap().mood, Mood::Any);
         assert!(
             apply(
                 &mut show,
@@ -5951,6 +6003,10 @@ mod tests {
         let mut show = begin(Kind::Club, true);
         assert!(!show.flash.on() && show.flash.decided);
         assert_eq!(show.live.launch, Launch::Beat);
+        // Strip effects go on the strips and matrix effects on the matrix.
+        let drop = show.scenes.iter().find(|s| s.name == "The drop").unwrap();
+        let only = |effect: &str| drop.layers.iter().find(|l| l.effect == effect).unwrap().only;
+        assert_eq!((only("lf_multibar"), only("beams")), (Only::Any, Only::Matrices));
         let live: Vec<&str> = show
             .layers
             .iter()

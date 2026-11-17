@@ -280,6 +280,15 @@ export function SceneManager() {
   const hidden = show.scenes.length - show.scenes.filter((s) => inUse(show, s)).length;
   const presets = hello.looks.filter((l) => matches(`${l.name} ${l.description}`));
   const kept = library.patterns.filter((p) => p.look && matches(p.name));
+  const packs = (hello.packs ?? []).filter((p) => matches(`${p.name} ${p.description} ${p.looks.join(" ")}`));
+  const addPack = async (name: string) => {
+    const result = await engine.request({ type: "add_pack", name });
+    if (!result.ok) {
+      engine.toast("error", result.error ?? "Could not add that set.");
+      return;
+    }
+    engine.toast("info", `${name}: six scenes added and filed together. Next and autopilot now move between these; choose "All scenes" to go back.`);
+  };
   const has = (name: string) => show.scenes.some((s) => s.name === name);
   const add = async (command: Parameters<typeof engine.request>[0], name: string) => {
     const result = await engine.request(command);
@@ -443,7 +452,43 @@ export function SceneManager() {
                   </ul>
                 </>
               )}
-              <h3>Ready-made</h3>
+              {packs.length > 0 && (
+                <>
+                  <h3>Sets for kinds of music</h3>
+                  <p className="hint">
+                    Six scenes that go together: two calm, two steady, two big, so Next and autopilot have somewhere to
+                    go when the song builds or drops.
+                  </p>
+                  <ul className="preset-grid packs">
+                    {packs.map((pack) => {
+                      const added = sets.some((s) => s.name === pack.name);
+                      return (
+                        <li key={pack.name} className={`preset${added ? " have" : ""}`}>
+                          <EffectThumb
+                            effect={hello.looks.find((l) => l.name === pack.looks[2])?.effect ?? ""}
+                            playing={false}
+                          />
+                          <span className="preset-words">
+                            <strong>{pack.name}</strong>
+                            <span className="hint">{pack.description}</span>
+                            <span className="pack-looks">{pack.looks.join(" · ")}</span>
+                          </span>
+                          <button
+                            type="button"
+                            className="button small"
+                            disabled={added}
+                            onClick={() => void addPack(pack.name)}
+                          >
+                            {added ? "Added" : "Add set"}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <h3>One scene at a time</h3>
+                </>
+              )}
+              {packs.length === 0 && <h3>Ready-made</h3>}
               <ul className="preset-grid">
                 {presets.map((look) => (
                   <li key={look.name} className={`preset${has(look.name) ? " have" : ""}`}>

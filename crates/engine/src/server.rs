@@ -496,6 +496,11 @@ fn hello() -> String {
             // one that shows strongly, which is its body.
             "effect": l.layers.iter().find(|layer| layer.opacity >= 0.5).or(l.layers.last()).map(|layer| layer.effect),
         })).collect::<Vec<_>>(),
+        "packs": darkrgb_core::looks::PACKS.iter().map(|p| json!({
+            "name": p.name,
+            "description": p.description,
+            "looks": p.looks,
+        })).collect::<Vec<_>>(),
         "kinds": Kind::ALL.iter().map(|k| json!({
             "id": k,
             "name": k.name(),

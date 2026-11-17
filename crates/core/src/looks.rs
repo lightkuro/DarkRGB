@@ -76,6 +76,381 @@ use Value::{Number as N, Text as T};
 /// depends on its kind: see [`Kind::looks`]. Each has something that moves
 /// without sound, so none sits dark when the music stops.
 pub const LOOKS: &[Look] = &[
+    // ----- House and techno: a steady kick, long builds, big drops.
+    Look {
+        name: "Deep groove",
+        description: "Slow melting colour that swells with the kick. For the long quiet stretches.",
+        mood: Mood::Calm,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_melt",
+                &[
+                    ("gradient", T("lf_plasma")),
+                    ("speed", N(0.12)),
+                    ("reactivity", N(0.35)),
+                ],
+            )
+        }],
+    },
+    Look {
+        name: "Late night",
+        description: "Soft blue waves rolling along, nudged by the bass.",
+        mood: Mood::Calm,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_energy2",
+                &[("gradient", T("lf_ocean")), ("speed", N(0.06)), ("reactivity", N(0.3))],
+            )
+        }],
+    },
+    Look {
+        name: "Four to the floor",
+        description: "A bar of colour wipes across once a beat, a new colour every bar, over a faint glow.",
+        mood: Mood::Steady,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.15,
+                ..layer("lf_gradient", &[("gradient", T("lf_dancefloor")), ("roll", N(0.5))])
+            },
+            layer(
+                "lf_bar",
+                &[
+                    ("gradient", T("lf_dancefloor")),
+                    ("mode", T("Wipe")),
+                    ("ease", T("Slows at the end")),
+                    ("step", N(0.125)),
+                ],
+            ),
+        ],
+    },
+    Look {
+        name: "Bassline",
+        description: "The bass, mids and highs flow out from the middle in magenta, blue and cyan.",
+        mood: Mood::Steady,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_scroll",
+                &[
+                    ("color_lows", T("#ff00b2")),
+                    ("color_mids", T("#2050ff")),
+                    ("color_high", T("#00e0ff")),
+                    ("speed", N(2.0)),
+                    ("decay", N(0.95)),
+                ],
+            )
+        }],
+    },
+    Look {
+        name: "Peak time",
+        description: "The whole sound in colour, a bar that grows with the bass, and sparks on the hits.",
+        mood: Mood::Big,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer("lf_power", &[("gradient", T("lf_dancefloor"))])
+        }],
+    },
+    Look {
+        name: "The drop",
+        description: "Each beat a new colour sweeps over the last, with beams swaying on the matrices.",
+        mood: Mood::Big,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                ..layer("lf_multibar", &[("gradient", T("lf_dancefloor")), ("mode", T("Wipe"))])
+            },
+            LookLayer {
+                only: Only::Matrices,
+                opacity: 0.8,
+                ..each(
+                    "beams",
+                    &[
+                        ("palette", T("lf_dancefloor")),
+                        ("count", N(3.0)),
+                        ("move", T("Cross over")),
+                    ],
+                )
+            },
+        ],
+    },
+    // ----- Rock: drums and guitars, a backbeat, loud choruses.
+    Look {
+        name: "Smoke",
+        description: "Embers of red and orange melting slowly into each other.",
+        mood: Mood::Calm,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_melt",
+                &[("gradient", T("lf_rust")), ("speed", N(0.1)), ("reactivity", N(0.25))],
+            )
+        }],
+    },
+    Look {
+        name: "Amp glow",
+        description: "A warm sunset gradient that glows as loud as the lows.",
+        mood: Mood::Calm,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.25,
+                ..layer("lf_gradient", &[("gradient", T("lf_sunset")), ("roll", N(0.3))])
+            },
+            layer("lf_magnitude", &[("gradient", T("lf_sunset"))]),
+        ],
+    },
+    Look {
+        name: "Riff",
+        description: "Red for the bass, orange for the guitars, white for the cymbals, growing from the middle.",
+        mood: Mood::Steady,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_energy",
+                &[
+                    ("color_lows", T("#ff1000")),
+                    ("color_mids", T("#ff7000")),
+                    ("color_high", T("#ffffff")),
+                    ("sensitivity", N(0.6)),
+                ],
+            )
+        }],
+    },
+    Look {
+        name: "Backbeat",
+        description: "The two halves of each light take turns, red and white, on every beat.",
+        mood: Mood::Steady,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "alternate",
+                &[("colour", T("#ff1830")), ("second", T("#ffffff")), ("soft", N(0.4))],
+            )
+        }],
+    },
+    Look {
+        name: "Power chord",
+        description: "LedFx's Power in the colours of an old music player: green to red, sparks on every hit.",
+        mood: Mood::Big,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer("lf_power", &[("gradient", T("lf_winamp"))])
+        }],
+    },
+    Look {
+        name: "Encore",
+        description: "Stage beams sweeping over the lights while the whole stage glows with the lows.",
+        mood: Mood::Big,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.4,
+                ..layer("lf_magnitude", &[("gradient", T("lf_rust"))])
+            },
+            layer(
+                "beams",
+                &[("palette", T("warm")), ("count", N(4.0)), ("move", T("Fan in and out"))],
+            ),
+        ],
+    },
+    // ----- Hip-hop and R&B: slower, heavy bass, the beat felt more than heard.
+    Look {
+        name: "Smooth",
+        description: "Waves of purple, blue and green rolling slowly, pushed along by the bass.",
+        mood: Mood::Calm,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_energy2",
+                &[
+                    ("gradient", T("lf_viridis")),
+                    ("speed", N(0.05)),
+                    ("reactivity", N(0.4)),
+                ],
+            )
+        }],
+    },
+    Look {
+        name: "Velvet",
+        description: "Cool colours melting into each other, barely moving.",
+        mood: Mood::Calm,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_melt",
+                &[("gradient", T("lf_frost")), ("speed", N(0.06)), ("reactivity", N(0.2))],
+            )
+        }],
+    },
+    Look {
+        name: "808",
+        description: "The whole light breathes with the kick and the bass, with a drop of colour where the lows jump.",
+        mood: Mood::Steady,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                ..layer("lf_magnitude", &[("gradient", T("lf_borealis")), ("range", T("Bass"))])
+            },
+            LookLayer {
+                opacity: 0.8,
+                ..layer(
+                    "lf_rain",
+                    &[
+                        ("lows_color", T("#ffffff")),
+                        ("mids_color", T("#000000")),
+                        ("high_color", T("#000000")),
+                        ("mids_sensitivity", N(0.3)),
+                        ("high_sensitivity", N(0.3)),
+                    ],
+                )
+            },
+        ],
+    },
+    Look {
+        name: "Head nod",
+        description: "A bar bouncing from end to end once a beat, slowing as it lands.",
+        mood: Mood::Steady,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_bar",
+                &[
+                    ("gradient", T("lf_viridis")),
+                    ("mode", T("Bounce")),
+                    ("ease", T("Both")),
+                ],
+            )
+        }],
+    },
+    Look {
+        name: "Hype",
+        description: "Purple bass and gold highs flowing out from the middle.",
+        mood: Mood::Big,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_scroll",
+                &[
+                    ("color_lows", T("#9010ff")),
+                    ("color_mids", T("#ff2060")),
+                    ("color_high", T("#ffc800")),
+                    ("speed", N(3.0)),
+                ],
+            )
+        }],
+    },
+    Look {
+        name: "Levels",
+        description: "Eight meters side by side, low to high, each growing from its middle.",
+        mood: Mood::Big,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_bands",
+                &[
+                    ("gradient", T("lf_plasma")),
+                    ("count", N(8.0)),
+                    ("align", T("The middle")),
+                ],
+            )
+        }],
+    },
+    // ----- Chill and lounge: slow, warm, the tune more than the beat.
+    Look {
+        name: "Sunset",
+        description: "A sunset gradient drifting slowly along the lights. Does not need the music.",
+        mood: Mood::Calm,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer("lf_gradient", &[("gradient", T("lf_sunset")), ("roll", N(0.25))])
+        }],
+    },
+    Look {
+        name: "Tide",
+        description: "Blue and green waves coming in slowly, a little faster when the bass rises.",
+        mood: Mood::Calm,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_energy2",
+                &[("gradient", T("lf_ocean")), ("speed", N(0.04)), ("reactivity", N(0.2))],
+            )
+        }],
+    },
+    Look {
+        name: "Lounge",
+        description: "The sound from low to high, laid softly along the lights in warm colours.",
+        mood: Mood::Steady,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer("lf_wavelength", &[("gradient", T("lf_spring")), ("blur", N(6.0))])
+        }],
+    },
+    Look {
+        name: "Melody",
+        description: "The tune paints the lights: each note its own colour, spreading out from the middle, over a dim drift of the same colours.",
+        mood: Mood::Steady,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.25,
+                ..layer("lf_gradient", &[("gradient", T("lf_borealis")), ("roll", N(0.1))])
+            },
+            layer(
+                "lf_pitch_spectrum",
+                &[("gradient", T("lf_borealis")), ("fade", N(0.08))],
+            ),
+        ],
+    },
+    Look {
+        name: "Golden hour",
+        description: "Warm melting colour with the music flowing gently through it.",
+        mood: Mood::Big,
+        layers: &[
+            LookLayer {
+                blend: Blend::Normal,
+                opacity: 0.5,
+                ..layer(
+                    "lf_melt",
+                    &[("gradient", T("lf_sunset")), ("speed", N(0.12)), ("reactivity", N(0.4))],
+                )
+            },
+            LookLayer {
+                opacity: 0.8,
+                ..layer(
+                    "lf_scroll",
+                    &[
+                        ("color_lows", T("#ff7000")),
+                        ("color_mids", T("#ffc040")),
+                        ("color_high", T("#fff0c0")),
+                        ("speed", N(1.0)),
+                        ("decay", N(0.96)),
+                    ],
+                )
+            },
+        ],
+    },
+    Look {
+        name: "Warm lift",
+        description: "Soft bars of warm colour growing from the middle with the lows, mids and highs.",
+        mood: Mood::Big,
+        layers: &[LookLayer {
+            blend: Blend::Normal,
+            ..layer(
+                "lf_energy",
+                &[
+                    ("color_lows", T("#ff4000")),
+                    ("color_mids", T("#ffa000")),
+                    ("color_high", T("#fff0c0")),
+                    ("blur", N(8.0)),
+                    ("sensitivity", N(0.4)),
+                ],
+            )
+        }],
+    },
     Look {
         name: "Pulse",
         description: "A new colour on every beat, with sparks on the highs.",
@@ -542,14 +917,14 @@ impl Kind {
     pub fn looks(self) -> &'static [&'static str] {
         match self {
             Kind::Room => &[
-                "Calm",
-                "Aurora",
-                "Pulse",
-                "Spectrum",
-                "Fire",
-                "Rain",
-                "Neon chase",
-                "Sweep",
+                "Deep groove",
+                "Lounge",
+                "Riff",
+                "Four to the floor",
+                "Melody",
+                "Peak time",
+                "Sunset",
+                "Bassline",
             ],
             Kind::Display => &[
                 "Fairy lights",
@@ -561,17 +936,70 @@ impl Kind {
                 "Sweep",
             ],
             Kind::Club => &[
-                "Pulse",
-                "Neon chase",
-                "Colour hits",
-                "Sweep",
-                "Storm",
-                "Spectrum",
-                "Fire",
+                "Four to the floor",
+                "Bassline",
+                "Peak time",
+                "The drop",
+                "Backbeat",
+                "Power chord",
+                "Deep groove",
             ],
-            Kind::Custom => &["Pulse", "Spectrum", "Neon chase", "Fire", "Rain", "Sweep", "Calm"],
+            Kind::Custom => &[
+                "Deep groove",
+                "Four to the floor",
+                "Riff",
+                "Peak time",
+                "Lounge",
+                "Melody",
+                "Bassline",
+            ],
         }
     }
+}
+
+/// A set of six scenes for one kind of music: two for its quiet
+/// stretches, two for the parts in between, two for its biggest moments.
+pub struct Pack {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub looks: [&'static str; 6],
+}
+
+/// The sets there are. Each look is in one set at most, since a scene
+/// can be filed in one set only.
+pub const PACKS: &[Pack] = &[
+    Pack {
+        name: "House and techno",
+        description: "A steady kick, long builds and big drops.",
+        looks: [
+            "Deep groove",
+            "Late night",
+            "Four to the floor",
+            "Bassline",
+            "Peak time",
+            "The drop",
+        ],
+    },
+    Pack {
+        name: "Rock",
+        description: "Drums and guitars: a backbeat, riffs and loud choruses.",
+        looks: ["Smoke", "Amp glow", "Riff", "Backbeat", "Power chord", "Encore"],
+    },
+    Pack {
+        name: "Hip-hop and R&B",
+        description: "Slower, with a heavy bass you feel more than hear.",
+        looks: ["Smooth", "Velvet", "808", "Head nod", "Hype", "Levels"],
+    },
+    Pack {
+        name: "Chill and lounge",
+        description: "Slow and warm: the tune more than the beat.",
+        looks: ["Sunset", "Tide", "Lounge", "Melody", "Golden hour", "Warm lift"],
+    },
+];
+
+/// Finds a set of scenes by name.
+pub fn pack(name: &str) -> Option<&'static Pack> {
+    PACKS.iter().find(|p| p.name == name)
 }
 
 /// Finds a starter look by name.
@@ -653,6 +1081,35 @@ impl Show {
 
     /// Adds the starter looks for this show's kind that are not there
     /// yet. Returns how many were added.
+    /// Adds a set of scenes for one kind of music: a set of scenes named
+    /// after it, holding its six looks as scenes. Looks already in the
+    /// show as scenes are filed in the set as they are. Returns the
+    /// set's id, or none when the show has a set of that name already.
+    pub fn add_pack(&mut self, pack: &Pack) -> Option<u32> {
+        if self.scene_sets.iter().any(|s| s.name == pack.name) {
+            return None;
+        }
+        let set = self.alloc_id();
+        self.scene_sets.push(crate::show::SceneSet {
+            id: set,
+            name: pack.name.to_string(),
+        });
+        for name in pack.looks {
+            let Some(found) = look(name) else { continue };
+            let id = match self.add_look(found) {
+                Some(id) => id,
+                None => match self.scenes.iter().find(|s| s.name == *name) {
+                    Some(s) => s.id,
+                    None => continue,
+                },
+            };
+            if let Some(scene) = self.scenes.iter_mut().find(|s| s.id == id) {
+                scene.set = Some(set);
+            }
+        }
+        Some(set)
+    }
+
     pub fn add_looks(&mut self) -> usize {
         let names = self.kind.looks();
         names
@@ -727,14 +1184,26 @@ mod tests {
                 );
             }
         }
-        // The first fifteen each start some kind of show. Those added
-        // since are offered where scenes are managed, to any show.
-        for l in &LOOKS[..15] {
-            assert!(
-                Kind::ALL.iter().any(|k| k.looks().contains(&l.name)),
-                "{} is never offered",
-                l.name
-            );
+        // Every set names six looks there are, two for each part of a
+        // song, and no look is in two sets.
+        let mut in_sets = std::collections::HashSet::new();
+        for p in PACKS {
+            let moods: Vec<Mood> = p
+                .looks
+                .iter()
+                .map(|name| look(name).unwrap_or_else(|| panic!("{name}")).mood)
+                .collect();
+            for mood in [Mood::Calm, Mood::Steady, Mood::Big] {
+                assert_eq!(
+                    moods.iter().filter(|m| **m == mood).count(),
+                    2,
+                    "{}: two {mood:?}",
+                    p.name
+                );
+            }
+            for name in p.looks {
+                assert!(in_sets.insert(name), "{name} is in two sets");
+            }
         }
     }
 
@@ -746,8 +1215,33 @@ mod tests {
     }
 
     #[test]
-    fn looks_become_scenes_with_strip_and_matrix_effects_where_they_belong() {
+    fn a_set_for_a_kind_of_music_brings_its_six_scenes_filed_together() {
         let mut show = mixed_show();
+        let house = pack("House and techno").unwrap();
+        let set = show.add_pack(house).unwrap();
+        let filed: Vec<&str> = show
+            .scenes
+            .iter()
+            .filter(|s| s.set == Some(set))
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(filed, house.looks);
+        assert!(show.add_pack(house).is_none(), "once only");
+        // A look already in the show is filed in the set, not repeated.
+        let mut show = mixed_show();
+        show.add_look(look("Riff").unwrap()).unwrap();
+        let rock = show.add_pack(pack("Rock").unwrap()).unwrap();
+        assert_eq!(show.scenes.iter().filter(|s| s.name == "Riff").count(), 1);
+        assert_eq!(show.scenes.iter().find(|s| s.name == "Riff").unwrap().set, Some(rock));
+        assert!(show.validate().is_ok());
+    }
+
+    #[test]
+    fn looks_become_scenes_with_strip_and_matrix_effects_where_they_belong() {
+        let mut show = Show {
+            kind: Kind::Display,
+            ..mixed_show()
+        };
         let (strip, matrix) = (show.fixtures[0].clone(), show.fixtures[1].clone());
         let count = show.kind.looks().len();
         assert_eq!(show.add_looks(), count);
@@ -776,7 +1270,10 @@ mod tests {
 
     #[test]
     fn looks_added_before_the_lights_still_land_where_they_belong() {
-        let mut show = Show::default();
+        let mut show = Show {
+            kind: Kind::Display,
+            ..Show::default()
+        };
         show.add_looks();
         show.add_device(Device::wled("strip", "127.0.0.1", 4048, 60), None);
         show.add_device(Device::wled("matrix", "127.0.0.2", 4048, 64), Some((8, 8)));
@@ -816,6 +1313,9 @@ mod tests {
             beat: 1.0,
             bpm: 120.0,
             active: true,
+            // A note is being played.
+            tonal: 0.6,
+            pitch: 0.3,
             ..AudioFeatures::default()
         };
         for scene in show.scenes.clone() {
