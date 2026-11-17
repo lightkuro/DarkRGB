@@ -378,6 +378,7 @@ impl Shared {
                 return Ok(None);
             }
             Command::RemoveMovie { id } => return self.remove_movie(id),
+            Command::AddOpenRgb { address } => return self.add_open_rgb(address),
             Command::Undo => return self.step_history(true),
             Command::Redo => return self.step_history(false),
             Command::MidiLearn { target } => {
@@ -1695,6 +1696,54 @@ impl Shared {
                 "{} is already receiving a stream ({source}). Two senders at once will flicker.",
                 info.name
             )
+        }))
+    }
+
+    /// Adds the devices of an OpenRGB server as lights: each a strip of
+    /// as many LEDs as OpenRGB says it has. Ones already in the show,
+    /// and ones with no LEDs, are passed over.
+    fn add_open_rgb(&self, address: &str) -> Result<Option<String>, String> {
+        use darkrgb_output::openrgb;
+        let address = if address.trim().is_empty() { "127.0.0.1" } else { address };
+        let (host, port) = wled::parse_address(address)?;
+        // No port given reads as the web's; OpenRGB has its own.
+        let port = if address.trim().rsplit_once(':').is_some() { port } else { openrgb::PORT };
+        let found = openrgb::list(&host, port, Duration::from_secs(3))?;
+        if found.is_empty() {
+            return Err("OpenRGB answered, but it has found no devices of its own yet".into());
+        }
+        let mut show = self.show.lock().unwrap();
+        let before = show.clone();
+        let (mut added, mut skipped) = (0, 0);
+        for controller in &found {
+            let known = show.devices.iter().any(|d| {
+                d.kind == darkrgb_core::DeviceKind::OpenRgb
+                    && d.address == host
+                    && d.port == port
+                    && d.universe as u32 == controller.index
+            });
+            let leds = controller.leds.min(darkrgb_core::layout::MAX_PIXELS);
+            if known || leds == 0 || controller.index > u16::MAX as u32 {
+                skipped += 1;
+                continue;
+            }
+            let name = commands::name(&controller.name, "The name").unwrap_or_else(|_| "OpenRGB device".into());
+            show.add_device(Device::open_rgb(&name, &host, port, leds, controller.index as u16), None);
+            added += 1;
+        }
+        if show.validate().is_err() {
+            *show = before;
+            return Err("adding those would be more lights than a show can hold".into());
+        }
+        drop(show);
+        if added == 0 {
+            return Err("every device OpenRGB has is already in the show".into());
+        }
+        self.history.lock().unwrap().remember_other(before);
+        self.bump();
+        Ok(Some(match skipped {
+            0 => format!("Added {added} from OpenRGB."),
+            _ => format!("Added {added} from OpenRGB; {skipped} were already here or have no LEDs."),
         }))
     }
 

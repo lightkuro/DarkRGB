@@ -21,6 +21,10 @@ pub enum DeviceKind {
     Sacn,
     /// A pixel controller that takes Art-Net.
     Artnet,
+    /// One of the devices of an OpenRGB server: the lights in and around
+    /// a computer. `universe` is its number in OpenRGB's list.
+    #[serde(rename = "openrgb")]
+    OpenRgb,
 }
 
 /// Something that shows pixels: a controller on the network, or a
@@ -170,7 +174,7 @@ impl DeviceKind {
         match self {
             Self::Sacn => Some((1, 63999)),
             Self::Artnet => Some((0, 32767)),
-            Self::Wled | Self::Virtual => None,
+            Self::Wled | Self::Virtual | Self::OpenRgb => None,
         }
     }
 
@@ -247,6 +251,15 @@ impl Device {
         Self {
             kind,
             universe,
+            ..Self::wled(name, address, port, pixel_count)
+        }
+    }
+
+    /// One of an OpenRGB server's devices: number `index` in its list.
+    pub fn open_rgb(name: &str, address: &str, port: u16, pixel_count: u32, index: u16) -> Self {
+        Self {
+            kind: DeviceKind::OpenRgb,
+            universe: index,
             ..Self::wled(name, address, port, pixel_count)
         }
     }

@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::ddp;
 use crate::dmx::{self, artnet, sacn};
+use crate::openrgb;
 
 /// Running totals for one device, shown in the UI.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -57,6 +58,8 @@ pub struct Outputs {
     held: HashMap<u32, VecDeque<(Instant, Vec<u8>)>>,
     /// Buffers that held frames have finished with, to be used again.
     spare: Vec<Vec<u8>>,
+    /// Device id to its connection to an OpenRGB server.
+    links: HashMap<u32, openrgb::Link>,
 }
 
 /// Sixteen bytes that differ each time the program starts.
@@ -86,6 +89,7 @@ impl Outputs {
             cid: new_cid(),
             held: HashMap::new(),
             spare: Vec::new(),
+            links: HashMap::new(),
         })
     }
 
@@ -98,6 +102,8 @@ impl Outputs {
         self.targets.retain(|id, _| show.devices.iter().any(|d| d.id == *id));
         self.stats.retain(|id, _| show.devices.iter().any(|d| d.id == *id));
         self.sequences.retain(|id, _| show.devices.iter().any(|d| d.id == *id));
+        self.links
+            .retain(|id, _| show.devices.iter().any(|d| d.id == *id && d.kind == DeviceKind::OpenRgb && d.enabled));
         self.held
             .retain(|id, _| show.devices.iter().any(|d| d.id == *id && d.delay_ms > 0));
         for device in &show.devices {
@@ -211,6 +217,24 @@ impl Outputs {
     fn transmit(&mut self, device: &Device, addr: SocketAddr, bytes: &[u8]) -> std::io::Result<()> {
         match device.kind {
             DeviceKind::Wled | DeviceKind::Virtual => self.sender.send_frame(addr, bytes).map(|_| ()),
+            DeviceKind::OpenRgb => {
+                // A connection of its own for each device, kept up on a
+                // thread of its own; made again if the address or the
+                // device's number has changed.
+                let index = device.universe as u32;
+                let stale = self
+                    .links
+                    .get(&device.id)
+                    .is_some_and(|link| link.addr != addr || link.device != index);
+                if stale {
+                    self.links.remove(&device.id);
+                }
+                self.links
+                    .entry(device.id)
+                    .or_insert_with(|| openrgb::Link::new(addr, index))
+                    .send(bytes);
+                Ok(())
+            }
             kind => {
                 // One packet for each universe of 170 pixels. Every
                 // universe of a frame carries the same sequence number.
@@ -268,6 +292,11 @@ impl Outputs {
                     }
                 }
             }
+        }
+        // Frames for OpenRGB are sent from threads of their own: give
+        // them a moment to go before the program ends.
+        if !self.links.is_empty() {
+            thread::sleep(Duration::from_millis(150));
         }
         self.buf = black;
     }
@@ -379,6 +408,62 @@ mod tests {
             .params
             .insert("colour".into(), darkrgb_core::params::ParamValue::Text(colour.into()));
         renderer.render(show, 0.0, 1.0 / 60.0, &AudioFeatures::default());
+    }
+
+    #[test]
+    fn a_device_of_an_openrgb_server_gets_its_frames_over_tcp() {
+        use std::io::Read;
+        // A stand-in for OpenRGB that reports the LED packets it is sent.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            loop {
+                let mut head = [0u8; 16];
+                if stream.read_exact(&mut head).is_err() {
+                    return;
+                }
+                let field = |at: usize| u32::from_le_bytes(head[at..at + 4].try_into().unwrap());
+                let mut data = vec![0u8; field(12) as usize];
+                if stream.read_exact(&mut data).is_err() {
+                    return;
+                }
+                if field(8) == 1050 {
+                    let _ = tx.send((field(4), data));
+                }
+            }
+        });
+        let mut show = Show::default();
+        show.layers.clear();
+        let layer = show.add_layer("solid");
+        show.layer_mut(layer).unwrap().params.insert(
+            "colour".into(),
+            darkrgb_core::params::ParamValue::Text("#00ff00".into()),
+        );
+        // The third device in OpenRGB's list, with four LEDs.
+        show.add_device(Device::open_rgb("keys", "127.0.0.1", port, 4, 2), None);
+        show.devices[0].gamma = 1.0;
+        let mut renderer = Renderer::new();
+        renderer.sync(&show);
+        renderer.render(&show, 0.0, 1.0 / 60.0, &AudioFeatures::default());
+        let mut outputs = Outputs::new().unwrap();
+        outputs.sync(&show);
+        outputs.send(&show, &renderer);
+        let (device, data) = rx.recv_timeout(Duration::from_secs(3)).expect("a frame should arrive");
+        assert_eq!(device, 2);
+        assert_eq!(data[4..6], 4u16.to_le_bytes());
+        assert_eq!(data[6..], [0, 255, 0, 0].repeat(4));
+        // Stopping leaves it dark.
+        outputs.go_dark(&show);
+        let dark = std::iter::from_fn(|| rx.recv_timeout(Duration::from_secs(1)).ok())
+            .last()
+            .expect("a last frame");
+        assert_eq!(dark.1[6..], [0u8; 16]);
+        // Taken out of the show, its connection is closed.
+        show.remove_device(show.devices[0].id);
+        outputs.sync(&show);
+        assert!(outputs.links.is_empty());
     }
 
     #[test]

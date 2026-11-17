@@ -94,7 +94,7 @@ export interface Device {
   name: string;
   /** A virtual light exists only in the preview. sACN and Art-Net are
    *  pixel controllers that are sent universes of 170 LEDs. */
-  kind: "wled" | "virtual" | "sacn" | "artnet";
+  kind: "wled" | "virtual" | "sacn" | "artnet" | "openrgb";
   /** One of the built-in demo lights. */
   demo: boolean;
   address: string;
@@ -824,6 +824,7 @@ export type Command =
   | { type: "edit_scene"; id: number }
   | { type: "finish_edit"; play: boolean; discard?: boolean }
   | { type: "remove_movie"; id: string }
+  | { type: "add_open_rgb"; address: string }
   | { type: "add_scene_set"; name: string }
   | { type: "rename_scene_set"; id: number; name: string }
   | { type: "remove_scene_set"; id: number }

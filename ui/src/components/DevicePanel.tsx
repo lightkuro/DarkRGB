@@ -4,14 +4,15 @@
 import {
   BoxSelect,
   ChevronRight,
+  Cpu,
   Folder,
   FolderOpen,
   FolderPlus,
   Ghost,
   Grid3x3,
   GripVertical,
-  Minus,
   Merge,
+  Minus,
   Network,
   Plug,
   Plus,
@@ -67,6 +68,9 @@ function statusOf(device: Device, stats: DeviceStats | undefined): { tone: strin
   }
   if (device.kind === "sacn" || device.kind === "artnet") {
     return { tone: "ok", text: `Sending ${PROTOCOLS[device.kind]} to ${device.address}, ${universesText(device)}` };
+  }
+  if (device.kind === "openrgb") {
+    return { tone: "ok", text: `Sending to OpenRGB at ${device.address}, its device ${(device.universe ?? 0) + 1}` };
   }
   return { tone: "ok", text: `Sending to ${device.address}` };
 }
@@ -963,7 +967,9 @@ function DeviceRow({
             <span className="hint">
               {device.kind === "sacn" || device.kind === "artnet"
                 ? `${PROTOCOLS[device.kind]} · ${universesText(device)}`
-                : device.version
+                : device.kind === "openrgb"
+                  ? `OpenRGB · device ${(device.universe ?? 0) + 1}`
+                  : device.version
                   ? `WLED ${device.version}`
                   : ""}
             </span>
@@ -1200,6 +1206,67 @@ export function FoundDevices() {
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * The lights in and around a computer, by way of the OpenRGB program:
+ * it is asked what it has, and each of its devices becomes a light.
+ */
+function AddOpenRgb() {
+  const [open, setOpen] = useState(false);
+  const [address, setAddress] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const add = async () => {
+    setBusy(true);
+    const result = await engine.request({ type: "add_open_rgb", address: address.trim() });
+    setBusy(false);
+    if (!result.ok) return setError(result.error ?? "OpenRGB could not be reached.");
+    setError(null);
+    setOpen(false);
+    if (result.note) engine.toast("info", result.note);
+  };
+  return (
+    <div className={`connect${open ? " open" : ""}`}>
+      <button type="button" className="text-button connect-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Cpu size={13} /> Add a computer's own lights (OpenRGB)
+        <ChevronRight size={13} className="chevron" aria-hidden />
+      </button>
+      {open && (
+        <form
+          className="connect-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!busy) void add();
+          }}
+        >
+          <p className="hint">
+            Keyboards, memory, fans and the like, through the free OpenRGB program. Start OpenRGB on the computer
+            that has them and switch on its SDK server; every device it lists is added here as a light.
+          </p>
+          <label className="field">
+            <span className="field-head">
+              <span>Where OpenRGB runs</span>
+            </span>
+            <input
+              type="text"
+              aria-label="Address of the computer OpenRGB runs on"
+              placeholder="This computer (127.0.0.1)"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
+            />
+          </label>
+          {error && <p className="callout error">{error}</p>}
+          <div className="form-actions">
+            <button type="submit" className="button small" disabled={busy}>
+              {busy ? "Asking OpenRGB…" : "Add its lights"}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -1627,6 +1694,7 @@ export function DevicePanel() {
             <Network size={13} aria-hidden /> Other pixel controllers
           </h2>
           <AddPixels />
+          <AddOpenRgb />
           <h2>Without hardware</h2>
           <DemoSwitch />
           <AddVirtual />

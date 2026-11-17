@@ -4,6 +4,7 @@
 pub mod ddp;
 pub mod discovery;
 pub mod dmx;
+pub mod openrgb;
 pub mod outputs;
 pub mod scan;
 pub mod wled;

@@ -145,7 +145,7 @@ impl PixelProtocol {
         match kind {
             DeviceKind::Sacn => Some(Self::Sacn),
             DeviceKind::Artnet => Some(Self::Artnet),
-            DeviceKind::Wled | DeviceKind::Virtual => None,
+            DeviceKind::Wled | DeviceKind::Virtual | DeviceKind::OpenRgb => None,
         }
     }
 
@@ -293,6 +293,11 @@ pub enum Command {
     /// Forgets a moving picture kept on this computer.
     RemoveMovie {
         id: String,
+    },
+    /// Asks an OpenRGB server what devices it has and adds each as a
+    /// light. The address is the computer OpenRGB runs on.
+    AddOpenRgb {
+        address: String,
     },
     /// Adds or removes the built-in demo lights.
     SetDemo {
@@ -1402,6 +1407,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
         Command::RemoveMovie { .. }
+        | Command::AddOpenRgb { .. }
         | Command::Trigger { .. }
         | Command::Perform { .. }
         | Command::Tap
