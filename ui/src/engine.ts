@@ -208,6 +208,8 @@ export interface Binding {
   midi?: MidiNote;
   /** The page of pads it is on, 1 to 4. Left out when it is on every page. */
   page?: number;
+  /** The group of pads it is shown in, in the Live view, by name. Absent: none. */
+  section?: string;
 }
 
 /** Whether a pad is live on the page that is showing. */
@@ -403,6 +405,8 @@ export interface Show {
     number_keys?: NumberKeys;
     /** How a change of scene looks while it fades. Absent: a plain fade. */
     transition?: Transition;
+    /** The panels of the Live view that are shown, in order. Absent: the usual ones. */
+    panels?: string[];
   };
   output: {
     frame_rate: number;
@@ -798,6 +802,8 @@ export type Command =
   | { type: "set_fader"; n: number; value: number }
   | { type: "add_colour_pad"; name: string; value: string }
   | { type: "set_pad_page"; id: number; page: number }
+  | { type: "set_pad_section"; id: number; section: string }
+  | { type: "arrange_live"; panels: string[] }
   | { type: "set_page"; page: number }
   | { type: "set_schedule"; enabled?: boolean; on?: number; off?: number }
   | { type: "undo" }
@@ -1256,7 +1262,11 @@ export const useCurrentScene = () => useSyncExternalStore(engine.currentScene.su
 export const useBaseScene = () => useSyncExternalStore(engine.baseScene.subscribe, engine.baseScene.get);
 
 export function sameAction(a: Action, b: Action): boolean {
-  return a.type === b.type && ("id" in a ? a.id : 0) === ("id" in b ? b.id : 0);
+  return (
+    a.type === b.type &&
+    ("id" in a ? a.id : 0) === ("id" in b ? b.id : 0) &&
+    ("mood" in a ? a.mood : "") === ("mood" in b ? b.mood : "")
+  );
 }
 
 export const useHistory = () => useSyncExternalStore(engine.history.subscribe, engine.history.get);

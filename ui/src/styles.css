@@ -4275,3 +4275,75 @@ input.number {
   white-space: normal;
   text-align: left;
 }
+
+/* --------------------------------------------- live view: its panels */
+
+.pad-group.wide {
+  flex: 1 1 100%;
+}
+
+.pad-group h2 .panel-tools {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.pad-group h2 .text-button + .panel-tools {
+  margin-left: 8px;
+}
+
+.pads.customizing .pad-group {
+  padding: 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.add-panels .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.song-now {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.song-fact {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.song-fact strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.song-meter {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.song-meter span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.song-note {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+}

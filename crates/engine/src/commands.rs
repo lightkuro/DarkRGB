@@ -7,7 +7,8 @@ use darkrgb_core::layout::{ColourOrder, Corner, MAX_DEVICE_DELAY_MS, MAX_MILLIAM
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::picture::{MAX_SIDE, Picture};
 use darkrgb_core::show::{
-    Blend, FADERS, FRAME_RATES, LINK_ANGLE, LINK_HUE, LINK_STRENGTH, MAX_LINKS, Mirror, PAGES, linkable, mend_links,
+    Blend, DEFAULT_LIVE_PANELS, FADERS, FRAME_RATES, LINK_ANGLE, LINK_HUE, LINK_STRENGTH, LIVE_PANELS, MAX_LINKS,
+    MAX_SECTION_NAME, Mirror, PAGES, linkable, mend_links,
 };
 use darkrgb_core::timeline::{Clip, ClipKind, MAX_CLIPS, MAX_LENGTH, MIN_CLIP};
 use darkrgb_core::{
@@ -752,6 +753,17 @@ pub enum Command {
     /// Shows another page of pads.
     SetPage {
         page: u8,
+    },
+    /// Puts a pad in a named group in the Live view, or with an empty
+    /// name in none.
+    SetPadSection {
+        id: u32,
+        section: String,
+    },
+    /// Says which panels the Live view shows, and in what order. An
+    /// empty list goes back to the usual ones.
+    ArrangeLive {
+        panels: Vec<String>,
     },
     /// The hours the lights keep each day, in minutes after midnight.
     SetSchedule {
@@ -2442,6 +2454,39 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                     binding.midi = None;
                 }
             }
+            Ok(())
+        }
+
+        Command::SetPadSection { id, section } => {
+            // What was typed, tidied: no control characters, no more
+            // than fits on a heading.
+            let section: String = section
+                .trim()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(MAX_SECTION_NAME)
+                .collect();
+            show.bindings
+                .iter_mut()
+                .find(|b| b.id == *id)
+                .ok_or("that pad is no longer set up")?
+                .section = section.trim().to_string();
+            Ok(())
+        }
+
+        Command::ArrangeLive { panels } => {
+            let mut seen: Vec<String> = Vec::new();
+            for panel in panels {
+                if !LIVE_PANELS.contains(&panel.as_str()) {
+                    return Err(format!("the Live view has no panel called {panel:?}"));
+                }
+                if !seen.contains(panel) {
+                    seen.push(panel.clone());
+                }
+            }
+            // The usual ones in the usual order are kept as "not arranged".
+            let usual = seen.iter().map(String::as_str).eq(LIVE_PANELS[..DEFAULT_LIVE_PANELS].iter().copied());
+            show.live.panels = if usual { Vec::new() } else { seen };
             Ok(())
         }
 
@@ -4662,7 +4707,7 @@ mod tests {
             let clip = r.id(show.timeline.clips.iter().map(|c| c.id).collect());
             let set = r.id(show.scene_sets.iter().map(|s| s.id).collect());
             let scene_id = r.id(show.scenes.iter().map(|s| s.id).collect());
-            let command = match r.next() % 74 {
+            let command = match r.next() % 76 {
                 70 => Command::SplitStrip {
                     fixture,
                     parts: (0..r.next() % 4)
@@ -4932,6 +4977,15 @@ mod tests {
                 52 => Command::SetPadPage {
                     id: binding,
                     page: r.next() as u8 % 6,
+                },
+                74 => Command::SetPadSection {
+                    id: binding,
+                    section: r.text(),
+                },
+                75 => Command::ArrangeLive {
+                    panels: (0..r.next() % 5)
+                        .map(|_| ["scenes", "pads", "song", "faders", "nope", "next"][r.next() as usize % 6].to_string())
+                        .collect(),
                 },
                 54 => Command::SetSchedule {
                     enabled: r.maybe(Awkward::flag),
@@ -5350,6 +5404,65 @@ mod tests {
         let mut mended = show.clone();
         mended.repair();
         assert_eq!(mended, show);
+    }
+
+    #[test]
+    fn pads_can_be_grouped_and_the_live_view_arranged() {
+        let mut show = Show::default();
+        apply(
+            &mut show,
+            &Command::Bind {
+                key: None,
+                label: String::new(),
+                action: Action::Blackout,
+                mode: KeyMode::Toggle,
+            },
+        )
+        .unwrap();
+        let pad = show.bindings[0].id;
+        let section = |show: &mut Show, id, name: &str| {
+            apply(
+                show,
+                &Command::SetPadSection {
+                    id,
+                    section: name.into(),
+                },
+            )
+        };
+        section(&mut show, pad, "  Flashes \u{7} ").unwrap();
+        assert_eq!(show.bindings[0].section, "Flashes");
+        section(&mut show, pad, &"x".repeat(100)).unwrap();
+        assert_eq!(show.bindings[0].section.len(), MAX_SECTION_NAME);
+        section(&mut show, pad, "").unwrap();
+        assert_eq!(show.bindings[0].section, "");
+        assert!(section(&mut show, 9999, "Flashes").is_err());
+
+        let arrange = |show: &mut Show, panels: &[&str]| {
+            apply(
+                show,
+                &Command::ArrangeLive {
+                    panels: panels.iter().map(|p| (*p).to_string()).collect(),
+                },
+            )
+        };
+        // Named twice counts once; a panel that does not exist is refused.
+        arrange(&mut show, &["song", "scenes", "song", "pads"]).unwrap();
+        assert_eq!(show.live.panels, ["song", "scenes", "pads"]);
+        assert!(arrange(&mut show, &["scenes", "lasers"]).is_err());
+        assert_eq!(show.live.panels, ["song", "scenes", "pads"]);
+        // The usual ones in the usual order are kept as "not arranged",
+        // and so is an empty list.
+        arrange(&mut show, &LIVE_PANELS[..DEFAULT_LIVE_PANELS]).unwrap();
+        assert!(show.live.panels.is_empty());
+        arrange(&mut show, &["scenes"]).unwrap();
+        arrange(&mut show, &[]).unwrap();
+        assert!(show.live.panels.is_empty());
+        // A file edited by hand is put right.
+        show.live.panels = vec!["scenes".into(), "nope".into(), "scenes".into()];
+        show.bindings[0].section = "y".repeat(60);
+        show.repair();
+        assert_eq!(show.live.panels, ["scenes"]);
+        assert_eq!(show.bindings[0].section.len(), MAX_SECTION_NAME);
     }
 
     #[test]

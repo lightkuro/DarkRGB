@@ -610,7 +610,20 @@ pub struct Binding {
     /// the same key can do something else on another page.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub page: u8,
+    /// The group it is shown in, in the Live view, by the group's name:
+    /// pads with the same name here sit together under it. Empty for
+    /// none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub section: String,
 }
+
+/// The panels the Live view is made of, in the order it shows them when
+/// the show has not arranged them itself. The last is there to be added.
+pub const LIVE_PANELS: [&str; 6] = ["faders", "scenes", "next", "pads", "show", "song"];
+/// The ones a show starts with.
+pub const DEFAULT_LIVE_PANELS: usize = 5;
+/// The longest a group of pads can be called.
+pub const MAX_SECTION_NAME: usize = 24;
 
 /// How many pages of pads there are.
 pub const PAGES: u8 = 4;
@@ -722,6 +735,11 @@ pub struct LiveSettings {
     /// How a change of scene looks while it fades.
     #[serde(default, skip_serializing_if = "is_default")]
     pub transition: Transition,
+    /// The panels of the Live view that are shown, in order, by their
+    /// names in [`LIVE_PANELS`]. Empty for the usual ones in the usual
+    /// order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub panels: Vec<String>,
 }
 
 /// A palette with a pad of its own. While it is in force, every effect
@@ -778,6 +796,7 @@ impl Default for LiveSettings {
             next: NextWay::Order,
             number_keys: NumberKeys::Own,
             transition: Transition::Fade,
+            panels: Vec::new(),
         }
     }
 }
@@ -1479,6 +1498,7 @@ impl Show {
             mode,
             midi: None,
             page: 0,
+            section: String::new(),
         });
         id
     }
@@ -1957,6 +1977,26 @@ impl Show {
             self.output.frame_rate = OutputSettings::default().frame_rate;
         }
         self.live.auto.every_bars = self.live.auto.every_bars.clamp(1, 64);
+        // Panels the Live view does not have, or lists twice, are dropped.
+        let mut panels: Vec<String> = Vec::new();
+        for panel in std::mem::take(&mut self.live.panels) {
+            if LIVE_PANELS.contains(&panel.as_str()) && !panels.contains(&panel) {
+                panels.push(panel);
+            }
+        }
+        self.live.panels = panels;
+        for binding in &mut self.bindings {
+            if binding.section.chars().count() > MAX_SECTION_NAME || binding.section.chars().any(char::is_control) {
+                binding.section = binding
+                    .section
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(MAX_SECTION_NAME)
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
+            }
+        }
         self.schedule.on %= 1440;
         self.schedule.off %= 1440;
         if self

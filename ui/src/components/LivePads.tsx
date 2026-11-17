@@ -10,6 +10,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Clapperboard,
+  EyeOff,
   Folder,
   Lightbulb,
   Palette,
@@ -23,7 +24,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
-import { useCallback, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   engine,
   onPage,
@@ -42,6 +43,8 @@ import {
   type Show,
   inUse as sceneInUse,
   MOOD_NAMES,
+  partOfSong,
+  type NextWay,
 } from "../engine";
 import { KeyAssign, Keycap, behaviours, modeNote } from "./Keys";
 import { swatch } from "./LayerPanel";
@@ -49,6 +52,7 @@ import { MidiPad } from "./Midi";
 import { Slider, Switch, useDismiss } from "./ui";
 import { Transport } from "./Timeline";
 import { BeatBar } from "./Beat";
+import { NEXT_WAYS } from "./Settings";
 
 const setSpeed = perFrame((speed: number) => engine.quiet({ type: "set_live", speed }));
 const setSensitivity = perFrame((sensitivity: number) => engine.quiet({ type: "set_audio", sensitivity }));
@@ -328,6 +332,37 @@ function PadEditor({ action, show, hello, movable }: { action: Action; show: Sho
           </div>
         </div>
       )}
+      {binding && movable && (
+        <label className="field">
+          <span className="field-head">
+            <span>Group</span>
+          </span>
+          <input
+            type="text"
+            list="pad-sections"
+            aria-label={`The group ${name} is shown in`}
+            placeholder="None: with the other effects and lights"
+            maxLength={24}
+            defaultValue={binding.section ?? ""}
+            key={binding.section ?? ""}
+            onKeyDown={(e) => {
+              // Typing a name must not play the pads' keys.
+              e.stopPropagation();
+              if (e.key === "Enter") e.currentTarget.blur();
+            }}
+            onBlur={(e) => {
+              const section = e.target.value.trim();
+              if (section !== (binding.section ?? "")) engine.send({ type: "set_pad_section", id: binding.id, section });
+            }}
+          />
+          <datalist id="pad-sections">
+            {[...new Set(show.bindings.map((b) => b.section ?? "").filter(Boolean))].map((section) => (
+              <option key={section} value={section} />
+            ))}
+          </datalist>
+          <span className="hint">Pads with the same group name sit together under it. Type a new name to start a group.</span>
+        </label>
+      )}
       {/* A pad with no key yet can still be told what a press does. */}
       {!binding && choices.length > 0 && (
         <div className="segmented" role="radiogroup" aria-label={`What a press does for ${name}`}>
@@ -491,11 +526,69 @@ const BUILT_IN: Action[] = [
   { type: "blackout" },
   { type: "tap_tempo" },
   { type: "hit" },
-  { type: "prev_scene" },
-  { type: "next_scene" },
   { type: "freeze" },
   { type: "downbeat" },
 ];
+
+/** Stepping through the scenes: one after another, or by what they suit. */
+const STEPPING: Action[] = [
+  { type: "prev_scene" },
+  { type: "next_scene" },
+  { type: "next_of", mood: "calm" },
+  { type: "next_of", mood: "steady" },
+  { type: "next_of", mood: "big" },
+];
+
+/** The panels the Live view is made of, as the engine names them. */
+const PANELS: { id: string; name: string; about: string }[] = [
+  { id: "faders", name: "Faders and switches", about: "Speed, sound sensitivity, autopilot, the flash limit and the faders effects follow" },
+  { id: "scenes", name: "Scenes", about: "A pad for each scene" },
+  { id: "next", name: "Next scene", about: "Step through the scenes: in order, or to the next one for a quiet, in-between or big part" },
+  { id: "pads", name: "Effects and lights", about: "Pads for effects, folders, groups of lights and colours, in groups of your own" },
+  { id: "show", name: "Show", about: "Blackout, tap the tempo, fire a beat, freeze" },
+  { id: "song", name: "The song right now", about: "What is heard: the tempo, how big this part of the song is, and the note" },
+];
+const USUAL_PANELS = ["faders", "scenes", "next", "pads", "show"];
+const NOTE_NAMES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+
+/** What the engine hears, looked at a few times a second. */
+function SongNow() {
+  const [heard, setHeard] = useState(() => ({ ...engine.audio }));
+  useEffect(() => {
+    const timer = setInterval(() => setHeard({ ...engine.audio }), 200);
+    return () => clearInterval(timer);
+  }, []);
+  const part = partOfSong(heard);
+  const tonal = heard.tonal ?? 0;
+  const pitch = heard.pitch ?? 0;
+  const note = NOTE_NAMES[Math.round(pitch * 12) % 12]!;
+  return (
+    <div className="song-now">
+      <div className="song-fact">
+        <span>Tempo</span>
+        <strong>{heard.bpm > 0 ? `${Math.round(heard.bpm)} BPM` : "not found"}</strong>
+      </div>
+      <div className="song-fact">
+        <span>This part is</span>
+        <strong>{!heard.active ? "silent" : part === "big" ? "big" : part === "calm" ? "quiet" : "in between"}</strong>
+        <span className="song-meter" aria-hidden>
+          <span style={{ width: `${Math.round((heard.active ? heard.intensity : 0) * 100)}%` }} />
+        </span>
+      </div>
+      <div className="song-fact">
+        <span>Note</span>
+        <strong>
+          <span
+            className="song-note"
+            aria-hidden
+            style={{ background: tonal > 0.05 ? `hsl(${Math.round(pitch * 360)} 100% 50%)` : "transparent" }}
+          />
+          {heard.active && tonal > 0.05 ? note : "none clear"}
+        </strong>
+      </div>
+    </div>
+  );
+}
 
 export function LivePads() {
   const show = useShow();
@@ -525,6 +618,55 @@ export function LivePads() {
       (selected.type === "scene" && show.scenes.some((s) => s.id === selected.id)) ||
       allPads.some((b) => sameAction(b.action, selected)));
   const limited = show.flash.limit > 0;
+  // The panels the show has chosen, in its order; the usual ones if it
+  // has not arranged them.
+  const shown = show.live.panels?.length ? show.live.panels : USUAL_PANELS;
+  const hidden = PANELS.filter((p) => !shown.includes(p.id));
+  const arrange = (panels: string[]) => engine.send({ type: "arrange_live", panels });
+  const movePanel = (id: string, by: number) => {
+    const next = [...shown];
+    const at = next.indexOf(id);
+    next.splice(at, 1);
+    next.splice(at + by, 0, id);
+    arrange(next);
+  };
+  /** A panel's heading, with the ways to move and hide it while customizing. */
+  const head = (id: string, extra?: ReactNode) => {
+    const at = shown.indexOf(id);
+    const name = PANELS.find((p) => p.id === id)?.name ?? id;
+    return (
+      <h2>
+        {name}
+        {extra}
+        {customizing && (
+          <span className="panel-tools">
+            <button type="button" className="icon-button" aria-label={`Move ${name} earlier`} title="Earlier" disabled={at <= 0} onClick={() => movePanel(id, -1)}>
+              <ArrowLeft size={13} />
+            </button>
+            <button type="button" className="icon-button" aria-label={`Move ${name} later`} title="Later" disabled={at >= shown.length - 1} onClick={() => movePanel(id, 1)}>
+              <ArrowRight size={13} />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={`Hide ${name}`}
+              title="Hide this panel. It can be added back below."
+              disabled={shown.length <= 1}
+              onClick={() => arrange(shown.filter((p) => p !== id))}
+            >
+              <EyeOff size={13} />
+            </button>
+          </span>
+        )}
+      </h2>
+    );
+  };
+  // Pads in groups of the user's own, in the order the groups first appear.
+  const sections = [...new Set(pads.map((b) => b.section ?? "").filter(Boolean))];
+  const loose = pads.filter((b) => !b.section);
+  const stepping = STEPPING.filter(
+    (a) => a.type !== "next_of" || show.scenes.some((s) => sceneInUse(show, s) && s.mood === a.mood) || customizing,
+  );
 
   return (
     <section className={`pads ${customizing ? "customizing" : ""}`} aria-label="Live pads">
@@ -566,7 +708,23 @@ export function LivePads() {
             ))}
           </div>
         )}
-        <span className="spacer" />
+      </div>
+      {customizing && selected && selectedExists && (
+        <PadEditor
+          key={`${selected.type}-${"id" in selected ? selected.id : ""}`}
+          action={selected}
+          show={show}
+          hello={hello}
+          movable={PAD_KINDS.includes(selected.type)}
+        />
+      )}
+
+      {shown.map((panel) => {
+        switch (panel) {
+          case "faders":
+            return (
+      <div className="pad-group wide" key="faders">
+        {head("faders")}
         <div className="live-faders">
           {xy && <XYPad x={show.live.faders[0] ?? 0} y={show.live.faders[1] ?? 0} />}
           {inUse.map(({ n, moves }) => (
@@ -625,18 +783,11 @@ export function LivePads() {
           )}
         </div>
       </div>
-      {customizing && selected && selectedExists && (
-        <PadEditor
-          key={`${selected.type}-${"id" in selected ? selected.id : ""}`}
-          action={selected}
-          show={show}
-          hello={hello}
-          movable={PAD_KINDS.includes(selected.type)}
-        />
-      )}
-
-      <div className="pad-group">
-        <h2>Scenes</h2>
+            );
+          case "scenes":
+            return (
+      <div className="pad-group" key="scenes">
+        {head("scenes")}
         {show.scenes.length === 0 ? (
           <p className="hint">
             No scenes yet. In the Edit view, set up a look you like and use "Save as scene" at the bottom. The first
@@ -662,29 +813,85 @@ export function LivePads() {
         )}
       </div>
 
-      <div className="pad-group">
-        <h2>Effects and lights</h2>
-        <div className="pad-grid">
-          {pads.map((binding) => (
-            <Pad key={binding.id} action={binding.action} show={show} hello={hello} {...edit(binding.action)} />
-          ))}
-          {customizing && <AddPad show={show} hello={hello} onAdded={setSelected} />}
-        </div>
-        {pads.length === 0 && !customizing && (
-          <p className="hint">
-            Nothing here yet. Choose Customize, then "Add a pad", for a white flash, a strobe, or any effect, folder
-            or group of lights you want under your fingers.
-          </p>
+            );
+          case "next":
+            return (
+      <div className="pad-group" key="next">
+        {head("next")}
+        {show.scenes.length < 2 ? (
+          <p className="hint">With two or more scenes, these step from one to the next.</p>
+        ) : (
+          <>
+            <div className="pad-grid">
+              {stepping.map((action) => (
+                <Pad
+                  key={action.type + ("mood" in action ? action.mood : "")}
+                  action={action}
+                  show={show}
+                  hello={hello}
+                  {...edit(action)}
+                />
+              ))}
+            </div>
+            <label className="field inline">
+              <span>Next goes to</span>
+              <select
+                aria-label="Which scene Next goes to"
+                value={show.live.next ?? "order"}
+                onChange={(e) => engine.send({ type: "set_live", next: e.target.value as NextWay })}
+              >
+                {NEXT_WAYS.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
         )}
       </div>
-
-      <div className="pad-group">
-        <h2>
-          Show
+            );
+          case "pads":
+            return (
+      <Fragment key="pads">
+        <div className="pad-group">
+          {head("pads")}
+          <div className="pad-grid">
+            {loose.map((binding) => (
+              <Pad key={binding.id} action={binding.action} show={show} hello={hello} {...edit(binding.action)} />
+            ))}
+            {customizing && <AddPad show={show} hello={hello} onAdded={setSelected} />}
+          </div>
+          {pads.length === 0 && !customizing && (
+            <p className="hint">
+              Nothing here yet. Choose Customize, then "Add a pad", for a white flash, a strobe, or any effect, folder
+              or group of lights you want under your fingers.
+            </p>
+          )}
+        </div>
+        {sections.map((section) => (
+          <div className="pad-group" key={section}>
+            <h2>{section}</h2>
+            <div className="pad-grid">
+              {pads
+                .filter((b) => b.section === section)
+                .map((binding) => (
+                  <Pad key={binding.id} action={binding.action} show={show} hello={hello} {...edit(binding.action)} />
+                ))}
+            </div>
+          </div>
+        ))}
+      </Fragment>
+            );
+          case "show":
+            return (
+      <div className="pad-group" key="show">
+        {head(
+          "show",
           <button type="button" className="text-button" onClick={() => settingsPage.set("live")}>
             More settings…
-          </button>
-        </h2>
+          </button>,
+        )}
         <div className="pad-grid">
           {BUILT_IN.map((action) => (
             <Pad
@@ -706,6 +913,30 @@ export function LivePads() {
           ))}
         </div>
       </div>
+            );
+          case "song":
+            return (
+      <div className="pad-group" key="song">
+        {head("song")}
+        <SongNow />
+      </div>
+            );
+          default:
+            return null;
+        }
+      })}
+      {customizing && hidden.length > 0 && (
+        <div className="pad-group wide add-panels">
+          <h2>Add a panel</h2>
+          <div className="chips">
+            {hidden.map((panel) => (
+              <button key={panel.id} type="button" className="chip add" title={panel.about} onClick={() => arrange([...shown, panel.id])}>
+                <Plus size={13} /> {panel.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
