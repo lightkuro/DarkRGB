@@ -10,6 +10,7 @@ import {
   Save,
   SlidersHorizontal,
   X,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
 import changelog from "../../../CHANGELOG.md?raw";
@@ -38,7 +39,7 @@ import { AudioControls, Tempo } from "./AudioMeter";
 import { DemoSwitch } from "./DevicePanel";
 import { KeyAssign, Keycap, modeNote } from "./Keys";
 import { MidiSettings } from "./Midi";
-import { NameField, Slider, Switch } from "./ui";
+import { ConfirmButton, NameField, Slider, Switch } from "./ui";
 
 const PAGES: { id: SettingsPage; name: string; icon: ReactNode }[] = [
   { id: "general", name: "General", icon: <SlidersHorizontal size={15} /> },
@@ -476,6 +477,8 @@ export function actionName(action: Action, show: Show, effectName: (id: string) 
       return "Next scene";
     case "next_of":
       return `Next scene for ${MOOD_NAMES[action.mood].toLowerCase()}`;
+    case "next_of_kind":
+      return `Next scene of the kind ${show.scene_kinds?.find((k) => k.id === action.id)?.name ?? "?"}`;
     case "prev_scene":
       return "Previous scene";
     case "freeze":
@@ -573,6 +576,25 @@ function LivePage({ show }: { show: Show }) {
             ))}
           </select>
         </label>
+      )}
+      {(show.scene_kinds?.length ?? 0) > 0 && (
+        <div className="field">
+          <span className="field-head">
+            <span>Kinds of scene you made</span>
+          </span>
+          <ul className="kind-list">
+            {show.scene_kinds!.map((k) => (
+              <li key={k.id}>
+                <NameField value={k.name} label={`Name of the kind ${k.name}`} onCommit={(name) => engine.send({ type: "rename_scene_kind", id: k.id, name })} />
+                <span className="hint">{show.scenes.filter((sc) => sc.kind === k.id).length} scenes</span>
+                <ConfirmButton label={`Remove the kind ${k.name}`} confirmLabel="Remove?" onConfirm={() => engine.send({ type: "remove_scene_kind", id: k.id })}>
+                  <Trash2 size={14} />
+                </ConfirmButton>
+              </li>
+            ))}
+          </ul>
+          <span className="hint">Give a scene a kind from its menu in the scenes bar. Next can keep to one kind.</span>
+        </div>
       )}
       {(show.scene_sets?.length ?? 0) > 0 && (
         <label className="field inline">

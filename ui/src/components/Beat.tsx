@@ -4,8 +4,9 @@
 // tempo, where it comes from, and the corrections a performer makes when
 // the music's own beat is right in tempo but wrong in something else.
 
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, Lock, LockOpen, Music } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useDismiss } from "./ui";
 import { engine, useLive } from "../engine";
 
 /** A sixteenth of a beat: small enough to place a beat by ear. */
@@ -14,6 +15,7 @@ const NUDGE = 1 / 16;
 function sourceNote(source: string, coasting: boolean, bpm: number): string {
   if (source === "midi") return "from the MIDI clock";
   if (source === "tapped") return "tapped";
+  if (source === "locked") return "locked";
   if (bpm <= 0) return "no beat found yet";
   return coasting ? "kept from memory" : "with the music";
 }
@@ -68,6 +70,62 @@ function Bar() {
   );
 }
 
+/** Holds the beat at one tempo: the one heard now, or one typed. */
+function LockTempo({ locked }: { locked: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const ref = useDismiss(open, () => setOpen(false));
+  const lock = (bpm: number | null) => {
+    engine.send({ type: "lock_tempo", bpm });
+    setOpen(false);
+  };
+  return (
+    <span className="lock-tempo" ref={ref}>
+      <button
+        type="button"
+        className={`tool ${locked ? "active" : ""}`}
+        aria-pressed={locked}
+        title={locked ? "The beat is held at one tempo. Click to follow the music again." : "Hold the beat at the tempo it has now"}
+        onClick={() => (locked ? engine.send({ type: "auto_tempo" }) : lock(null))}
+      >
+        {locked ? <Lock size={13} /> : <LockOpen size={13} />} {locked ? "Locked" : "Lock"}
+      </button>
+      <button type="button" className="tool" aria-label="Lock to a tempo you type" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <ChevronDown size={13} />
+      </button>
+      {open && (
+        <form
+          className="popover lock-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const bpm = Number(typed);
+            if (bpm >= 40 && bpm <= 240) lock(bpm);
+          }}
+        >
+          <label className="field inline">
+            <span>Lock at</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              className="number"
+              aria-label="Beats a minute to lock at"
+              placeholder="128"
+              value={typed}
+              autoFocus
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
+            />
+            <span className="hint">a minute</span>
+          </label>
+          <button type="submit" className="button small" disabled={!(Number(typed) >= 40 && Number(typed) <= 240)}>
+            Lock
+          </button>
+        </form>
+      )}
+    </span>
+  );
+}
+
 /**
  * The beat and everything that corrects it. `compact` leaves out the
  * words, for the row above the pads.
@@ -76,7 +134,7 @@ export function BeatBar({ compact }: { compact?: boolean }) {
   const live = useLive();
   const clock = live.clock ?? { source: "music", scale: 1, nudge: 0, midi_bpm: null };
   const fromMusic = clock.source === "music";
-  const corrected = clock.source === "tapped" || clock.scale !== 1 || Math.abs(clock.nudge) > 1e-6;
+  const corrected = clock.source === "tapped" || clock.source === "locked" || clock.scale !== 1 || Math.abs(clock.nudge) > 1e-6;
   const scale = (to: number) => engine.send({ type: "tempo_scale", scale: clock.scale === to ? 1 : to });
   return (
     <div className={`beat-bar ${compact ? "compact" : ""}`} role="group" aria-label="The beat">
@@ -123,6 +181,17 @@ export function BeatBar({ compact }: { compact?: boolean }) {
             Follow the music
           </button>
         )}
+      </div>
+      <div className="tool-group">
+        <LockTempo locked={clock.source === "locked"} />
+        <button
+          type="button"
+          className="tool"
+          title="A new song has started: forget the last one's tempo and levels and listen afresh"
+          onClick={() => engine.send({ type: "new_song" })}
+        >
+          <Music size={13} /> New song
+        </button>
       </div>
       {!compact && Math.abs(clock.nudge) > 1e-6 && (
         <span className="hint">

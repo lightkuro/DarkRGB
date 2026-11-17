@@ -13,7 +13,7 @@ use darkrgb_core::show::{
 use darkrgb_core::timeline::{Clip, ClipKind, MAX_CLIPS, MAX_LENGTH, MIN_CLIP};
 use darkrgb_core::{
     Action, Band, Device, DeviceKind, FlashSettings, KeyMode, Kind, Knob, KnobTarget, Launch, Layer, Link, MidiNote,
-    Mood, NextWay, NumberKeys, Only, Rgb, SceneSet, Shape, Show, Sound, Source, Swatch, Transition,
+    Mood, NextWay, NumberKeys, Only, Rgb, SceneKind, SceneSet, Shape, Show, Sound, Source, Swatch, Transition,
 };
 use darkrgb_output::dmx;
 use serde::Deserialize;
@@ -209,7 +209,12 @@ fn checked_clip(show: &Show, start: f32, length: f32, what: ClipKind) -> Result<
             // to do once, not things to hold.
             if matches!(
                 pad.action,
-                Action::Scene { .. } | Action::TapTempo | Action::NextScene | Action::PrevScene | Action::NextOf { .. }
+                Action::Scene { .. }
+                    | Action::TapTempo
+                    | Action::NextScene
+                    | Action::PrevScene
+                    | Action::NextOf { .. }
+                    | Action::NextOfKind { .. }
             ) {
                 return Err("that pad cannot be put on the timeline".into());
             }
@@ -289,6 +294,15 @@ pub enum Command {
     /// Forgets a moving picture kept on this computer.
     RemoveMovie {
         id: String,
+    },
+    /// A new song has started: the analysis starts afresh, and the beat
+    /// follows the music again.
+    NewSong,
+    /// Holds the beat at a tempo: the one given, or the one it has now.
+    /// `AutoTempo` lets go.
+    LockTempo {
+        #[serde(default)]
+        bpm: Option<f32>,
     },
     /// Shows an effect first in the picker, or no longer. Kept on this
     /// computer, not in the show.
@@ -851,6 +865,23 @@ pub enum Command {
     /// Removes a set. Its scenes stay, in no set.
     RemoveSceneSet {
         id: u32,
+    },
+    /// Makes a kind of scene of the user's own.
+    AddSceneKind {
+        name: String,
+    },
+    RenameSceneKind {
+        id: u32,
+        name: String,
+    },
+    /// Removes a kind: its scenes are of no kind of their own after.
+    RemoveSceneKind {
+        id: u32,
+    },
+    /// Says what kind of the user's own a scene is, or none.
+    SetSceneKind {
+        scene: u32,
+        kind: Option<u32>,
     },
     /// Files a scene in a set, or in none.
     FileScene {
@@ -1417,6 +1448,8 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             Ok(())
         }
         Command::RemoveMovie { .. }
+        | Command::NewSong
+        | Command::LockTempo { .. }
         | Command::PinEffect { .. }
         | Command::HideEffect { .. }
         | Command::AddOpenRgb { .. }
@@ -2171,6 +2204,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 Action::Layer { id } => show.layers.iter().any(|l| l.id == id),
                 Action::LayerGroup { id } => show.layer_groups.iter().any(|g| g.id == id),
                 Action::LightGroup { id } => show.light_groups.iter().any(|g| g.id == id),
+                Action::NextOfKind { id } => show.scene_kinds.iter().any(|k| k.id == id),
                 Action::Colours { id } => show.live.swatches.iter().any(|s| s.id == id),
                 Action::Blackout
                 | Action::TapTempo
@@ -2766,6 +2800,59 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             if show.live.scene_set == Some(*id) {
                 show.live.scene_set = None;
             }
+            Ok(())
+        }
+
+        Command::AddSceneKind { name: kind_name } => {
+            let kind_name = name(kind_name, "The name")?;
+            if show.scene_kinds.len() >= MAX_SCENE_SETS {
+                return Err(format!("a show can have at most {MAX_SCENE_SETS} kinds of scene"));
+            }
+            if show.scene_kinds.iter().any(|k| k.name == kind_name) {
+                return Err(format!("there is already a kind called {kind_name}"));
+            }
+            let id = show.alloc_id();
+            show.scene_kinds.push(SceneKind { id, name: kind_name });
+            Ok(())
+        }
+
+        Command::RenameSceneKind { id, name: kind_name } => {
+            let kind_name = name(kind_name, "The name")?;
+            if show.scene_kinds.iter().any(|k| k.name == kind_name && k.id != *id) {
+                return Err(format!("there is already a kind called {kind_name}"));
+            }
+            show.scene_kinds
+                .iter_mut()
+                .find(|k| k.id == *id)
+                .ok_or("that kind no longer exists")?
+                .name = kind_name;
+            Ok(())
+        }
+
+        Command::RemoveSceneKind { id } => {
+            if !show.scene_kinds.iter().any(|k| k.id == *id) {
+                return Err("that kind no longer exists".into());
+            }
+            show.scene_kinds.retain(|k| k.id != *id);
+            for scene in show.scenes.iter_mut().filter(|s| s.kind == Some(*id)) {
+                scene.kind = None;
+            }
+            // Pads that stepped through it go with it.
+            show.prune_bindings();
+            Ok(())
+        }
+
+        Command::SetSceneKind { scene, kind } => {
+            if let Some(kind) = kind
+                && !show.scene_kinds.iter().any(|k| k.id == *kind)
+            {
+                return Err("that kind no longer exists".into());
+            }
+            show.scenes
+                .iter_mut()
+                .find(|s| s.id == *scene)
+                .ok_or("that scene no longer exists")?
+                .kind = *kind;
             Ok(())
         }
 
@@ -4744,7 +4831,7 @@ mod tests {
             let clip = r.id(show.timeline.clips.iter().map(|c| c.id).collect());
             let set = r.id(show.scene_sets.iter().map(|s| s.id).collect());
             let scene_id = r.id(show.scenes.iter().map(|s| s.id).collect());
-            let command = match r.next() % 76 {
+            let command = match r.next() % 80 {
                 70 => Command::SplitStrip {
                     fixture,
                     parts: (0..r.next() % 4)
@@ -5014,6 +5101,18 @@ mod tests {
                 52 => Command::SetPadPage {
                     id: binding,
                     page: r.next() as u8 % 6,
+                },
+                76 => Command::AddSceneKind { name: r.text() },
+                77 => Command::RenameSceneKind {
+                    id: show.scene_kinds.first().map_or(9999, |k| k.id),
+                    name: r.text(),
+                },
+                78 => Command::RemoveSceneKind {
+                    id: show.scene_kinds.first().map_or(9999, |k| k.id),
+                },
+                79 => Command::SetSceneKind {
+                    scene: scene_id,
+                    kind: r.maybe(|_| show.scene_kinds.first().map_or(9999, |k| k.id)),
                 },
                 74 => Command::SetPadSection {
                     id: binding,
@@ -5486,6 +5585,70 @@ mod tests {
         assert_eq!(show.layers.len(), count, "nothing added when a light is unknown");
         add(&mut show, None).unwrap();
         assert!(show.layers.last().unwrap().targets.is_empty());
+    }
+
+    #[test]
+    fn kinds_of_scene_can_be_made_given_renamed_and_removed() {
+        let mut show = Show::default();
+        let a = show.save_scene("A");
+        let b = show.save_scene("B");
+        apply(&mut show, &Command::AddSceneKind { name: "Chorus".into() }).unwrap();
+        assert!(
+            apply(&mut show, &Command::AddSceneKind { name: "Chorus".into() }).is_err(),
+            "names are not repeated"
+        );
+        let chorus = show.scene_kinds[0].id;
+        apply(
+            &mut show,
+            &Command::SetSceneKind {
+                scene: a,
+                kind: Some(chorus),
+            },
+        )
+        .unwrap();
+        assert!(
+            apply(
+                &mut show,
+                &Command::SetSceneKind {
+                    scene: b,
+                    kind: Some(9999)
+                }
+            )
+            .is_err()
+        );
+        apply(
+            &mut show,
+            &Command::RenameSceneKind {
+                id: chorus,
+                name: "Big chorus".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(show.scene_kinds[0].name, "Big chorus");
+        // A pad that steps through the kind goes when the kind does.
+        apply(
+            &mut show,
+            &Command::Bind {
+                key: None,
+                label: String::new(),
+                action: Action::NextOfKind { id: chorus },
+                mode: KeyMode::Toggle,
+            },
+        )
+        .unwrap();
+        assert_eq!(show.scenes.iter().find(|s| s.id == a).unwrap().kind, Some(chorus));
+        apply(&mut show, &Command::RemoveSceneKind { id: chorus }).unwrap();
+        assert!(show.scene_kinds.is_empty());
+        assert_eq!(show.scenes.iter().find(|s| s.id == a).unwrap().kind, None);
+        assert!(
+            show.bindings
+                .iter()
+                .all(|b| b.action != Action::NextOfKind { id: chorus })
+        );
+        // A file that names a kind that is not there is put right.
+        show.scenes[0].kind = Some(4242);
+        show.repair();
+        assert_eq!(show.scenes[0].kind, None);
     }
 
     #[test]

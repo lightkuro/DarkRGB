@@ -36,6 +36,8 @@ pub struct Tempo {
     count_at_anchor: u32,
     /// The beat number of the first tap of the current run.
     run_start: u32,
+    /// The tempo was locked, not tapped: taps do not change it.
+    locked: bool,
 }
 
 impl Tempo {
@@ -56,6 +58,7 @@ impl Tempo {
     /// The first tap of a run starts a new bar; from the second tap on
     /// there is a tempo.
     pub fn tap(&mut self, now: f64, count: u32) {
+        self.locked = false;
         let new_run = self.taps.last().is_none_or(|last| now - last > TAP_GAP_S);
         if new_run {
             self.taps.clear();
@@ -78,6 +81,24 @@ impl Tempo {
 
     pub fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// Holds the beat at `bpm`, carrying on from where it is now: beat
+    /// number `count`, `phase` of the way into it. It stays until the
+    /// music is followed again.
+    pub fn lock(&mut self, now: f64, bpm: f32, count: u32, phase: f32) {
+        let bpm = bpm.clamp(MIN_BPM, MAX_BPM);
+        *self = Self {
+            bpm,
+            anchor: now - phase.clamp(0.0, 0.999) as f64 * 60.0 / bpm as f64,
+            count_at_anchor: count,
+            locked: true,
+            ..Self::default()
+        };
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.locked && self.bpm > 0.0
     }
 
     /// Replaces the beat in `features` with the tapped one, if there is one.
@@ -189,6 +210,8 @@ pub enum BeatSource {
     #[default]
     Music,
     Tapped,
+    /// Held at one tempo by the performer.
+    Locked,
     Midi,
 }
 
@@ -756,6 +779,8 @@ impl Live {
     pub fn source(&self, now: f64) -> BeatSource {
         if self.follow_midi && self.midi_clock.bpm(now).is_some() {
             BeatSource::Midi
+        } else if self.tempo.is_locked() {
+            BeatSource::Locked
         } else if self.tempo.bpm > 0.0 {
             BeatSource::Tapped
         } else {
@@ -774,7 +799,7 @@ impl Live {
                 features.coasting = false;
                 at
             }),
-            BeatSource::Tapped => {
+            BeatSource::Tapped | BeatSource::Locked => {
                 self.tempo.apply(now, &mut features);
                 features.coasting = false;
                 None
@@ -818,6 +843,20 @@ impl Live {
     }
 
     /// Hands the clock back to the music, as it hears it.
+    /// Holds the beat at `bpm`, or at the tempo it has now when `bpm`
+    /// is none. Returns the tempo it was held at, or none when there is
+    /// no tempo to hold.
+    pub fn lock_tempo(&mut self, now: f64, raw: AudioFeatures, bpm: Option<f32>) -> Option<f32> {
+        let current = self.clocked(now, raw);
+        let bpm = bpm
+            .filter(|b| b.is_finite() && *b > 0.0)
+            .or((current.bpm > 0.0).then_some(current.bpm))?;
+        self.tempo.lock(now, bpm, current.beat_count, current.beat_phase);
+        self.clock.scale = 1.0;
+        self.clock.nudge = 0.0;
+        Some(self.tempo.bpm())
+    }
+
     pub fn follow_music(&mut self) {
         self.tempo.clear();
         self.clock.scale = 1.0;
@@ -924,6 +963,7 @@ impl Live {
                 | Action::NextScene
                 | Action::PrevScene
                 | Action::NextOf { .. }
+                | Action::NextOfKind { .. }
                 | Action::Freeze
                 | Action::Downbeat => {}
             }
@@ -1563,6 +1603,32 @@ mod tests {
         }
         assert_eq!(live.source(2.0), BeatSource::Tapped);
         assert!((live.status().tapped_bpm - 100.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn the_tempo_can_be_locked_where_it_is_or_to_a_given_one_and_let_go() {
+        let mut live = Live::default();
+        // Music at 124, three and a quarter beats in.
+        let raw = heard(124.0, 3.25);
+        let held = live.lock_tempo(1.0, raw, None).unwrap();
+        assert!((held - 124.0).abs() < 0.01);
+        assert_eq!(live.source(1.0), BeatSource::Locked);
+        // Carrying on from where it was, and at that tempo whatever the
+        // music then says.
+        let now = live.clocked(1.0, raw);
+        assert_eq!(now.beat_count, 3);
+        assert!((now.beat_phase - 0.25).abs() < 0.01);
+        let later = live.clocked(1.0 + 60.0 / 124.0, heard(90.0, 9.0));
+        assert_eq!((later.beat_count, later.bpm), (4, 124.0));
+        // A given tempo; nothing to lock to without one.
+        assert_eq!(live.lock_tempo(2.0, raw, Some(140.0)), Some(140.0));
+        assert_eq!(Live::default().lock_tempo(0.0, AudioFeatures::default(), None), None);
+        // Tapping takes over from a lock; following the music lets go.
+        live.tap(3.0, raw);
+        assert_ne!(live.source(3.0), BeatSource::Locked);
+        live.lock_tempo(4.0, raw, Some(100.0));
+        live.follow_music();
+        assert_eq!(live.source(4.0), BeatSource::Music);
     }
 
     #[test]

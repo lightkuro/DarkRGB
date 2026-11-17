@@ -323,6 +323,29 @@ impl Shared {
                 self.bump_live();
                 return Ok(None);
             }
+            Command::NewSong => {
+                self.audio.reset();
+                self.live.lock().unwrap().follow_music();
+                self.bump_live();
+                return Ok(Some("Listening afresh for the new song.".into()));
+            }
+            Command::LockTempo { bpm } => {
+                if let Some(b) = bpm
+                    && !(b.is_finite() && (40.0..=240.0).contains(b))
+                {
+                    return Err("a tempo to lock to is between 40 and 240 beats a minute".into());
+                }
+                let held = self
+                    .live
+                    .lock()
+                    .unwrap()
+                    .lock_tempo(self.now(), self.audio.features(), *bpm);
+                self.bump_live();
+                return match held {
+                    Some(b) => Ok(Some(format!("The beat is held at {b:.1} a minute."))),
+                    None => Err("there is no tempo to hold yet: type one, or tap it".into()),
+                };
+            }
             Command::AutoTempo => {
                 self.live.lock().unwrap().follow_music();
                 self.bump_live();
@@ -1035,7 +1058,12 @@ impl Shared {
         // are things to do, not things to hold.
         let never = matches!(
             action,
-            Action::Scene { .. } | Action::TapTempo | Action::NextScene | Action::PrevScene | Action::NextOf { .. }
+            Action::Scene { .. }
+                | Action::TapTempo
+                | Action::NextScene
+                | Action::PrevScene
+                | Action::NextOf { .. }
+                | Action::NextOfKind { .. }
         );
         if !recording || never {
             return false;
@@ -1339,7 +1367,7 @@ impl Shared {
     fn perform(self: &Arc<Self>, action: Action) -> Result<Option<String>, String> {
         match action {
             Action::Scene { id } => self.recall_scene(id),
-            Action::NextScene | Action::PrevScene | Action::NextOf { .. } => {
+            Action::NextScene | Action::PrevScene | Action::NextOf { .. } | Action::NextOfKind { .. } => {
                 let step = if action == Action::PrevScene { -1 } else { 1 };
                 let part = Mood::of_song(&self.features());
                 // Count from a scene that is still waiting for its beat, so
@@ -1354,12 +1382,18 @@ impl Shared {
                     let show = self.show.lock().unwrap();
                     let playing = if blind { last } else { show.current_scene().or(last) };
                     let from = waiting.or(playing);
-                    let mood = from
-                        .and_then(|id| show.scenes.iter().find(|s| s.id == id))
-                        .map(|s| s.mood);
+                    let playing_scene = from.and_then(|id| show.scenes.iter().find(|s| s.id == id));
+                    let mood = playing_scene.map(|s| s.mood);
+                    let own_kind = playing_scene.and_then(|s| s.kind);
                     let way = show.live.next;
                     let chosen = match action {
                         Action::NextOf { mood } => show.scene_step(from, step, |s| s.mood == mood),
+                        Action::NextOfKind { id } => show.scene_step(from, step, |s| s.kind == Some(id)),
+                        // The same kind: of the user's own if the scene has
+                        // one, else made for the same part of a song.
+                        _ if way == NextWay::Alike && own_kind.is_some() => {
+                            show.scene_step(from, step, |s| s.kind == own_kind)
+                        }
                         _ if way == NextWay::Alike => show.scene_step(from, step, |s| Some(s.mood) == mood),
                         _ if way == NextWay::Song => show.scene_step(from, step, |s| show.suits(s.mood, part)),
                         _ => None,
@@ -1368,7 +1402,7 @@ impl Shared {
                     // the order of the list; a pad for one kind of scene
                     // does nothing when there is none of that kind.
                     match action {
-                        Action::NextOf { .. } => chosen,
+                        Action::NextOf { .. } | Action::NextOfKind { .. } => chosen,
                         _ => chosen.or_else(|| show.scene_step(from, step, |_| true)),
                     }
                 };
@@ -1428,6 +1462,7 @@ impl Shared {
             | Action::NextScene
             | Action::PrevScene
             | Action::NextOf { .. }
+            | Action::NextOfKind { .. }
             | Action::Freeze
             | Action::Downbeat => None,
         };

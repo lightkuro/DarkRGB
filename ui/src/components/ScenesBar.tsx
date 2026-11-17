@@ -128,6 +128,18 @@ function NextScene() {
           </p>
           <div className="next-jumps">
             <span>Jump to the next scene for</span>
+            {(show.scene_kinds ?? []).map((k) => (
+              <button
+                key={`k${k.id}`}
+                type="button"
+                className="chip"
+                disabled={!scenesInUse(show).some((s) => s.kind === k.id)}
+                title={`The next scene of the kind ${k.name}`}
+                onClick={() => engine.send({ type: "perform", action: { type: "next_of_kind", id: k.id } })}
+              >
+                {k.name}
+              </button>
+            ))}
             {(["calm", "steady", "big"] as Mood[]).map((mood) => (
               <button
                 key={mood}
@@ -146,6 +158,75 @@ function NextScene() {
             ))}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A kind of the user's own for a scene: "Chorus", "Build-up". Next can
+ * keep to one kind. A new kind is made right here.
+ */
+function SceneKindField({ scene }: { scene: Scene }) {
+  const show = useShow();
+  const [making, setMaking] = useState(false);
+  const [name, setName] = useState("");
+  const kinds = show?.scene_kinds ?? [];
+  const make = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const result = await engine.request({ type: "add_scene_kind", name: trimmed });
+    if (!result.ok) return engine.toast("error", result.error ?? "Could not make that kind.");
+    // The new kind is the last; give it to this scene once it is known.
+    const made = engine.show.get()?.scene_kinds?.find((k) => k.name === trimmed);
+    if (made) engine.send({ type: "set_scene_kind", scene: scene.id, kind: made.id });
+    setName("");
+    setMaking(false);
+  };
+  return (
+    <div className="field">
+      <span className="field-head">
+        <span title="Kinds you make yourself. Next can keep to scenes of one kind.">Kind of your own</span>
+      </span>
+      {making ? (
+        <form
+          className="scene-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void make();
+          }}
+        >
+          <input
+            type="text"
+            value={name}
+            placeholder="e.g. Chorus, Build-up"
+            aria-label="Name of the new kind"
+            autoFocus
+            maxLength={40}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
+          />
+          <button type="submit" className="button small" disabled={!name.trim()}>
+            Make
+          </button>
+        </form>
+      ) : (
+        <select
+          aria-label={`The kind of your own ${scene.name} is`}
+          value={scene.kind ?? ""}
+          onChange={(e) => {
+            if (e.target.value === "new") return setMaking(true);
+            engine.send({ type: "set_scene_kind", scene: scene.id, kind: e.target.value === "" ? null : Number(e.target.value) });
+          }}
+        >
+          <option value="">None</option>
+          {kinds.map((k) => (
+            <option key={k.id} value={k.id}>
+              {k.name}
+            </option>
+          ))}
+          <option value="new">A new kind…</option>
+        </select>
       )}
     </div>
   );
@@ -202,6 +283,7 @@ function SceneMenu({
           ))}
         </div>
       </div>
+      <SceneKindField scene={scene} />
       <button
         type="button"
         className="text-button"

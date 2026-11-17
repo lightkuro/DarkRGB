@@ -66,6 +66,8 @@ pub struct InputDevice {
 enum Command {
     Source(String),
     Sensitivity(f32),
+    /// Forget everything heard: a new song starts.
+    Reset,
     Stop,
 }
 
@@ -133,6 +135,12 @@ impl AudioCapture {
 
     pub fn set_sensitivity(&self, sensitivity: f32) {
         let _ = self.commands.send(Command::Sensitivity(sensitivity));
+    }
+
+    /// Starts the analysis afresh, as for a new song: its tempo, its
+    /// levels and its sections are forgotten and found again.
+    pub fn reset(&self) {
+        let _ = self.commands.send(Command::Reset);
     }
 }
 
@@ -208,6 +216,7 @@ fn run(shared: Arc<Shared>, commands: Receiver<Command>, mut source: String, mut
                 match commands.recv_timeout(Duration::from_secs(2)) {
                     Ok(Command::Source(next)) => source = next,
                     Ok(Command::Sensitivity(value)) => sensitivity = value,
+                    Ok(Command::Reset) => {}
                     Ok(Command::Stop) | Err(RecvTimeoutError::Disconnected) => return,
                     Err(RecvTimeoutError::Timeout) => {}
                 }
@@ -244,6 +253,10 @@ fn run(shared: Arc<Shared>, commands: Receiver<Command>, mut source: String, mut
                         source = next;
                         break;
                     }
+                }
+                Ok(Command::Reset) => {
+                    analyzer = Analyzer::new(open.sample_rate);
+                    analyzer.set_sensitivity(sensitivity);
                 }
                 Ok(Command::Sensitivity(value)) => {
                     sensitivity = value;

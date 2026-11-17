@@ -462,6 +462,17 @@ pub struct Scene {
     /// whichever set is in use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set: Option<u32>,
+    /// The kind of the user's own it is, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<u32>,
+}
+
+/// A kind of scene the user names: "Chorus", "Build-up", "Slow parts".
+/// Next can keep to scenes of one kind.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SceneKind {
+    pub id: u32,
+    pub name: String,
 }
 
 /// A named set of scenes: the ones for dinner, the ones for the party.
@@ -526,6 +537,10 @@ pub enum Action {
     /// one, the next big one.
     NextOf {
         mood: Mood,
+    },
+    /// Switches to the next scene of a kind the user made.
+    NextOfKind {
+        id: u32,
     },
     /// Stops the picture where it is.
     Freeze,
@@ -1040,6 +1055,9 @@ pub struct Show {
     pub scenes: Vec<Scene>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scene_sets: Vec<SceneSet>,
+    /// Kinds of scene the user made.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scene_kinds: Vec<SceneKind>,
     #[serde(default)]
     pub bindings: Vec<Binding>,
     #[serde(default)]
@@ -1164,6 +1182,7 @@ impl Default for Show {
             layer_groups: Vec::new(),
             scenes: Vec::new(),
             scene_sets: Vec::new(),
+            scene_kinds: Vec::new(),
             bindings: Vec::new(),
             master: Master::default(),
             audio: AudioSettings::default(),
@@ -1418,6 +1437,7 @@ impl Show {
             .map(|g| g.id)
             .collect();
         let (scenes, light_groups, swatches) = (&self.scenes, &self.light_groups, &self.live.swatches);
+        let kinds: Vec<u32> = self.scene_kinds.iter().map(|k| k.id).collect();
         self.bindings.retain(|b| match b.action {
             Action::Scene { id } => scenes.iter().any(|s| s.id == id),
             Action::Layer { id } => layers.contains(&id),
@@ -1432,6 +1452,7 @@ impl Show {
             | Action::NextOf { .. }
             | Action::Freeze
             | Action::Downbeat => true,
+            Action::NextOfKind { id } => kinds.contains(&id),
         });
         // Clips on the timeline go with the scene or pad they play.
         let (scenes, bindings) = (&self.scenes, &self.bindings);
@@ -1895,6 +1916,7 @@ impl Show {
             mood: Mood::Any,
             // Made while a set is in use, it belongs to that set.
             set: self.live.scene_set,
+            kind: None,
         });
         let free = "1234567890"
             .chars()
@@ -1973,6 +1995,10 @@ impl Show {
             scene.set = scene.set.filter(|id| sets.contains(id));
         }
         self.live.scene_set = self.live.scene_set.filter(|id| sets.contains(id));
+        let kinds: Vec<u32> = self.scene_kinds.iter().map(|k| k.id).collect();
+        for scene in &mut self.scenes {
+            scene.kind = scene.kind.filter(|id| kinds.contains(id));
+        }
         if !FRAME_RATES.contains(&self.output.frame_rate) {
             self.output.frame_rate = OutputSettings::default().frame_rate;
         }

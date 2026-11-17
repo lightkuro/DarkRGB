@@ -187,6 +187,7 @@ export type Action =
   | { type: "next_scene" }
   | { type: "prev_scene" }
   | { type: "next_of"; mood: Mood }
+  | { type: "next_of_kind"; id: number }
   | { type: "freeze" }
   | { type: "downbeat" }
   | { type: "colours"; id: number };
@@ -309,6 +310,8 @@ export interface Scene {
   mood: Mood;
   /** The set it is filed in. In no set, it is offered whichever set is in use. */
   set?: number | null;
+  /** The kind of the user's own it is, if any. */
+  kind?: number | null;
 }
 
 /** A named set of scenes. One is in use at a time. */
@@ -368,6 +371,8 @@ export interface Show {
   scenes: Scene[];
   /** Named sets of scenes. Left out when there are none. */
   scene_sets?: SceneSet[];
+  /** Kinds of scene the user made. Left out when there are none. */
+  scene_kinds?: { id: number; name: string }[];
   bindings: Binding[];
   master: { brightness: number; blackout: boolean; limit: number };
   audio: {
@@ -445,7 +450,7 @@ export interface Live {
   /** Where the timeline is, as of the engine's last frame. */
   timeline?: { playing: boolean; recording: boolean; position: number };
   /** Where the beat comes from, and how it has been corrected by hand. */
-  clock?: { source: "music" | "tapped" | "midi"; scale: number; nudge: number; midi_bpm: number | null };
+  clock?: { source: "music" | "tapped" | "locked" | "midi"; scale: number; nudge: number; midi_bpm: number | null };
   /** The scene being changed in the effects panel while the lights play something else. */
   editing?: number | null;
   /** The lights are playing something other than what the effects panel shows. */
@@ -829,6 +834,12 @@ export type Command =
   | { type: "edit_scene"; id: number }
   | { type: "finish_edit"; play: boolean; discard?: boolean }
   | { type: "remove_movie"; id: string }
+  | { type: "new_song" }
+  | { type: "add_scene_kind"; name: string }
+  | { type: "rename_scene_kind"; id: number; name: string }
+  | { type: "remove_scene_kind"; id: number }
+  | { type: "set_scene_kind"; scene: number; kind: number | null }
+  | { type: "lock_tempo"; bpm?: number | null }
   | { type: "pin_effect"; effect: string; pinned: boolean }
   | { type: "hide_effect"; effect: string; hidden: boolean }
   | { type: "add_open_rgb"; address: string }

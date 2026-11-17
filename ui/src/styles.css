@@ -4662,3 +4662,36 @@ input.number {
   font-weight: 600;
   pointer-events: none;
 }
+
+.lock-tempo {
+  position: relative;
+  display: inline-flex;
+}
+
+.lock-form {
+  top: 34px;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+}
+
+.kind-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.kind-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kind-list li .name-field,
+.kind-list li input {
+  flex: 1;
+}

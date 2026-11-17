@@ -152,6 +152,8 @@ export function describe(action: Action, show: Show, hello: Hello): { name: stri
       return { name: "Previous scene", icon: <SkipBack size={15} /> };
     case "next_of":
       return { name: `Next for ${MOOD_NAMES[action.mood].toLowerCase()}`, icon: <SkipForward size={15} /> };
+    case "next_of_kind":
+      return { name: `Next ${show.scene_kinds?.find((k) => k.id === action.id)?.name ?? "?"}`, icon: <SkipForward size={15} /> };
     case "freeze":
       return { name: "Freeze", icon: <Snowflake size={15} /> };
     case "downbeat":
@@ -818,9 +820,12 @@ export function LivePads() {
   // Pads in groups of the user's own, in the order the groups first appear.
   const sections = [...new Set(pads.map((b) => b.section ?? "").filter(Boolean))];
   const loose = pads.filter((b) => !b.section);
-  const stepping = STEPPING.filter(
-    (a) => a.type !== "next_of" || show.scenes.some((s) => sceneInUse(show, s) && s.mood === a.mood) || customizing,
-  );
+  const stepping = [
+    ...STEPPING.filter(
+      (a) => a.type !== "next_of" || show.scenes.some((s) => sceneInUse(show, s) && s.mood === a.mood) || customizing,
+    ),
+    ...(show.scene_kinds ?? []).map((k): Action => ({ type: "next_of_kind", id: k.id })),
+  ];
 
   return (
     <section className={`pads ${customizing ? "customizing" : ""}`} aria-label="Live pads" ref={area}>
@@ -984,7 +989,7 @@ export function LivePads() {
             <div className="pad-grid">
               {stepping.map((action) => (
                 <Pad
-                  key={action.type + ("mood" in action ? action.mood : "")}
+                  key={action.type + ("mood" in action ? action.mood : "") + ("id" in action ? action.id : "")}
                   action={action}
                   show={show}
                   hello={hello}

@@ -1784,6 +1784,34 @@ fn next_can_keep_to_one_kind_of_scene_or_follow_the_song() {
     way(NextWay::Order);
     perform(Action::NextScene);
     wait_for("red", || colour() == red);
+
+    // A kind of the user's own: blue and yellow are "Chorus". Its pad
+    // keeps to them, and Next "of the same kind" from a chorus too.
+    shared
+        .execute(&Command::AddSceneKind { name: "Chorus".into() })
+        .unwrap();
+    let (chorus, ids) = {
+        let show = shared.show.lock().unwrap();
+        (
+            show.scene_kinds[0].id,
+            show.scenes.iter().map(|s| s.id).collect::<Vec<_>>(),
+        )
+    };
+    for i in [2, 4] {
+        shared
+            .execute(&Command::SetSceneKind {
+                scene: ids[i],
+                kind: Some(chorus),
+            })
+            .unwrap();
+    }
+    perform(Action::NextOfKind { id: chorus });
+    wait_for("the first chorus", || colour() == blue);
+    way(NextWay::Alike);
+    perform(Action::NextScene);
+    wait_for("the next chorus", || colour() == yellow);
+    perform(Action::NextScene);
+    wait_for("round to the first chorus", || colour() == blue);
 }
 
 #[test]
