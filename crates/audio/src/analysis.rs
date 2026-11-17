@@ -68,6 +68,10 @@ const PITCH_MAX_HZ: f32 = 2_000.0;
 const MIDDLE_C_HZ: f32 = 261.625_58;
 
 const TEMPO_MIN_BPM: f32 = 70.0;
+/// The tempo preferred when a pattern fits several equally.
+const TEMPO_PRIOR_CENTRE: f32 = 125.0;
+/// How widely that preference spreads, in octaves.
+const TEMPO_PRIOR_OCTAVES: f32 = 0.6;
 const TEMPO_MAX_BPM: f32 = 190.0;
 /// Seconds of onset history the tempo estimate looks at.
 const TEMPO_WINDOW_S: f32 = 6.0;
@@ -760,15 +764,36 @@ impl Analyzer {
         if lag_min < 2 || lag_max <= lag_min {
             return;
         }
+        // A true beat repeats at two, three and four times its length as
+        // well: a comb over those multiples favours the beat over its
+        // halves and thirds, which fit only some of the teeth. Allow a
+        // step of slack per multiple, since the real length is rarely a
+        // whole number of steps.
+        let peak_near = |at: f32| -> f32 {
+            let c = at.round() as isize;
+            (c - 1..=c + 1)
+                .filter(|l| *l > 0)
+                .map(|l| autocorr(l as usize))
+                .fold(f32::MIN, f32::max)
+        };
         let score = |lag: usize| -> f32 {
             let bpm = 60.0 * self.step_rate / lag as f32;
-            // Prefer tempos near 120 when a pattern fits several equally.
-            let octaves = (bpm / 120.0).log2();
-            let prior = (-0.5 * (octaves / 0.9) * (octaves / 0.9)).exp();
-            // A true beat also repeats at twice its length. Allow a step of
-            // slack there, since the real length is rarely a whole step.
-            let double = (lag * 2 - 1..=lag * 2 + 1).map(&autocorr).fold(f32::MIN, f32::max);
-            (autocorr(lag) + 0.5 * double) * prior
+            // Prefer tempos near 125 when a pattern fits several equally:
+            // a little above 120, so that a steady kick at 170 is not
+            // taken for one at 85.
+            let octaves = (bpm / TEMPO_PRIOR_CENTRE).log2();
+            let prior = (-0.5 * (octaves / TEMPO_PRIOR_OCTAVES) * (octaves / TEMPO_PRIOR_OCTAVES)).exp();
+            let comb: f32 = (1..=4)
+                .map(|k| {
+                    let ac = if k == 1 {
+                        autocorr(lag)
+                    } else {
+                        peak_near(lag as f32 * k as f32)
+                    };
+                    ac / k as f32
+                })
+                .sum();
+            comb * prior
         };
         let scores: Vec<f32> = (lag_min..=lag_max).map(score).collect();
         let (best_i, best) = scores
@@ -776,23 +801,6 @@ impl Analyzer {
             .copied()
             .enumerate()
             .fold((0, f32::MIN), |acc, (i, s)| if s > acc.1 { (i, s) } else { acc });
-
-        // A pattern that repeats every beat also repeats every two beats,
-        // and the two score alike. When half the length fits nearly as
-        // well, the shorter one is the beat.
-        let mut best_i = best_i;
-        let mut best = best;
-        let half = (lag_min + best_i) / 2;
-        if half >= lag_min {
-            let around = half.saturating_sub(1).max(lag_min)..=(half + 1).min(lag_max);
-            let (half_lag, half_ac) = around
-                .map(|lag| (lag, autocorr(lag)))
-                .fold((half, f32::MIN), |acc, c| if c.1 > acc.1 { c } else { acc });
-            if half_ac > 0.8 * autocorr(lag_min + best_i) {
-                best_i = half_lag - lag_min;
-                best = scores[best_i];
-            }
-        }
 
         // Refine between whole steps with a parabola through the peak.
         let mut measured = (lag_min + best_i) as f32;
