@@ -19,6 +19,7 @@ pub mod picture;
 pub mod preview;
 pub mod render;
 pub mod safety;
+pub mod screen;
 pub mod show;
 mod stage_effects;
 pub mod timeline;

@@ -392,6 +392,17 @@ impl Shared {
                 return Ok(None);
             }
             Command::TimelineRecord { on } => return self.timeline_record(*on),
+            Command::ScreenFrame { width, height, rgb } => {
+                let bytes = from_hex(rgb).ok_or("the picture of the screen is not hexadecimal")?;
+                let screen = darkrgb_core::screen::Screen::from_rgb(*width, *height, &bytes)
+                    .ok_or("the picture of the screen is not the size it says")?;
+                darkrgb_core::screen::set(screen);
+                return Ok(None);
+            }
+            Command::ScreenStop => {
+                darkrgb_core::screen::clear();
+                return Ok(None);
+            }
             Command::OpenShow { file } => return self.open_show(file),
             Command::DuplicateShow { file } => return self.duplicate_show(file),
             Command::DeleteShow { file } => return self.delete_show(file),
@@ -2007,6 +2018,20 @@ pub fn save_show(path: &Path, show: &Show) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+/// Bytes from hexadecimal text, two digits a byte.
+fn from_hex(text: &str) -> Option<Vec<u8>> {
+    let text = text.as_bytes();
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    let digit = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    text.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| Some(digit(p[0])? << 4 | digit(p[1])?))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2734,6 +2759,25 @@ mod tests {
         // Another show starts with a clean memory.
         shared.replace_show(Show::default());
         assert_eq!(shared.history.lock().unwrap().can(), (false, false));
+    }
+
+    #[test]
+    fn a_shared_screen_is_kept_for_the_effect_and_forgotten_when_sharing_stops() {
+        let (shared, _library) = with_library("screen");
+        let frame = |w, h, rgb: &str| Command::ScreenFrame {
+            width: w,
+            height: h,
+            rgb: rgb.into(),
+        };
+        shared.execute(&frame(2, 1, "ff00000000FF")).unwrap();
+        let screen = darkrgb_core::screen::latest().unwrap();
+        assert_eq!((screen.width, screen.height), (2, 1));
+        assert_eq!(screen.pixels[1], darkrgb_core::Rgb::new(0.0, 0.0, 1.0));
+        assert!(shared.execute(&frame(2, 1, "ff00")).is_err(), "too short");
+        assert!(shared.execute(&frame(1, 1, "zz0000")).is_err(), "not hexadecimal");
+        assert!(shared.execute(&frame(500, 1, "")).is_err(), "too big");
+        shared.execute(&Command::ScreenStop).unwrap();
+        assert!(darkrgb_core::screen::latest().is_none());
     }
 
     #[test]

@@ -4701,3 +4701,25 @@ input.number {
   color: var(--muted);
   line-height: 1.4;
 }
+
+.screen-share {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 8px 0;
+}
+.sharing-screen {
+  position: relative;
+  color: var(--accent, #f5a623);
+}
+.sharing-screen::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ff4040;
+}

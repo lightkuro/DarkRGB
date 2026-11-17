@@ -27,8 +27,9 @@ import {
   Trash2,
   X,
   LayoutList,
+  Monitor,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   fullPref,
   engine,
@@ -43,6 +44,7 @@ import {
   useLive,
   useSelection,
   useShow,
+  useStatus,
   writePalette,
   type Band,
   type Blend,
@@ -65,6 +67,7 @@ import { ANGLE, HUE, LinkedSlider, STRENGTH } from "./Links";
 import { ConfirmButton, IconButton, NameField, Slider, Switch, useDismiss } from "./ui";
 import { MovieField } from "./MovieField";
 import { PictureField } from "./PictureField";
+import { canShare, screenShare, startSharing, stopSharing } from "../screenShare";
 import { EffectPicker } from "./EffectTiles";
 import { NameButton, SceneHead } from "./ScenePanel";
 import { openMenu, SEPARATOR } from "./ContextMenu";
@@ -940,6 +943,41 @@ function arrange(order: { id: number; group: number | null }[]): void {
   engine.send({ type: "arrange_layers", order: [...order].reverse() });
 }
 
+/** Starts and stops sharing the screen, for the Screen colours effect. */
+function ScreenControls() {
+  const share = useSyncExternalStore(screenShare.subscribe, screenShare.get);
+  const elsewhere = useStatus()?.screen && !share.on;
+  return (
+    <div className="screen-share">
+      {share.on ? (
+        <>
+          <p className="hint">Sharing {share.label}. Keep this window open while it plays.</p>
+          <button type="button" className="button small" onClick={stopSharing}>
+            Stop sharing
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="hint">
+            {elsewhere
+              ? "Another window is sharing the screen now."
+              : "Choose the screen or window whose colours the lights take. Only a tiny picture of it is sent, and nothing is kept."}
+          </p>
+          <button type="button" className="button small" onClick={() => void startSharing()} disabled={!canShare() && !share.error}>
+            <Monitor size={13} aria-hidden /> Share the screen
+          </button>
+          {share.error && <p className="callout error">{share.error}</p>}
+          {!canShare() && !share.error && (
+            <p className="hint">
+              This window cannot share the screen. Open darkRGB in a browser on this computer and share it from there.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function LayerBody({
   layer,
   effect,
@@ -1007,6 +1045,7 @@ function LayerBody({
         </p>
       )}
 
+      {layer.effect === "screen" && <ScreenControls />}
       {basic.map((spec) => (
         <ParamControl key={spec.id} layer={layer} spec={spec} full={advanced} />
       ))}

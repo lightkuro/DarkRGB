@@ -22,7 +22,13 @@ pub(crate) fn hits_and_beats() -> Vec<EffectDef> {
 }
 
 pub(crate) fn ambient() -> Vec<EffectDef> {
-    vec![Film::def(), Lava::def(), CodeRain::def(), Life::def()]
+    vec![
+        ScreenColours::def(),
+        Film::def(),
+        Lava::def(),
+        CodeRain::def(),
+        Life::def(),
+    ]
 }
 
 // ------------------------------------------------------------- Alternate
@@ -768,6 +774,176 @@ impl Effect for Glitch {
     }
 }
 
+// --------------------------------------------------------- Screen colours
+
+/// The colours on the computer's screen, as the window sharing it sends
+/// them (see `screen.rs`): around the edges for a strip behind a monitor,
+/// across it, one colour for the room, or the picture itself on a matrix.
+struct ScreenColours {
+    how: usize,
+    start: usize,
+    clockwise: bool,
+    depth: f32,
+    strength: f32,
+    smooth: f32,
+    /// The screen as shown, eased from picture to picture.
+    shown: Option<crate::screen::Screen>,
+    whole: Rgb,
+    /// Seconds on the effect's clock, for the picture shown while waiting.
+    clock: f32,
+}
+
+impl ScreenColours {
+    const HOW: [&'static str; 4] = [
+        "Around the edges",
+        "Across the screen",
+        "One colour for all",
+        "The picture",
+    ];
+    const STARTS: [&'static str; 3] = ["Bottom left", "Bottom middle", "Top left"];
+
+    fn def() -> EffectDef {
+        EffectDef {
+            info: EffectInfo {
+                id: "screen",
+                name: "Screen colours",
+                description: "The colours on your screen: around its edges for a strip behind a monitor, across it, one colour for the room, or the picture on a matrix. Share the screen from this effect's settings.",
+                category: AMBIENT,
+                audio: false,
+                flash: FlashUse::None,
+                reacts: &[],
+                params: vec![
+                    ParamSpec::choice("how", "Colours from", &Self::HOW),
+                    ParamSpec::choice("start", "The strip starts at", &Self::STARTS),
+                    ParamSpec::choice("direction", "And goes", &["Clockwise", "Anticlockwise"]),
+                    ParamSpec::float("depth", "How far in from the edge", 0.02, 0.5, 0.12),
+                    ParamSpec::float("strength", "Colour strength", 0.0, 2.0, 1.2),
+                    ParamSpec::float("smooth", "Smoothing", 0.0, 0.95, 0.5),
+                ],
+            },
+            make: || {
+                Box::new(ScreenColours {
+                    how: 0,
+                    start: 0,
+                    clockwise: true,
+                    depth: 0.12,
+                    strength: 1.2,
+                    smooth: 0.5,
+                    shown: None,
+                    whole: Rgb::BLACK,
+                    clock: 0.0,
+                })
+            },
+        }
+    }
+
+    /// Where along the edges `t` (0 to 1 along the strip) falls, as a
+    /// place on the screen from its top left, and which edge it is on:
+    /// 0 left, 1 top, 2 right, 3 bottom.
+    fn around(&self, t: f32, w: f32, h: f32) -> (f32, f32, u8) {
+        let perimeter = 2.0 * (w + h);
+        // Measured clockwise from the bottom left corner, seen from the front.
+        let start = match self.start {
+            1 => 2.0 * h + 1.5 * w,
+            2 => h,
+            _ => 0.0,
+        };
+        let along = t.clamp(0.0, 1.0) * perimeter;
+        let s = if self.clockwise { start + along } else { start - along }.rem_euclid(perimeter);
+        if s < h {
+            (0.0, 1.0 - s / h, 0)
+        } else if s < h + w {
+            ((s - h) / w, 0.0, 1)
+        } else if s < 2.0 * h + w {
+            (1.0, (s - h - w) / h, 2)
+        } else {
+            (1.0 - (s - 2.0 * h - w) / w, 1.0, 3)
+        }
+    }
+
+    fn stronger(&self, c: Rgb) -> Rgb {
+        let grey = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+        let k = self.strength;
+        Rgb::new(
+            grey + (c.r - grey) * k,
+            grey + (c.g - grey) * k,
+            grey + (c.b - grey) * k,
+        )
+        .clamp()
+    }
+}
+
+impl Effect for ScreenColours {
+    fn configure(&mut self, p: &ParamReader) {
+        self.how = p.choice("how");
+        self.start = p.choice("start");
+        self.clockwise = p.choice("direction") == 0;
+        self.depth = p.float("depth").clamp(0.02, 0.5);
+        self.strength = p.float("strength").clamp(0.0, 2.0);
+        self.smooth = p.float("smooth").clamp(0.0, 0.95);
+    }
+
+    fn update(&mut self, ctx: &FrameCtx) {
+        self.clock += ctx.dt;
+        let keep = self.smooth.powf(ctx.dt * 60.0);
+        match crate::screen::latest() {
+            Some(new) => match &mut self.shown {
+                Some(old) if old.width == new.width && old.height == new.height => {
+                    for (o, n) in old.pixels.iter_mut().zip(&new.pixels) {
+                        *o = n.lerp(*o, keep);
+                    }
+                }
+                _ => self.shown = Some((*new).clone()),
+            },
+            // Sharing has stopped: what was shown fades away.
+            None => {
+                if let Some(old) = &mut self.shown {
+                    let fade = 0.9f32.powf(ctx.dt * 60.0);
+                    for o in &mut old.pixels {
+                        *o = o.scale(fade);
+                    }
+                    if old.pixels.iter().all(|p| p.r.max(p.g).max(p.b) < 0.002) {
+                        self.shown = None;
+                    }
+                }
+            }
+        }
+        if let Some(s) = &self.shown {
+            self.whole = self.stronger(s.mean(0.0, 1.0, 0.0, 1.0));
+        }
+    }
+
+    fn shade(&self, x: f32, y: f32, ctx: &FrameCtx) -> Rgb {
+        let Some(s) = &self.shown else {
+            // Nothing shared yet: a dim slow glow, so the light is seen
+            // to be waiting rather than broken.
+            let t = (self.clock * 0.4 + x * 3.0).sin() * 0.5 + 0.5;
+            return Rgb::new(0.1, 0.18, 0.4).lerp(Rgb::new(0.3, 0.1, 0.4), t);
+        };
+        let colour = match self.how {
+            2 => return self.whole,
+            1 => s.mean(x - 1.0 / 48.0, x + 1.0 / 48.0, 0.0, 1.0),
+            3 if !ctx.flat => s.at(
+                (x.clamp(0.0, 0.9999) * s.width as f32) as u32,
+                (y.clamp(0.0, 0.9999) * s.height as f32) as u32,
+            ),
+            3 => s.mean(x - 1.0 / 48.0, x + 1.0 / 48.0, 0.4, 0.6),
+            _ => {
+                let (w, h) = (s.width as f32, s.height as f32);
+                let (px, py, edge) = self.around(x, w, h);
+                let (d, span) = (self.depth, 0.04);
+                match edge {
+                    0 => s.mean(0.0, d, py - span, py + span),
+                    2 => s.mean(1.0 - d, 1.0, py - span, py + span),
+                    1 => s.mean(px - span, px + span, 0.0, d),
+                    _ => s.mean(px - span, px + span, 1.0 - d, 1.0),
+                }
+            }
+        };
+        self.stronger(colour)
+    }
+}
+
 // ----------------------------------------------------------------- Movie
 
 struct Film {
@@ -1381,6 +1557,75 @@ mod tests {
             was = on;
         }
         assert!(flashes <= 11, "{flashes} flashes in ten seconds");
+    }
+
+    #[test]
+    fn the_screen_lights_the_strip_around_its_edges_across_it_and_as_one_colour() {
+        use crate::screen::{self, Screen};
+        // A screen 8 wide and 4 high: the left half red, the right half
+        // blue, with a green top row.
+        let mut bytes = Vec::new();
+        for row in 0..4 {
+            for col in 0..8 {
+                bytes.extend_from_slice(match (row, col) {
+                    (0, _) => &[0u8, 255, 0],
+                    (_, c) if c < 4 => &[255, 0, 0],
+                    _ => &[0, 0, 255],
+                });
+            }
+        }
+        screen::set(Screen::from_rgb(8, 4, &bytes).unwrap());
+        let (red, green, blue) = (
+            Rgb::new(1.0, 0.0, 0.0),
+            Rgb::new(0.0, 1.0, 0.0),
+            Rgb::new(0.0, 0.0, 1.0),
+        );
+        let near = |a: Rgb, b: Rgb| (a.r - b.r).abs() < 0.05 && (a.g - b.g).abs() < 0.05 && (a.b - b.b).abs() < 0.05;
+        let look = |params: Params, xs: &[f32]| -> Vec<Rgb> {
+            let mut fx = make("screen", &params);
+            let c = ctx(0.0, AudioFeatures::default(), true);
+            fx.update(&c);
+            xs.iter().map(|x| fx.shade(*x, 0.5, &c)).collect()
+        };
+        let plain = |extra: &[(&str, ParamValue)]| {
+            let mut p = with(&[
+                ("strength", ParamValue::Number(1.0)),
+                ("smooth", ParamValue::Number(0.0)),
+            ]);
+            p.extend(with(extra));
+            p
+        };
+        // Around the edges from the bottom left, clockwise: up the left
+        // (red), along the top (green), down the right (blue), back along
+        // the bottom (blue, then red). The perimeter is 24: the left side
+        // is the first sixth, the top the next third.
+        let got = look(plain(&[]), &[0.08, 0.33, 0.6, 0.75, 0.97]);
+        for (g, want) in got.iter().zip([red, green, blue, blue, red]) {
+            assert!(near(*g, want), "{got:?}");
+        }
+        // Anticlockwise, the bottom comes first: red near the start.
+        let got = look(
+            plain(&[("direction", ParamValue::Text("Anticlockwise".into()))]),
+            &[0.05, 0.25],
+        );
+        assert!(near(got[0], red) && near(got[1], blue), "{got:?}");
+        // Across: left red, right blue, with a little of the green top in each.
+        let got = look(
+            plain(&[("how", ParamValue::Text("Across the screen".into()))]),
+            &[0.1, 0.9],
+        );
+        assert!(
+            got[0].r > 0.7 && got[0].b < 0.05 && got[1].b > 0.7 && got[1].r < 0.05,
+            "{got:?}"
+        );
+        // One colour for all: the mean of the whole screen, everywhere.
+        let got = look(
+            plain(&[("how", ParamValue::Text("One colour for all".into()))]),
+            &[0.0, 1.0],
+        );
+        assert_eq!(got[0], got[1]);
+        assert!(near(got[0], Rgb::new(0.375, 0.25, 0.375)), "{got:?}");
+        screen::clear();
     }
 
     #[test]

@@ -1,4 +1,6 @@
-import { ChevronDown, Music, Pencil, Play, Power, Redo2, Settings as Gear, Sun, Undo2 } from "lucide-react";
+import { ChevronDown, Monitor, Music, Pencil, Play, Power, Redo2, Settings as Gear, Sun, Undo2 } from "lucide-react";
+import { useSyncExternalStore } from "react";
+import { screenShare, stopSharing } from "../screenShare";
 import { HelpButton } from "./Help";
 import { engine, libraryOpen, perFrame, settingsPage, useHistory, useShow, useView, viewPref } from "../engine";
 import { AudioMeter } from "./AudioMeter";
@@ -119,6 +121,7 @@ export function TopBar() {
           />
         </div>
         <span className="master-value">{Math.round(brightness * 100)}%</span>
+        <SharingScreen />
         <button
           type="button"
           className={`blackout ${blackout ? "on" : ""}`}
@@ -142,5 +145,22 @@ export function TopBar() {
         </button>
       </div>
     </header>
+  );
+}
+
+/** While this window shares the screen, a way to stop it from anywhere. */
+function SharingScreen() {
+  const share = useSyncExternalStore(screenShare.subscribe, screenShare.get);
+  if (!share.on) return null;
+  return (
+    <button
+      type="button"
+      className="icon-button sharing-screen"
+      aria-label="Stop sharing the screen"
+      title={`Sharing ${share.label} for the Screen colours effect. Click to stop.`}
+      onClick={stopSharing}
+    >
+      <Monitor size={16} aria-hidden />
+    </button>
   );
 }

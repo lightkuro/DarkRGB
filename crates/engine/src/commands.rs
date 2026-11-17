@@ -297,6 +297,16 @@ pub enum Command {
     TimelineSync {
         position: f64,
     },
+    /// A small picture of the screen, from the window sharing it, for the
+    /// "Screen colours" effect: `rgb` is three bytes a pixel, row by row
+    /// from the top left, written as hexadecimal. Handled by the app.
+    ScreenFrame {
+        width: u32,
+        height: u32,
+        rgb: String,
+    },
+    /// The window has stopped sharing the screen.
+    ScreenStop,
     /// While on and playing, scenes chosen and pads pressed are written
     /// onto the timeline as clips.
     TimelineRecord {
@@ -1416,6 +1426,9 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
         | Command::TimelineSeek { .. }
         | Command::TimelineSync { .. }
         | Command::TimelineRecord { .. } => Err("that command needs the engine's clock".into()),
+        Command::ScreenFrame { .. } | Command::ScreenStop => {
+            Err("the screen is shared with the engine, not the show".into())
+        }
 
         Command::SetTimeline {
             length,

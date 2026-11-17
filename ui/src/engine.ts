@@ -556,6 +556,8 @@ export interface Status {
     /** False when the choice cannot be kept (started with one show file). */
     available: boolean;
   };
+  /** A window is sharing the screen with the engine now. */
+  screen?: boolean;
   /** MIDI controllers: whether there is MIDI at all, which are heard, the last thing heard. */
   midi?: { available: boolean; ports: string[]; learning: LearnTarget | null; last: string | null };
 }
@@ -859,6 +861,8 @@ export type Command =
   | { type: "add_open_rgb"; address: string }
   | { type: "add_scene_set"; name: string }
   | { type: "add_pack"; name: string }
+  | { type: "screen_frame"; width: number; height: number; rgb: string }
+  | { type: "screen_stop" }
   | { type: "rename_scene_set"; id: number; name: string }
   | { type: "remove_scene_set"; id: number }
   | { type: "file_scene"; scene: number; set: number | null }

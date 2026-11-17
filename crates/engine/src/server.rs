@@ -634,6 +634,7 @@ fn status_message(shared: &Shared, here: &Here) -> String {
         "midi": &*shared.midi.lock().unwrap(),
         "show_file": shared.save_path.lock().unwrap().as_ref().map(|p| p.display().to_string()),
         "remote": remote_status(shared, here),
+        "screen": darkrgb_core::screen::latest().is_some(),
     })
     .to_string()
 }
