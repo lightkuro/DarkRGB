@@ -60,6 +60,13 @@ const SECTION_GAP_S: f32 = 4.0;
 /// intro is told: there is no louder part yet to measure the intro by.
 const SECTION_SURGE_DB: f32 = 4.0;
 
+/// The range notes are looked for in: from the low strings of a bass
+/// guitar's upper register to the top of a voice's overtones.
+const PITCH_MIN_HZ: f32 = 100.0;
+const PITCH_MAX_HZ: f32 = 2_000.0;
+/// The C that notes are counted from.
+const MIDDLE_C_HZ: f32 = 261.625_58;
+
 const TEMPO_MIN_BPM: f32 = 70.0;
 const TEMPO_MAX_BPM: f32 = 190.0;
 /// Seconds of onset history the tempo estimate looks at.
@@ -147,6 +154,14 @@ pub struct Analyzer {
     /// How long the intensity has been away from `settled`, in steps.
     away_steps: usize,
     steps_since_section: usize,
+
+    /// How much of the tuned sound falls on each of the twelve notes,
+    /// whichever octave, smoothed over a few steps.
+    chroma: [f32; 12],
+    /// The note being reported, and how far the sound is from it in
+    /// semitones (-0.5..0.5), smoothed.
+    note: usize,
+    note_offset: f32,
 
     out: AudioFeatures,
 }
@@ -275,6 +290,9 @@ impl Analyzer {
             settled: 1.0,
             away_steps: 0,
             steps_since_section: usize::MAX / 2,
+            chroma: [0.0; 12],
+            note: 0,
+            note_offset: 0.0,
             out: AudioFeatures::default(),
         }
     }
@@ -452,6 +470,7 @@ impl Analyzer {
         [self.out.bass, self.out.mid, self.out.treble] = groups;
         self.out.active = active;
         self.track_sections(rms, energy[0].sqrt(), active);
+        self.track_pitch(active);
 
         let onset = self.onsets.step(flux, self.step_rate) && active;
         self.step_index += 1;
@@ -485,6 +504,73 @@ impl Analyzer {
         let per_band = |g: usize| group_flux[g] / group_size[g].max(1) as f32;
         let rhythm = 2.0 * per_band(0) + per_band(1) + 0.4 * per_band(2);
         self.track_beat(if active { rhythm } else { 0.0 }, onset, fade);
+    }
+
+    /// Finds the note that stands out in the music, whichever octave it
+    /// is in. Every clear peak of the spectrum between the bass and the
+    /// upper mids is filed under the note it is nearest; the note with
+    /// the most filed under it is the one reported. Drums and noise spread
+    /// over all twelve and report as "not tonal".
+    fn track_pitch(&mut self, active: bool) {
+        let hz_per_bin = self.sample_rate / self.n as f32;
+        let (lo, hi) = (
+            ((PITCH_MIN_HZ / hz_per_bin).ceil() as usize).max(2),
+            ((PITCH_MAX_HZ / hz_per_bin) as usize).min(self.n / 2 - 2),
+        );
+        let mut now = [0.0f32; 12];
+        let mut offsets = [0.0f32; 12];
+        if active && hi > lo {
+            let magnitude = |k: usize| self.spectrum[k].norm();
+            let loudest = (lo..=hi).map(magnitude).fold(0.0f32, f32::max);
+            for k in lo..=hi {
+                let (a, b, c) = (magnitude(k - 1), magnitude(k), magnitude(k + 1));
+                if b < loudest * 0.15 || b <= a || b < c {
+                    continue;
+                }
+                // The peak's true place lies between bins: the top of the
+                // curve through this bin and its neighbours, in decibels.
+                let (la, lb, lc) = (a.max(1e-12).ln(), b.ln(), c.max(1e-12).ln());
+                let bend = la - 2.0 * lb + lc;
+                let shift = if bend < -1e-6 { (0.5 * (la - lc) / bend).clamp(-0.5, 0.5) } else { 0.0 };
+                let hz = (k as f32 + shift) * hz_per_bin;
+                let semitones = 12.0 * (hz / MIDDLE_C_HZ).log2();
+                let nearest = semitones.round();
+                let class = (nearest as i32).rem_euclid(12) as usize;
+                now[class] += b;
+                offsets[class] += (semitones - nearest) * b;
+            }
+        }
+        let total: f32 = now.iter().sum();
+        // Follow over about a tenth of a second, so one odd frame does
+        // not change the note.
+        let rate = 1.0 - (-1.0 / (self.step_rate * 0.10)).exp();
+        for class in 0..12 {
+            let share = if total > 0.0 { now[class] / total } else { 0.0 };
+            self.chroma[class] += (share - self.chroma[class]) * rate;
+        }
+        let (best, most) = self
+            .chroma
+            .iter()
+            .copied()
+            .enumerate()
+            .fold((0, 0.0f32), |best, (class, share)| if share > best.1 { (class, share) } else { best });
+        // Another note has to be clearly ahead to take over, so two notes
+        // sounding together do not flicker between each other.
+        if best != self.note && most > self.chroma[self.note] * 1.25 {
+            self.note = best;
+            self.note_offset = 0.0;
+        }
+        if now[self.note] > 0.0 {
+            let offset = offsets[self.note] / now[self.note];
+            self.note_offset += (offset - self.note_offset) * rate;
+        }
+        // One note in twelve by chance has a twelfth of the sound; a
+        // single voice has nearly all of it.
+        let clear = ((self.chroma[self.note] - 0.2) / 0.5).clamp(0.0, 1.0);
+        self.out.tonal = if active { clear } else { 0.0 };
+        if clear > 0.0 {
+            self.out.pitch = ((self.note as f32 + self.note_offset) / 12.0).rem_euclid(1.0);
+        }
     }
 
     /// Works out how big the current part of the song is, and notices
@@ -1312,6 +1398,48 @@ mod tests {
         // Within three seconds of the music coming back, a new and louder section.
         assert!(trace[13..17].iter().any(|(_, _, drop)| *drop > 0.8), "{trace:?}");
         assert_eq!(trace.last().unwrap().1, 1, "{trace:?}");
+    }
+
+    #[test]
+    fn a_note_is_named_whichever_octave_it_is_in_and_drums_are_not_a_note() {
+        // A is nine semitones above C: three quarters of the way round.
+        for hz in [220.0, 440.0, 880.0] {
+            let mut analyzer = Analyzer::new(SR);
+            feed(&mut analyzer, &sine(hz, 0.3, 1.0, SR));
+            let heard = analyzer.features();
+            assert!((heard.pitch - 0.75).abs() < 0.01, "{hz} Hz read as {}", heard.pitch);
+            assert!(heard.tonal > 0.9, "{hz} Hz: {}", heard.tonal);
+        }
+        // Other notes, other sample rates, and a note between two keys.
+        for (sr, hz, expected) in [(48_000, 261.63, 0.0), (44_100, 329.63, 4.0 / 12.0), (48_000, 508.36, 11.5 / 12.0)] {
+            let mut analyzer = Analyzer::new(sr);
+            feed(&mut analyzer, &sine(hz, 0.3, 1.0, sr));
+            let pitch = analyzer.features().pitch;
+            let away = (pitch - expected).abs().min(1.0 - (pitch - expected).abs());
+            assert!(away < 0.015, "{hz} Hz at {sr}: {pitch}, expected {expected}");
+        }
+        // A tune: the note follows within a fifth of a second.
+        let mut analyzer = Analyzer::new(SR);
+        feed(&mut analyzer, &sine(261.63, 0.3, 0.6, SR));
+        assert!(analyzer.features().pitch < 0.02);
+        feed(&mut analyzer, &sine(392.0, 0.3, 0.2, SR));
+        assert!((analyzer.features().pitch - 7.0 / 12.0).abs() < 0.02, "G: {}", analyzer.features().pitch);
+        // Noise has no note, and silence leaves the last note standing
+        // while saying nothing is heard.
+        let mut seed = 0x1234_5678u32;
+        let noise: Vec<f32> = (0..SR)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+            })
+            .collect();
+        feed(&mut analyzer, &noise);
+        assert!(analyzer.features().tonal < 0.2, "noise: {}", analyzer.features().tonal);
+        let mut analyzer = Analyzer::new(SR);
+        feed(&mut analyzer, &sine(440.0, 0.3, 0.5, SR));
+        feed(&mut analyzer, &vec![0.0; SR as usize]);
+        assert_eq!(analyzer.features().tonal, 0.0);
+        assert!((analyzer.features().pitch - 0.75).abs() < 0.01);
     }
 
     #[test]

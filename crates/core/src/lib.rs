@@ -18,6 +18,7 @@ pub mod preview;
 pub mod render;
 pub mod safety;
 pub mod show;
+mod stage_effects;
 pub mod timeline;
 
 pub use audio::{AudioFeatures, BANDS, Band};

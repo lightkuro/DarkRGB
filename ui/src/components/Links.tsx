@@ -22,6 +22,7 @@ const SOURCES: { id: string; name: string; source: Source }[] = [
   { id: "beat", name: "The beat", source: { type: "beat" } },
   { id: "hit", name: "Hits", source: { type: "hit" } },
   { id: "energy", name: "The song's energy", source: { type: "energy" } },
+  { id: "note", name: "The note being played", source: { type: "note" } },
   { id: "wave", name: "A slow wave", source: { type: "wave", beats: 8 } },
   { id: "ramp", name: "A climb, then back to the start", source: { type: "ramp", beats: 4 } },
   { id: "square", name: "On, then off", source: { type: "square", beats: 2 } },
@@ -56,6 +57,8 @@ function sourceValue(source: Source, audio: AudioFeatures, faders: number[]): nu
       return audio.onset;
     case "energy":
       return audio.active ? audio.intensity : 0;
+    case "note":
+      return audio.pitch ?? 0;
     case "wave":
     case "ramp":
     case "square":

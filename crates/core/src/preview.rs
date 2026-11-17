@@ -58,6 +58,9 @@ pub fn music(t: f64) -> AudioFeatures {
         drop: 0.0,
         bar_beat: (count % 4) as u8,
         coasting: false,
+        // A tune of four notes, one to a beat: C, E, G, A.
+        pitch: [0.0, 4.0, 7.0, 9.0][(count % 4) as usize] / 12.0,
+        tonal: 0.8,
     }
 }
 

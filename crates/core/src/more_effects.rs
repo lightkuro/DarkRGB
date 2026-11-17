@@ -652,6 +652,8 @@ mod tests {
             aspect: 1.0,
             flat,
             flash_cap: f32::INFINITY,
+            light: 0,
+            lights: 1,
         }
     }
 

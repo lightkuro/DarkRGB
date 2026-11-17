@@ -33,11 +33,14 @@ pub fn registry() -> &'static [EffectDef] {
         ]
         .into_iter()
         .chain(crate::extra_effects::follows())
+        .chain(crate::stage_effects::follows())
         .chain(crate::more_effects::hits_and_beats())
         .chain(crate::extra_effects::hits_and_beats())
+        .chain(crate::stage_effects::hits_and_beats())
         .chain([Plasma::def(), Flow::def()])
         .chain(crate::more_effects::ambient())
         .chain(crate::extra_effects::ambient())
+        .chain(crate::stage_effects::ambient())
         .chain([Solid::def()])
         .collect()
     })
@@ -1297,6 +1300,8 @@ mod tests {
             aspect: if flat { 1.0 } else { 2.0 },
             flat,
             flash_cap: f32::INFINITY,
+            light: 0,
+            lights: 1,
         }
     }
 

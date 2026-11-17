@@ -49,7 +49,7 @@ export type Kind = "room" | "display" | "club" | "custom";
 
 /** Something a setting can follow. Each runs from 0 to 1. */
 export type Source =
-  | { type: "level" | "bass" | "mid" | "treble" | "beat" | "hit" | "energy" }
+  | { type: "level" | "bass" | "mid" | "treble" | "beat" | "hit" | "energy" | "note" }
   | { type: "wave" | "ramp" | "square" | "random"; beats: number }
   | { type: "fader"; n: number };
 
@@ -615,6 +615,10 @@ export interface AudioFeatures {
   bpm: number;
   beat_count: number;
   active: boolean;
+  /** The note that stands out, as its place in the octave: 0 for C up to just under 1 for B. */
+  pitch?: number;
+  /** How clearly a note is heard, 0 to 1. */
+  tonal?: number;
   /** How big this part of the song is against the last minute, 0 to 1. */
   intensity: number;
   /** Goes up by one when the song moves to a new section. */

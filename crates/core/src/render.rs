@@ -32,6 +32,8 @@ struct Target {
     index: u32,
     x: f32,
     y: f32,
+    /// Which of the layer's lights the pixel is on, counting from nought.
+    light: u16,
 }
 
 /// Pixels that share one frame of reference: all of a layer's pixels, or
@@ -43,6 +45,8 @@ struct Segment {
     /// Degrees the pattern is turned on this segment before the layer's
     /// own angle: what keeps it upright on a matrix that has been turned.
     turn: f32,
+    /// How many lights the layer plays on in all.
+    lights: u16,
 }
 
 struct LayerState {
@@ -432,6 +436,8 @@ impl Renderer {
                 aspect: first.aspect,
                 flat: first.flat,
                 flash_cap: show.flash.cap(),
+                light: 0,
+                lights: first.lights as u32,
             };
             state.effect.configure(&ParamReader::new(
                 &def.info.params,
@@ -474,6 +480,7 @@ impl Renderer {
                     ctx.aspect = 1.0;
                 }
                 for t in &segment.targets {
+                    ctx.light = t.light as u32;
                     let (x, y) = match &turn {
                         Some(turn) => turn.apply(t.x, t.y),
                         None => (t.x, t.y),
@@ -733,7 +740,18 @@ struct Moved {
 
 fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Segment> {
     if !layer.each || layer.chain {
-        let (targets, aspect, flat) = build_targets(show, layer, positions);
+        let (mut targets, aspect, flat) = build_targets(show, layer, positions);
+        // The pixels come light after light, in the order of the list.
+        let (mut at, mut lights) = (0usize, 0u16);
+        for fixture in &show.fixtures {
+            if Show::layer_hits(layer, fixture) && fixture.pixel_count() > 0 {
+                for target in targets.iter_mut().skip(at).take(fixture.pixel_count() as usize) {
+                    target.light = lights;
+                }
+                at += fixture.pixel_count() as usize;
+                lights += 1;
+            }
+        }
         return if targets.is_empty() {
             Vec::new()
         } else {
@@ -742,6 +760,7 @@ fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Seg
                 aspect,
                 flat,
                 turn: 0.0,
+                lights: lights.max(1),
             }]
         };
     }
@@ -753,6 +772,13 @@ fn build_segments(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> Vec<Seg
             segments.push(own_segment(fixture, offset, count, positions, layer.turns));
         }
         offset += count;
+    }
+    let lights = segments.len() as u16;
+    for (nth, segment) in segments.iter_mut().enumerate() {
+        segment.lights = lights;
+        for target in &mut segment.targets {
+            target.light = nth as u16;
+        }
     }
     segments
 }
@@ -769,12 +795,14 @@ fn own_segment(fixture: &Fixture, offset: u32, count: u32, positions: &[[f32; 2]
                         index: offset + i,
                         x: if reverse { 1.0 - along } else { along },
                         y: 0.5,
+                        light: 0,
                     }
                 })
                 .collect(),
             aspect: 1.0,
             flat: true,
             turn: 0.0,
+            lights: 1,
         },
         Shape::Matrix { .. } => {
             // Turn each pixel's place on the canvas back into the matrix's own.
@@ -789,6 +817,7 @@ fn own_segment(fixture: &Fixture, offset: u32, count: u32, positions: &[[f32; 2]
                             index: offset + i,
                             x: ((dx * cos - dy * sin) / w + 0.5).clamp(0.0, 1.0),
                             y: ((dx * sin + dy * cos) / h + 0.5).clamp(0.0, 1.0),
+                            light: 0,
                         }
                     })
                     .collect(),
@@ -797,6 +826,7 @@ fn own_segment(fixture: &Fixture, offset: u32, count: u32, positions: &[[f32; 2]
                 // Turned back by as much as the matrix is turned, the
                 // pattern is the right way up in the room.
                 turn: if turns { 0.0 } else { -fixture.rotation },
+                lights: 1,
             }
         }
     }
@@ -837,6 +867,7 @@ fn build_targets(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> (Vec<Tar
                 index: *index,
                 x: (i as f32 + 0.5) / n,
                 y: 0.5,
+                light: 0,
             })
             .collect();
         return (targets, 1.0, true);
@@ -854,6 +885,7 @@ fn build_targets(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> (Vec<Tar
                     index: *index,
                     x: if reverse { 1.0 - along } else { along },
                     y: 0.5,
+                    light: 0,
                 }
             })
             .collect();
@@ -882,9 +914,15 @@ fn build_targets(show: &Show, layer: &Layer, positions: &[[f32; 2]]) -> (Vec<Tar
                     index: *index,
                     x: y,
                     y: 0.5,
+                    light: 0,
                 }
             } else {
-                Target { index: *index, x, y }
+                Target {
+                    index: *index,
+                    x,
+                    y,
+                    light: 0,
+                }
             }
         })
         .collect();
@@ -1473,6 +1511,43 @@ mod tests {
             assert!(block.iter().all(|c| c.to_bytes() == block[0].to_bytes()), "{block:?}");
         }
         assert!(frame[0].r > 0.5 && frame[11].b > 0.5);
+    }
+
+    #[test]
+    fn an_effect_is_told_which_light_each_place_is_on() {
+        use crate::layout::Shape;
+        // Three strips of four, and lights taking turns as whole lights:
+        // the first and third are lit together, the second is dark.
+        let mut show = Show::default();
+        show.layers.clear();
+        let id = show.add_layer("alternate");
+        show.layer_mut(id)
+            .unwrap()
+            .params
+            .insert("what".into(), ParamValue::Text("Whole lights".into()));
+        for name in ["a", "b", "c"] {
+            show.add_virtual(
+                name,
+                &Shape::Strip {
+                    count: 4,
+                    reverse: false,
+                },
+                false,
+            );
+        }
+        let lit = |show: &Show| -> Vec<bool> { render(show).1.iter().map(|c| c.r > 0.5).collect() };
+        let expected = [true, true, true, true, false, false, false, false, true, true, true, true];
+        // However the pattern is laid: across the stage, on each light,
+        // or end to end.
+        assert_eq!(lit(&show), expected);
+        show.layers[0].each = true;
+        assert_eq!(lit(&show), expected);
+        show.layers[0].chain = true;
+        assert_eq!(lit(&show), expected);
+        // Played on the last two only, they are the first and second.
+        show.layers[0].chain = false;
+        show.layers[0].targets = vec![show.fixtures[1].id, show.fixtures[2].id];
+        assert_eq!(lit(&show)[4..], [true, true, true, true, false, false, false, false]);
     }
 
     #[test]

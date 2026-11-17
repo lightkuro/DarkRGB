@@ -4891,8 +4891,9 @@ mod tests {
                 43 => Command::SetLink {
                     layer,
                     param: ["opacity", "speed", "palette", "floor", "decay", "nope"][r.next() as usize % 6].into(),
-                    source: match r.next() % 7 {
+                    source: match r.next() % 8 {
                         0 => Source::Level,
+                        6 => Source::Note,
                         1 => Source::Beat,
                         2 => Source::Energy,
                         3 => Source::Wave { beats: r.number() },

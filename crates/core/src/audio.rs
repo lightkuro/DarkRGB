@@ -116,6 +116,14 @@ pub struct AudioFeatures {
     /// heard just now (a breakdown, a pause), and the clock runs on at
     /// the tempo it had.
     pub coasting: bool,
+    /// The note that stands out in the music, as its place in the octave:
+    /// 0 for C, a twelfth more for each semitone up, just under 1 for B.
+    /// Which octave it is in is left out, so a tune goes round the colour
+    /// wheel as it goes up the scale. Holds the last note while none is clear.
+    pub pitch: f32,
+    /// How clearly a note is heard, 0..1: low for drums and noise, high
+    /// for a voice, a lead or a held chord.
+    pub tonal: f32,
 }
 
 impl Default for AudioFeatures {
@@ -139,6 +147,8 @@ impl Default for AudioFeatures {
             drop: 0.0,
             bar_beat: 0,
             coasting: false,
+            pitch: 0.0,
+            tonal: 0.0,
         }
     }
 }
@@ -270,6 +280,8 @@ mod tests {
             drop: 0.4,
             bar_beat: 3,
             coasting: false,
+            pitch: 0.25,
+            tonal: 0.5,
         }
     }
 

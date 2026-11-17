@@ -31,6 +31,12 @@ pub struct FrameCtx {
     /// show's flash limit is on. Infinite when there is no limit. Only
     /// effects whose job is to flash need to look at it.
     pub flash_cap: f32,
+    /// Which of the lights the effect plays on the place being asked
+    /// about is on, counting from nought in the order they are listed,
+    /// and how many there are. For effects that treat whole lights
+    /// differently, such as two lights flashing in turn.
+    pub light: u32,
+    pub lights: u32,
 }
 
 impl FrameCtx {

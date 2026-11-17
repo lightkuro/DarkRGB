@@ -159,6 +159,9 @@ pub enum Source {
     Random {
         beats: f32,
     },
+    /// The note that stands out in the music, by its place in the
+    /// octave: nothing for C, climbing to full just below the next C.
+    Note,
 }
 
 /// The name a link uses for the hue all a layer's colours are shifted by.
@@ -216,6 +219,7 @@ impl Source {
                 }
             }
             Source::Fader { n } => faders.get((n as usize).wrapping_sub(1)).copied().unwrap_or(0.0),
+            Source::Note => whole.pitch,
         };
         if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
     }
