@@ -8,8 +8,8 @@ between them:
   like a lighting console.
 - **Timeline:** shows laid out in time against a song, placed by hand or recorded by performing them.
 
-It sends to ESP32 controllers running [WLED](https://kno.wled.ge/), and to pixel controllers that take sACN
-(E1.31) or Art-Net.
+It sends to ESP32 controllers running [WLED](https://kno.wled.ge/), to pixel controllers that take sACN
+(E1.31) or Art-Net, to a computer's own lights through OpenRGB, and to strips on a USB cable (Adalight).
 
 ![darkRGB: a room show on demo lights, in the simple layout](docs/images/main.png)
 
@@ -29,16 +29,15 @@ Or start blank. The kind of show only decides what it begins with; everything ca
 
 ## Status
 
-Version 0.11.0, in development. Audio-reactive mode and live control are both complete enough to run a show
-with: twenty-five ready-made scenes, thirty-nine effects, pads, keys and MIDI controllers, autopilot, any
-slider tied to the music, and undo. The timeline plays, records and edits, and has not yet been used for a
-whole show by anyone. This version closes much of the gap with LedFx (transitions, blur, the note in the
-music, a GIF and video player, more effects, OpenRGB) and adds ways to play live: Next by the kind of scene
-or by the song, and a Live view whose panels you arrange.
+Version 0.12.0. Audio-reactive mode and live control are both complete enough to run a show with:
+forty-nine ready-made scenes and four sets of six for kinds of music, sixty-four effects (twenty-three of
+them LedFx's own), pads, keys and MIDI controllers, autopilot, any slider tied to the music, and undo. The
+timeline plays, records and edits, and has not yet been used for a whole show by anyone.
 
-**Nothing here has yet met real LEDs or real music.** Every check so far used simulated devices and a
-synthetic test song. An outside review of 0.6.0 put that first among its concerns; see
-[docs/roadmap.md](docs/roadmap.md).
+**Nothing here has yet met real LEDs.** Every device check so far used simulated devices. Real music has
+now been used: fifteen Creative Commons songs by Kevin MacLeod (incompetech.com) tuned the tempo finding
+(right 77% of the time, 82% counting half or double time) and every new scene was watched against one.
+An outside review of 0.6.0 put real hardware first among its concerns; see [docs/roadmap.md](docs/roadmap.md).
 
 | | Linux | Windows |
 |---|---|---|
@@ -52,8 +51,9 @@ synthetic test song. An outside review of 0.6.0 put that first among its concern
 | Power limit, colour order, delay, smoother dimming | checked against a test receiver | the same code; not yet run |
 | Timeline | plays against a song in a browser and in the app window; recording and editing checked | not yet run |
 
-The effects, the song-energy tracking and the drop detection have only met synthetic test songs so far, so
-expect them to need tuning against real music. See [docs/roadmap.md](docs/roadmap.md) for the details.
+The song-energy tracking and the drop detection have met few real songs so far, so expect them to need
+tuning. Some songs still trip the beat: it can sit on the off-beat, and a fast song can be read at two
+thirds of its speed. See [docs/roadmap.md](docs/roadmap.md) for the details.
 
 **Flashing lights.** Fast flashing can trigger seizures in people with photosensitive epilepsy. Each show has
 a flash limit that holds flashing to three a second: strobes slow down to that, and anything else that
@@ -76,8 +76,11 @@ What works today:
 - A beat that holds: the tempo is kept from memory through a breakdown, bars have a first beat you can set,
   and half time, double time, a nudge and tapping correct it without letting go of the music. Lights fire a
   little early so they land with the sound. A mixer or music program that sends MIDI clock can drive it.
-- Thirty effects in layers, among them words and small pictures for matrices. Many keep time with the music:
-  a scanner crosses in a beat, tiles reshuffle on the beat, rings leave the middle one a beat. Each can
+- Sixty-four effects in layers, twenty-three of them LedFx's own (Energy, Scroll, Power, Melt, Pitch
+  Spectrum, Bar and more), among them words, small pictures and the colours on your screen. Many keep time
+  with the music: a scanner crosses in a beat, tiles reshuffle on the beat, rings leave the middle one a
+  beat, colours repeating along a strip flash in turn. The list can be narrowed to what an effect reacts
+  to (bass, mids, highs, the beat), and effects can be pinned or hidden. Each can
   play on all lights, chosen ones, a group, or only strips or only matrices; drawn across them or once per
   light; reacting to everything, bass, mids, highs or a frequency range you pick.
 - A pattern can be turned, in steps of 45° or to any angle, and set spinning, and the angle can follow the
@@ -97,13 +100,14 @@ What works today:
 - Colours from built-in palettes or palettes of your own.
 - Quiet parts of a song are dimmer and calmer and drops hit harder; a setting says how much.
 - Effects are chosen from tiles with a moving preview of each, in sections, with a search box.
-- A scene manager: twenty-five ready-made scenes, sets of scenes for different occasions, and changing a
-  scene out of sight while the lights play another.
+- A scene manager: forty-nine ready-made scenes, sets of six for kinds of music (house and techno, rock,
+  hip-hop and R&B, chill and lounge), sets of scenes for different occasions, and changing a scene out of
+  sight while the lights play another.
 - Scenes, master brightness and blackout. Autopilot changes scene every few bars and when the song changes,
   choosing calm scenes for quiet parts and big ones for drops. When the music stops, the lights can wait in a
   scene of your choosing.
 - Next and Previous, going to the next scene in the list, the next of the same kind (quiet, in between,
-  big), or one that suits the part of the song playing now. Seven ways for one scene to give way to the
+  big, or kinds you name yourself), or one that suits the part of the song playing now. Seven ways for one scene to give way to the
   next: fade, brighten, through black or white, wipe, iris, dissolve.
 - Pads and keys for scenes, effects, folders, groups, blackout, tap tempo, a hand-fired beat, next and previous
   scene, and freeze. A press can switch its thing, act only while held, or fire the effect's reaction.
@@ -111,8 +115,11 @@ What works today:
   touch, and faders for speed, sensitivity and anything you link to them. Pads go in named groups and over
   four pages; colour pads recolour everything that is playing; an XY pad bends two settings with one finger.
 - GIFs and pieces of video on a matrix, at their own speed or in time with the music.
-- The lights in and around a computer (keyboards, memory, fans) through OpenRGB, beside WLED, sACN and
-  Art-Net.
+- The lights in and around a computer (keyboards, memory, fans) through OpenRGB, and strips on a USB cable
+  (Adalight), beside WLED, sACN and Art-Net.
+- A light-by-light view, each light a card with its own picture and effects, and right-click menus on
+  lights, effects, scenes and pads.
+- New song and Lock for the beat: listen afresh when the song changes, or hold the tempo.
 - MIDI controllers: any pad can learn a note, and knobs and faders can drive brightness, speed, sensitivity
   and the four faders.
 - A phone or tablet on the same network as a remote, after giving a six-digit code shown on the computer.
@@ -296,13 +303,17 @@ docs/            research, architecture, roadmap
 
 ## Thanks
 
-To [LedFx](https://github.com/LedFx/LedFx) (GPL-3.0), whose features darkRGB has been measured against
-since 0.10.0: zones, the ways of laying an effect on lights, blocks, transitions between scenes, blur,
-pitch to colour, the GIF player and several effects were added because LedFx has them. No LedFx code is
-used here; the list of what was taken, changed and left out is in [docs/research.md](docs/research.md).
+To [LedFx](https://github.com/LedFx/LedFx) (GPL-3.0), by Austin Hodges and the LedFx contributors. Since
+0.12.0, twenty-three of its effects and thirteen of its gradients are here, translated from its Python into
+Rust in `crates/core/src/ledfx_effects.rs`, whose header credits LedFx and lists what was changed. Before
+that, darkRGB was measured against it: zones, the ways of laying an effect on lights, blocks, transitions
+between scenes, blur, pitch to colour, the light-by-light view and the GIF player came from that
+comparison; see [docs/research.md](docs/research.md).
 To [WLED](https://kno.wled.ge), which most of the lights this was written for run, and to
 [OpenRGB](https://openrgb.org), whose published protocol the computer-lights output follows.
 
 ## Licence
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE). The effects translated from LedFx
+(`crates/core/src/ledfx_effects.rs` and `ledfx_ripple.rs`) are under GPL-3.0, as LedFx is, so the program
+as built is distributed under version 3 of the GPL.

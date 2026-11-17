@@ -1,6 +1,62 @@
 # What's new
 
-## 0.11.0 (in development)
+## 0.12.0
+
+LedFx's own effects, calmer scenes that follow the music, and better listening. LedFx is free software
+under the GPL-3.0, like darkRGB, so its effects could be brought over with credit; see Help, Credits.
+
+Effects
+
+- **23 effects and 13 gradients from LedFx**, translated from its Python: Energy, Scroll, Wavelength,
+  Power, Rain, Bands, Blocks, Magnitude, Pitch Spectrum, Spectrum, Bar, Multicolor Bar, BPM Strobe,
+  Strobe, Scan, Energy 2, Melt, Marching, Crawler, Block Reflections, Gradient, Fade and Rainbow. They
+  come first in the list. Eleven of darkRGB's first effects, the busier ones, moved to **Older
+  effects** at the end; shows that use them are unchanged.
+- The effect list can be narrowed to what an effect **reacts to**: bass, mids, highs, the beat, hits,
+  the tune, or nothing.
+- **Pin** effects to keep them at the top, and **hide** the ones you never use.
+- **Alternating flash**: colours repeating along the lights, A B A B or A B C, each colour's blocks
+  flashing in turn, on the beat or at its own speed. Size the blocks by how many there are or by a
+  percentage of the length.
+- **Screen colours**: the colours on your screen, around its edges (for a strip behind a monitor),
+  across it, one colour for the room, or the picture itself on a matrix. Share the screen from the
+  effect's settings; the window, or darkRGB in any browser on the same computer, sends a small picture
+  of it about fifteen times a second. Nothing is recorded.
+
+Scenes
+
+- **24 new scenes**, each a slow base with one thing locked to the music, in place of busy ones. The
+  starter scenes of a room, a club and a blank show are drawn from them.
+- **Sets for kinds of music**: House and techno, Rock, Hip-hop and R&B, Chill and lounge. Each brings
+  six scenes that go together, two calm, two steady and two big, in a set of their own. Scene manager,
+  Add a scene.
+- **Kinds of scene of your own**, besides quiet, in between and big: Chorus, Build-up, whatever you
+  like. Next can go to the next scene of a kind, and a pad can too. Settings, Live and keys.
+
+Sound
+
+- The tempo is found more reliably: on fifteen real songs it is right 77% of the time, up from 65%
+  (82% counting half or double time). Songs with a steady beat are mostly right 88 to 100% of the time.
+- **New song** tells darkRGB the song has changed, so it listens afresh instead of carrying the last
+  song's tempo over.
+- **Lock** holds the tempo where it is, or at one you type, until you let it go.
+
+Working with it
+
+- **Light by light**: each light as a card with its own picture and its effects, like LedFx's devices
+  page. An effect can be added for one light alone.
+- **Right-click** a light, an effect, a scene, a pad or a light on the stage for what can be done with it.
+- The pad editor opens just below its pad instead of at the top of the screen, and Escape closes it.
+- **Drag** pads onto each other or into groups, and panels by their headings, in the Live view.
+- The Timeline says plainly where to put a song, and takes a file dropped on it.
+
+Lights
+
+- **Strips on a USB cable**: an Arduino, an ESP or a WLED board running a sketch that takes the Adalight
+  protocol. Pick the port, the number of LEDs and the speed. Checked against a stand-in port; it has
+  not met a real strip yet.
+
+## 0.11.0
 
 Closing the gap with LedFx, and more ways to play a show live. What was taken from LedFx, what was changed
 on the way and what was left out is listed in [docs/research.md](docs/research.md).

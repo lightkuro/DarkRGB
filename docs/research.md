@@ -123,16 +123,31 @@ from an earlier reading of its source and were not re-checked.
 | Rows, to make a virtual a matrix | A strip said to be snaked into a matrix, with its wiring; or the wiring left to WLED | Taken. |
 | Transition time and eight modes | A fade time and seven kinds: fade, brighten (LedFx's "add"), through black, through white, wipe, iris, dissolve | Changed. Push and slide move one picture off as the other comes on; here a wipe crosses the stage instead, because lights are placed and have no shared picture to slide. "None" is a fade time of nought. One setting for the show, not one per light. |
 | Per-effect blur, flip, mirror, background colour | Blur, mirror, repeat, kaleidoscope, angle, spin, colour shift | Blur taken. Background colour left out: a Solid colour effect underneath does it, and can be faded and tied to the music like any other. |
-| About 70 effects | 39 | Nine added: Take turns, Stage beams, Note colours (their pitch effects), Waterfall, Glitch, Lava lamp, Code rain (digital rain), Life (game of life), Moving picture (GIF player). Still fewer. Many of the rest are variations that settings here already give (a second kind of bars, scroll, strobe); they were not copied one for one. |
+| About 70 effects | 64 from 0.12.0, 23 of them LedFx's own | In 0.12.0, twenty-three of LedFx's effects were ported (see below). Before that, in 0.11.0, nine were added: Take turns, Stage beams, Note colours (their pitch effects), Waterfall, Glitch, Lava lamp, Code rain (digital rain), Life (game of life), Moving picture (GIF player). Still fewer. Many of the rest are variations that settings here already give (a second kind of bars, scroll, strobe); they were not copied one for one. |
 | GIF player | Moving picture: GIFs, and video too | Taken and widened. |
 | Pitch detection, with methods to choose | The note that stands out, as a place in the octave, for effects and for any slider to follow | Changed. One method, no choice of method: which octave is not reported, only which note. |
 | Melbank and onset settings | Fixed analysis | Left out. The analysis here sets itself; settings for it would be a way to get it wrong. Sensitivity and each effect's band remain. |
-| Devices: WLED, E1.31, Art-Net, DDP, OpenRGB, Nanoleaf, LIFX, Hue, Govee, serial, Launchpad and more | WLED (DDP), sACN (E1.31), Art-Net, OpenRGB | OpenRGB taken, from its published protocol, tested against a stand-in and not yet against OpenRGB itself. Left out for now: Nanoleaf, LIFX, Hue and Govee (each needs its maker's pairing and a device to check against; most light as one colour or a few panels, not as pixels), serial strips (needs a strip on a serial adapter to check), Launchpad as a display. |
+| Devices: WLED, E1.31, Art-Net, DDP, OpenRGB, Nanoleaf, LIFX, Hue, Govee, serial, Launchpad and more | WLED (DDP), sACN (E1.31), Art-Net, OpenRGB, serial (Adalight, from 0.12.0) | OpenRGB taken, from its published protocol, tested against a stand-in and not yet against OpenRGB itself. Serial strips taken in 0.12.0, checked against a stand-in port. Left out for now: Nanoleaf, LIFX, Hue and Govee (each needs its maker's pairing and a device to check against; most light as one colour or a few panels, not as pixels), Launchpad as a display. |
 | Integrations: Spotify, QLC+, Home Assistant, MQTT; a REST API | A WebSocket API and a phone remote | Left out. Home Assistant and MQTT are put off at the owner's word. Spotify needs a paid account and keys; the timeline against a song file does that job here. QLC+ is for people with DMX fixtures. |
 | Playlists of scenes | Autopilot, sets of scenes, Next by kind or by the song, and a timeline | Changed. |
 | Runs on a Raspberry Pi and macOS | Windows and Linux, x86-64 | Left out at the owner's word ("windows and linux is fine for now"). |
 | Audio from another device over the network (Sendspin) | The computer's own sound, or any input | Left out. |
-| Copying the screen's colours | None | Left out for now: it needs a screen-capture path for each system. |
+| Copying the screen's colours | Screen colours (0.12.0): edges, across, one colour, or the picture | Changed. The window, or any browser on the same computer, shares the screen through the browser's own prompt and sends a small picture; no native capture code for each system. The app's window on Linux may not offer sharing; a browser does. |
+
+**What 0.12.0 changed (2026-11-17)**
+
+LedFx and darkRGB are both under the GPL-3.0, so LedFx's code may be used here as long as the whole stays
+under the GPL and LedFx is credited. The owner asked for its actual effects. Twenty-three effects and
+thirteen gradients were translated from its Python into Rust (`crates/core/src/ledfx_effects.rs`, whose
+header credits LedFx and lists the changes): Energy, Scroll, Wavelength, Power, Rain, Bands, Blocks,
+Magnitude, Pitch Spectrum, Spectrum, Bar, Multicolor Bar, BPM Strobe, Strobe, Scan, Energy 2, Melt,
+Marching, Crawler, Block Reflections, Gradient, Fade and Rainbow. The main changes: LedFx's mel bank is
+darkRGB's 32 bands; its filters, written per frame at about 60 a second, are scaled by the real frame time;
+its beat oscillator comes from darkRGB's beat clock; Pitch Spectrum follows the note within the octave.
+LedFx's 2D effects (equalizer, flame, plasma and the like) were not ported; darkRGB has its own for most.
+Also taken in 0.12.0, in their own way: the light-by-light view (LedFx's devices page), strips on a serial
+port (Adalight), and the screen's colours (shared by the browser rather than captured by native code).
+Spotify, QLC+ and MQTT remain left out for the reasons in the table.
 
 Where darkRGB is ahead: no audio setup at all; a stage where lights are placed and patterns cross them by
 position; bent strips; a beat that is kept through breakdowns, with bars, nudge and tap; live pads, keys

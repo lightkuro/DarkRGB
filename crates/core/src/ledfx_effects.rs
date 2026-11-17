@@ -8,6 +8,9 @@
 //! Austin Hodges, and the developers and contributors listed in its
 //! AUTHORS.rst), with changes for darkRGB. The ripple a raindrop makes is
 //! LedFx's own animation (`effects/droplets/ripple.npy`), copied as numbers.
+//! This file, like LedFx, is under version 3 of the GPL; `ledfx_ripple.rs`
+//! too. The rest of darkRGB is under version 3 or later, and the program
+//! as built, which contains these, is distributed under version 3.
 //!
 //! What changed in the translation, for all of them:
 //!

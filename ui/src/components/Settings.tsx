@@ -856,7 +856,8 @@ function About() {
         {hello?.build ? ` (build ${hello.build})` : ""}
       </p>
       <p className="hint">
-        A light show controller for WLED devices, sACN and Art-Net pixel controllers, and OpenRGB. Free software under
+        A light show controller for WLED devices, sACN and Art-Net pixel controllers, OpenRGB and strips on a serial
+        port. Free software under
         the GNU General Public License, version 3 or later: you may use, study, share and change it.
       </p>
       <p className="hint">
@@ -864,9 +865,10 @@ function About() {
         that comes with each download.
       </p>
       <p className="hint">
-        Thanks to LedFx (GPL-3.0), which darkRGB has been measured against: zones, transitions, blur, colour from
-        the note, the GIF player and several effects are here because LedFx has them. None of its code is used.
-        Thanks also to WLED and to OpenRGB.
+        Many effects and gradients come from LedFx (GPL-3.0), by Austin Hodges and the LedFx contributors, translated
+        from its Python into darkRGB's Rust: twenty-three effects and thirteen gradients, each file saying so and what
+        was changed. Zones, transitions, blur, the light-by-light view and the GIF player are here because LedFx has
+        them. Thank you. Thanks also to WLED and to OpenRGB. Help, under Credits, lists them all.
       </p>
       <h3>What's new</h3>
       <div className="notes-body">

@@ -19,7 +19,10 @@ The plan rests on a few assumptions. Each has a check; `darkrgb-cli` runs the fi
 | Preview speed in the Linux app window | 10,000 points at 30 fps or better in WebKitGTK | The window works and draws the preview under a virtual display with software rendering. Speed on a real graphics card is **not measured.** |
 | Key handling | Key down and up arrive reliably in the app window, several keys held | **Passed on Linux** in the app window (WebKitGTK under a virtual display): a held key, a second key pressed while it was held, taps and number keys all arrived. Windows not run. |
 | 120 frames a second | A real strip visibly smoother at 120 than at 60, with no dropped packets | The engine holds 120 with time to spare (0.05 ms of work a frame for the demo lights). **Not run on hardware.** The LEDs set the ceiling: about 110 a second for 300 WS2812 LEDs on one output, 33 for 1,000. |
-| Song energy and sections | On real music, quiet parts read low, and drops are caught within a second or two without false alarms | Passed in unit tests on synthetic songs (steady; breakdown then drop; quiet intro then drop; small volume changes) and on one synthetic song played through the real audio path, where both drops and the breakdown were heard within 2 seconds. **Not tried on real music.** |
+| Song energy and sections | On real music, quiet parts read low, and drops are caught within a second or two without false alarms | Passed in unit tests on synthetic songs (steady; breakdown then drop; quiet intro then drop; small volume changes) and on one synthetic song played through the real audio path, where both drops and the breakdown were heard within 2 seconds. **Not yet measured on real music.** |
+| Tempo and beat on real music | The tempo right most of the time, and beats on the kicks | Measured on 2026-11-17 on fifteen Creative Commons songs by Kevin MacLeod, with `crates/audio/examples/score.rs`: tempo right 77% of the time after the first ten seconds (82% counting half or double), up from 65%; songs with a steady beat mostly 88 to 100%. Beats against librosa's: F-measure about 69%. **Open:** two songs sit on the off-beat, a fast song (155) reads as 103 and ragtime (184) as 104, and a slow piano piece has no beat to find. The songs are kept on the developer's machine only. |
+| Serial strips | A strip on an Arduino or WLED board over USB lights in time, 10 minutes, no stutter | Frames checked against a pseudo-terminal standing in for the board (Adalight header and pixels, 60 a second). **Not run on hardware.** |
+| Screen colours | The lights follow the screen with no visible lag, in the window on Windows and Linux | Checked in Chromium with its stand-in screen: frames arrive about 14 a second and the lights take their colour. **The app window is not checked**: WebView2 (Windows) should offer sharing; WebKitGTK (Linux) may not, and the effect then says to use a browser. |
 
 If the preview is too slow in the Linux window, `darkrgb-cli` (browser) is the fallback today, and Electron on
 Linux the longer-term one.
@@ -70,8 +73,11 @@ Built:
 Left before this stage is done:
 
 - Run the hardware checks above and fix what they find.
-- Tune the effects, the audio levelling, the song-energy tracking and the drop detection against real music
-  and real LEDs. So far they have only met synthetic test songs. `cargo run --release -p darkrgb-audio --example spread` prints how much each audio feature
+- Tune the audio levelling, the song-energy tracking and the drop detection against real music, and the
+  effects against real LEDs. The tempo and the new scenes have met fifteen real songs; the rest has not.
+  Ideas from research on 2026-11-17, not yet tried: a shared gain across bands instead of levelling each,
+  SuperFlux onsets, a beat tracker that keeps a running score of where beats fall (as BTrack does), a
+  small neural beat tracker (BeatNet), and finding bar one. `cargo run --release -p darkrgb-audio --example spread` prints how much each audio feature
   moves, which is the number to watch.
 - Custom light shapes (a drawn line, a ring, a list of points) for virtual and real lights.
 - Turn a virtual light into a real one by pointing it at a device, keeping its place and effects.

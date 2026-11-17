@@ -54,6 +54,7 @@ const TOPICS: Topic[] = [
           "WLED devices on your network appear under \"Add a WLED device\". Press Add. If none appear, type the device's IP address, or scan the network.",
           "sACN and Art-Net pixel controllers: choose \"Add an sACN or Art-Net controller\" and give the address, the first universe and the number of LEDs.",
           "A computer's own lights (keyboards, memory, fans): start the free OpenRGB program on that computer, switch on its SDK server, and choose \"Add a computer's own lights (OpenRGB)\".",
+          "A strip on a USB cable: an Arduino, an ESP or a WLED board running a sketch that takes the Adalight protocol. Choose \"Add a strip on a USB cable (serial)\", pick the port, the number of LEDs and the speed the sketch is set to. Not yet tried on a real strip.",
           "Virtual lights exist only on screen. Choose \"Add a virtual light\", pick a strip or a matrix and its size.",
           "Demo lights are a ready-made set of virtual lights. One switch adds or removes them.",
         ],
@@ -77,6 +78,8 @@ const TOPICS: Topic[] = [
           "A strip snaked back and forth into rows: open it and choose \"It is snaked into a matrix\", then say which corner the first LED is in and which way the LEDs run. A small drawing shows the order.",
           "Turning a matrix says how it hangs in the room. Patterns on it stay level.",
           "Fit brings everything back into view.",
+          "\"Light by light\", under the stage, shows each light as a card with its own picture and the effects playing on it. \"Add an effect\" on a card adds one for that light alone.",
+          "Right-click a light, an effect, a scene or a pad for what can be done with it.",
         ],
       },
       { head: "Groups of lights" },
@@ -114,10 +117,14 @@ const TOPICS: Topic[] = [
       {
         list: [
           "In this show: play, change or delete any scene.",
-          "Add a scene: twenty-five ready-made scenes, looks you have kept from other shows, or a new empty scene.",
+          "Add a scene: sets of six for kinds of music, forty-nine ready-made scenes, looks you have kept from other shows, or a new empty scene.",
           "Find a scene by typing part of its name.",
         ],
       },
+      { head: "Sets for kinds of music" },
+      "In the scene manager, under Add a scene: House and techno, Rock, Hip-hop and R&B, Chill and lounge. Each brings six scenes that go together, two calm, two steady and two big, filed in a set of their own, and starts using that set, so Next and autopilot move between them as the song builds and drops.",
+      { head: "Kinds of scene of your own" },
+      "Besides quiet, in between and big, you can name kinds of your own in Settings, under Live and keys (Chorus, Build-up, Slow). Give a scene its kind from its menu; Next can then go to the next scene of that kind, and a pad in the Live view can do the same.",
       { head: "Sets of scenes" },
       "A set is a group of scenes for one occasion: dinner, a party, Christmas. Make sets in the scene manager and file scenes in them. Choose the set in use there or from the list at the bottom left. The scene buttons, the next and previous keys and autopilot keep to the set in use. A scene filed in \"Every set\" is always offered.",
       { head: "Autopilot" },
@@ -131,6 +138,20 @@ const TOPICS: Topic[] = [
       "An effect is one thing happening on the lights: a spectrum, a pulse on the beat, falling snow. A scene is a stack of them; those higher in the list are drawn over those below.",
       { head: "Adding one" },
       "Press \"Add an effect\". Each tile shows what the effect looks like; point at one, or press its ⓘ, to see it move and read what it does. Sections fold from their headings, and the same button closes the list again.",
+      {
+        list: [
+          "\"Reacts to\" shows only effects that follow the bass, the mids, the highs, the beat, hits or the tune, or none at all.",
+          "The effects from LedFx come first. darkRGB's own first effects are under \"Older effects\" at the end.",
+          "The pin on a tile keeps it at the top under Pinned; right-click a tile to hide it. Hidden effects are listed at the bottom to bring back.",
+        ],
+      },
+      { head: "A few to know" },
+      {
+        list: [
+          "Alternating flash: colours repeating along the lights, A B A B or A B C, each colour's blocks flashing in turn. Size the blocks by how many there are, or by a percentage of the length.",
+          "Screen colours: the colours on your screen, around its edges for a strip behind a monitor, across it, one colour for the room, or the picture on a matrix. Press \"Share the screen\" in its settings and choose the screen or a window. If the app's window cannot share, open darkRGB in a browser on the same computer and share from there.",
+        ],
+      },
       { head: "Pictures that move" },
       "The effect \"Moving picture\" plays a GIF or a piece of video on a matrix. Choose the file in the effect's settings. It can play at its own speed, or one showing to one, two, four or eight beats. Of a video, up to the first minute is kept, without sound. Files you have used are listed there to choose again.",
       { head: "Its settings" },
@@ -177,6 +198,8 @@ const TOPICS: Topic[] = [
       "Reactions to a sound cannot be early. Things timed to the beat can: \"Lights lead the beat by\", in Settings under Sound, runs them a little ahead so they land with the kick. It is off until you set it. If your speakers themselves are late (Bluetooth), use \"Light delay\" instead.",
       { head: "Correcting the beat" },
       "In the Live view: ÷2 and ×2 for half and double time, the arrows to nudge it earlier or later, Tap to tap it in, and Beat 1 on the first beat of a bar. \"Follow the music\" undoes them.",
+      { head: "A new song, and holding the tempo" },
+      "\"New song\" tells darkRGB the song has changed: it forgets the last song's tempo and listens afresh. \"Lock\" holds the tempo where it is, and the arrow beside it locks it to one you type, until you press it again; useful when a song has a long break or a beat the listening gets wrong. Both are in the Live view, beside the beat.",
     ],
   },
   {
@@ -190,8 +213,9 @@ const TOPICS: Topic[] = [
           "Customize sets the pads up: give a pad a key, change what a press does, add a pad for any effect, folder or group, or a ready-made flash, strobe or colour.",
           "Blackout, tap tempo, fire a beat, next and previous scene, and freeze all have pads and keys.",
           "Faders: speed, sound sensitivity, and four more that any slider can follow.",
-          "The view is made of panels. Under Customize, the arrows on a panel move it earlier or later and the eye hides it; hidden panels are listed at the bottom to add back. \"The song right now\" shows the tempo, how big this part of the song is, and the note.",
-          "Pads go in groups of your own: under Customize pick a pad and type a group's name. Pads with the same name sit together under it.",
+          "The view is made of panels. Under Customize, drag a panel by its heading to move it, or a pad onto another pad or group; the eye hides a panel, and hidden panels are listed at the bottom to add back. \"The song right now\" shows the tempo, how big this part of the song is, and the note.",
+          "Click a pad under Customize to set it up; its settings open just below it. Escape closes them.",
+          "Pads go in groups of your own: under Customize pick a pad and type a group's name, or drag it onto a group. Pads with the same name sit together under it.",
           "Colour pads recolour everything that is playing. Pads can be spread over four pages.",
         ],
       },
@@ -208,7 +232,7 @@ const TOPICS: Topic[] = [
       "The Timeline view lays a show out against a song.",
       {
         steps: [
-          "Choose a song. Its outline is drawn and its tempo guessed for a beat grid.",
+          "Choose a song (MP3, WAV, OGG and the like), or drop the file on the Timeline view. Its outline is drawn and its tempo guessed for a beat grid. Play plays the song from this window with the lights.",
           "Click the Scenes lane to say which scene starts where.",
           "Drag in a pad's lane to hold that pad there: a flash, a strobe, a colour.",
           "Or press Record and Play, then perform. What you play is written down to tidy afterwards.",
@@ -241,6 +265,24 @@ const TOPICS: Topic[] = [
           "Click the show's name for your library: open, start, copy, rename and delete shows.",
           "Effects, looks and palettes you keep are there too, to use in any show.",
           "A show can keep hours: lit from one time of day to another.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "credits",
+    title: "Credits",
+    blocks: [
+      "darkRGB is free software under the GNU General Public License, version 3 or later: you may use, study, share and change it.",
+      { head: "LedFx" },
+      "Many of the effects and gradients come from LedFx (GPL-3.0), by Austin Hodges and the LedFx contributors: Energy, Scroll, Wavelength, Power, Rain, Bands, Blocks, Magnitude, Pitch Spectrum, Spectrum, Bar, Multicolor Bar, BPM Strobe, Strobe, Scan, Energy 2, Melt, Marching, Crawler, Block Reflections, Gradient, Fade and Rainbow, and thirteen of its gradients. They were translated from LedFx's Python into darkRGB's Rust and fitted to its sound analysis; each file says so and what was changed. Thank you.",
+      "Zones, transitions between scenes, blur, the light-by-light view and the GIF player were added because LedFx has them.",
+      { head: "Others" },
+      {
+        list: [
+          "WLED, which most of the lights this was written for run.",
+          "OpenRGB, whose published protocol the computer-lights output follows.",
+          "Every library darkRGB is built with: their licences are in THIRD-PARTY-LICENSES.txt, which comes with each download.",
         ],
       },
     ],

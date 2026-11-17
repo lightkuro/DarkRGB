@@ -343,6 +343,21 @@ which groups them in the picker.
 - Effects work with the colours a colour picker shows, as floating point. Gamma and the brightness cap are
   applied per device at the end; colour order and RGBW conversion will go there too.
 
+Most effects since 0.12.0 are LedFx's, translated into Rust in `crates/core/src/ledfx_effects.rs`. They
+draw onto a line of 150 points that is then sampled at each LED's place, as LedFx draws onto a strip and
+resizes. Each effect says what it reacts to (`EffectInfo.reacts`: bass, mids, highs, beat, hits, tune), which
+the picker filters by. Effects retired from the front of the list keep their ids and settings under
+"Older effects", so shows that use them do not change.
+
+### The screen's colours
+
+The "Screen colours" effect reads the newest small picture of the screen, kept in `crates/core/src/screen.rs`
+and forgotten after three seconds. A window shares the screen with `getDisplayMedia`, draws each frame onto a
+canvas 64 pixels across (the browser averages as it shrinks), and sends it as hexadecimal text in a
+`screen_frame` command about fifteen times a second; `screen_stop` forgets it. Nothing is stored or saved
+with the show. The effect eases from picture to picture, and maps a strip around the screen's edges from a
+chosen corner in a chosen direction, across it, as one mean colour, or a matrix onto the picture.
+
 ### Timing and threads
 
 - Audio callback thread: copies samples into a lock-free ring buffer and does nothing else.
@@ -403,7 +418,8 @@ all of it.
   reconnects if the sound server restarts.
 - Analysis (`crates/audio/src/analysis.rs`): mono mix, a 2048-sample windowed FFT every 512 samples at
   48 kHz, 32 mel bands, automatic gain, onset detection by spectral flux, and a tempo and beat tracker
-  (autocorrelation of onset strength, 70 to 190 BPM) that holds its tempo through breakdowns and short
+  (autocorrelation of onset strength, 70 to 190 BPM, each candidate scored with its multiples as a comb and
+  weighed by a prior centred on 125 BPM, 0.6 octaves wide) that holds its tempo through breakdowns and short
   silences. Song sections are measured through a pause of up to four seconds, so the drop after a breath
   is still compared with what came before it.
 - Each band, each group (bass, mids, treble) and the overall level is read between its own recent quiet level
@@ -534,6 +550,21 @@ exactly, preceded by a list of that many LEDs that ends exactly where the count 
 
 It has been tested against a stand-in server written from the same document, not against OpenRGB.
 
+### Serial strips
+
+A device of kind `serial` is a strip on a serial port, driven by a board (Arduino, ESP, a WLED board on
+USB) that takes the Adalight protocol: `A d a`, the LED count less one (high, low), that pair XORed with
+0x55, then three bytes a LED. `address` holds the port's name (`/dev/ttyUSB0`, `COM3`) and `baud` its
+speed, from a fixed list (115200 to 2000000; 0 means 115200, which Adalight sketches and WLED use). The
+colour order can be set, as for sACN.
+
+The output (`crates/output/src/serial.rs`, through the `serialport` crate without its udev feature) gives
+each port a thread of its own that is handed the newest frame, so a slow port shows the latest picture and
+never falls behind; a port that is missing is tried again every two seconds. The UI lists the computer's
+ports through `GET /api/serial-ports`, those on USB first, and fills in a USB one. A port carries at most
+baud / 10 / (6 + 3 × LEDs) frames a second, which the UI shows. Tested against a pseudo-terminal standing in
+for a board, not against a real strip.
+
 ## Engine to UI protocol
 
 Built. One WebSocket per client at `/ws`; the engine also serves the UI over HTTP from the same port (7420).
@@ -660,6 +691,7 @@ with a `media/` folder for songs and images. Shared shows leave the songs out.
 | App window | `tauri` 2, `tauri-plugin-single-instance` | The window loads the engine's own local URL |
 | Local networks | `if-addrs` | For suggesting addresses and scanning |
 | Frame pacing | `spin_sleep` | |
+| Serial ports | `serialport` 4, without udev | Adalight strips |
 
 Planned: `symphonia` (song decoding).
 
