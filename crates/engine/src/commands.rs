@@ -3,7 +3,9 @@
 
 use darkrgb_core::color;
 use darkrgb_core::effects;
-use darkrgb_core::layout::{ColourOrder, Corner, MAX_DEVICE_DELAY_MS, MAX_MILLIAMPS, MAX_PATH_POINTS, MAX_PIXELS};
+use darkrgb_core::layout::{
+    BAUDS, ColourOrder, Corner, MAX_DEVICE_DELAY_MS, MAX_MILLIAMPS, MAX_PATH_POINTS, MAX_PIXELS,
+};
 use darkrgb_core::params::{ParamKind, ParamValue};
 use darkrgb_core::picture::{MAX_SIDE, Picture};
 use darkrgb_core::show::{
@@ -145,7 +147,7 @@ impl PixelProtocol {
         match kind {
             DeviceKind::Sacn => Some(Self::Sacn),
             DeviceKind::Artnet => Some(Self::Artnet),
-            DeviceKind::Wled | DeviceKind::Virtual | DeviceKind::OpenRgb => None,
+            DeviceKind::Wled | DeviceKind::Virtual | DeviceKind::OpenRgb | DeviceKind::Serial => None,
         }
     }
 
@@ -166,6 +168,44 @@ fn universes_fit(kind: DeviceKind, first: u16, pixels: u32) -> Result<(), String
 }
 
 /// A network address someone typed: a host name or an IPv4 address.
+/// The name of a serial port: `/dev/ttyUSB0`, `COM3`.
+fn port_name(text: &str) -> Result<String, String> {
+    let text = text.trim();
+    let plain = text.chars().all(|c| c.is_ascii_alphanumeric() || "/._-:\\".contains(c));
+    if text.is_empty() || text.len() > 128 || !plain {
+        return Err("the port should be named like /dev/ttyUSB0 or COM3".into());
+    }
+    Ok(text.to_string())
+}
+
+/// A serial speed there is a choice of.
+fn baud(baud: u32) -> Result<u32, String> {
+    if BAUDS.contains(&baud) {
+        Ok(baud)
+    } else {
+        Err(format!(
+            "the speed should be one of {}",
+            BAUDS.map(|b| b.to_string()).join(", ")
+        ))
+    }
+}
+
+/// The number of LEDs a new light has, and its columns and rows if a matrix.
+fn shape_size(shape: &VirtualShape) -> Result<(u32, Option<(u32, u32)>), String> {
+    match *shape {
+        VirtualShape::Strip { count } if (1..=MAX_PIXELS).contains(&count) => Ok((count, None)),
+        VirtualShape::Strip { .. } => Err(format!("a strip needs between 1 and {MAX_PIXELS} LEDs")),
+        VirtualShape::Matrix { cols, rows }
+            if cols >= 2 && rows >= 2 && cols.checked_mul(rows).is_some_and(|n| n <= MAX_PIXELS) =>
+        {
+            Ok((cols * rows, Some((cols, rows))))
+        }
+        VirtualShape::Matrix { .. } => Err(format!(
+            "a matrix needs at least 2 by 2 LEDs and at most {MAX_PIXELS} in total"
+        )),
+    }
+}
+
 fn host(text: &str) -> Result<String, String> {
     let text = text.trim();
     let plain = text.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
@@ -351,6 +391,16 @@ pub enum Command {
         universe: u16,
         shape: VirtualShape,
     },
+    /// Adds a strip on a serial port, sent the Adalight protocol.
+    AddSerial {
+        name: String,
+        /// The port's name: `/dev/ttyUSB0`, `COM3`.
+        port: String,
+        /// Bits a second; leave out for 115200.
+        #[serde(default)]
+        baud: Option<u32>,
+        shape: VirtualShape,
+    },
     RemoveDevice {
         id: u32,
     },
@@ -384,6 +434,9 @@ pub enum Command {
         /// Whether dim levels are made up over time.
         #[serde(default)]
         dither: Option<bool>,
+        /// For serial strips only: bits a second.
+        #[serde(default)]
+        baud: Option<u32>,
     },
     UpdateFixture {
         id: u32,
@@ -1552,20 +1605,7 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             if *port == Some(0) {
                 return Err("the port cannot be 0".into());
             }
-            let (pixels, matrix) = match *shape {
-                VirtualShape::Strip { count } if (1..=MAX_PIXELS).contains(&count) => (count, None),
-                VirtualShape::Strip { .. } => return Err(format!("a strip needs between 1 and {MAX_PIXELS} LEDs")),
-                VirtualShape::Matrix { cols, rows }
-                    if cols >= 2 && rows >= 2 && cols.checked_mul(rows).is_some_and(|n| n <= MAX_PIXELS) =>
-                {
-                    (cols * rows, Some((cols, rows)))
-                }
-                VirtualShape::Matrix { .. } => {
-                    return Err(format!(
-                        "a matrix needs at least 2 by 2 LEDs and at most {MAX_PIXELS} in total"
-                    ));
-                }
-            };
+            let (pixels, matrix) = shape_size(shape)?;
             let kind = protocol.kind();
             universes_fit(kind, *universe, pixels)?;
             let port = port.unwrap_or(protocol.port());
@@ -1580,6 +1620,30 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 Device::dmx(kind, &light_name, &address, port, pixels, *universe),
                 matrix,
             );
+            Ok(())
+        }
+
+        Command::AddSerial {
+            name: light_name,
+            port,
+            baud: speed,
+            shape,
+        } => {
+            let light_name = name(light_name, "The name")?;
+            let port = port_name(port)?;
+            let speed = baud(speed.unwrap_or(darkrgb_core::layout::DEFAULT_BAUD))?;
+            if show.devices.len() >= MAX_DEVICES {
+                return Err(format!("a show can have at most {MAX_DEVICES} devices"));
+            }
+            let (pixels, matrix) = shape_size(shape)?;
+            if show
+                .devices
+                .iter()
+                .any(|d| d.kind == DeviceKind::Serial && d.address == port)
+            {
+                return Err(format!("{port} is already in the show"));
+            }
+            show.add_device(Device::serial(&light_name, &port, pixels, speed), matrix);
             Ok(())
         }
 
@@ -1603,23 +1667,50 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             max_milliamps,
             delay_ms,
             dither,
+            baud: speed,
         } => {
             // Validate everything before changing anything.
             let new_name = new_name.as_deref().map(|n| name(n, "The name")).transpose()?;
             let gamma = gamma.map(|g| finite(g, "Gamma")).transpose()?;
             let brightness = brightness.map(|b| finite(b, "Brightness")).transpose()?;
-            let address = address.as_deref().map(host).transpose()?;
+            let speed = speed.map(baud).transpose()?;
+            let serial = show.device(*id).is_some_and(|d| d.kind == DeviceKind::Serial);
+            let address = match address.as_deref() {
+                Some(a) if serial => Some(port_name(a)?),
+                Some(a) => Some(host(a)?),
+                None => None,
+            };
+            if let Some(a) = &address
+                && serial
+                && show
+                    .devices
+                    .iter()
+                    .any(|d| d.id != *id && d.kind == DeviceKind::Serial && d.address == *a)
+            {
+                return Err(format!("{a} is already in the show"));
+            }
             let device = show
                 .devices
                 .iter_mut()
                 .find(|d| d.id == *id)
                 .ok_or("that device no longer exists")?;
             let pixel_controller = PixelProtocol::of(device.kind).is_some();
-            if (address.is_some() || universe.is_some()) && !pixel_controller {
-                return Err("only sACN and Art-Net devices have an address and a universe to change".into());
+            if universe.is_some() && !pixel_controller {
+                return Err("only sACN and Art-Net devices have a universe to change".into());
             }
-            if order.is_some() && !pixel_controller {
-                return Err("only sACN and Art-Net devices have a colour order to set here: WLED has its own".into());
+            if address.is_some() && !pixel_controller && !serial {
+                return Err("only sACN, Art-Net and serial devices have an address to change here".into());
+            }
+            if order.is_some() && !pixel_controller && !serial {
+                return Err(
+                    "only sACN, Art-Net and serial devices have a colour order to set here: WLED has its own".into(),
+                );
+            }
+            if speed.is_some() && !serial {
+                return Err("only serial strips have a speed".into());
+            }
+            if let Some(b) = speed {
+                device.baud = b;
             }
             if let Some(u) = universe {
                 universes_fit(device.kind, *u, device.pixel_count)?;
@@ -3468,6 +3559,7 @@ mod tests {
             max_milliamps: None,
             delay_ms: None,
             dither: None,
+            baud: None,
         };
         apply(&mut show, &change(roof, Some("10.0.0.20"), Some(9))).unwrap();
         assert_eq!(
@@ -4028,6 +4120,7 @@ mod tests {
                 max_milliamps: None,
                 delay_ms: None,
                 dither: None,
+                baud: None,
             },
         );
         assert!(result.is_err());
@@ -4053,6 +4146,7 @@ mod tests {
                 max_milliamps: None,
                 delay_ms: None,
                 dither: None,
+                baud: None,
             },
         )
         .unwrap();
@@ -4098,6 +4192,7 @@ mod tests {
             max_milliamps: None,
             delay_ms: None,
             dither: None,
+            baud: None,
         };
         apply(&mut show, &rename("Desk")).unwrap();
         assert_eq!(show.fixtures[0].name, "Desk");
@@ -5120,7 +5215,7 @@ mod tests {
                     page: r.next() as u8 % 6,
                 },
                 76 => {
-                    if r.next() % 2 == 0 {
+                    if r.flag() {
                         Command::AddPack {
                             name: ["Rock", "Chill and lounge", "Nope"][r.next() as usize % 3].into(),
                         }
@@ -5196,6 +5291,14 @@ mod tests {
                     down: r.flag(),
                 },
                 15 => Command::SetDemo { enabled: r.flag() },
+                55 if r.flag() => Command::AddSerial {
+                    name: r.text(),
+                    port: ["/dev/ttyUSB0", "COM3", "", "bad port!", "/dev/ttyACM1"][r.next() as usize % 5].into(),
+                    baud: r.maybe(|r| [115_200, 921_600, 9600, 0][r.next() as usize % 4]),
+                    shape: VirtualShape::Strip {
+                        count: [0, 1, 60, 100_001][r.next() as usize % 4],
+                    },
+                },
                 55 => Command::AddPixels {
                     name: r.text(),
                     protocol: if r.flag() {
@@ -5263,6 +5366,7 @@ mod tests {
                     max_milliamps: r.maybe(|r| [0, 1, 2500, u32::MAX][r.next() as usize % 4]),
                     delay_ms: r.maybe(|r| [0, 40, 1000, u16::MAX][r.next() as usize % 4]),
                     dither: r.maybe(Awkward::flag),
+                    baud: r.maybe(|r| [115_200, 2_000_000, 9600, 0][r.next() as usize % 4]),
                 },
                 1 => Command::UpdateFixture {
                     id: fixture,
@@ -5610,6 +5714,67 @@ mod tests {
         assert_eq!(show.layers.len(), count, "nothing added when a light is unknown");
         add(&mut show, None).unwrap();
         assert!(show.layers.last().unwrap().targets.is_empty());
+    }
+
+    #[test]
+    fn a_strip_on_a_serial_port_is_added_and_its_port_and_speed_changed() {
+        let mut show = Show::default();
+        let add = |show: &mut Show, port: &str, baud: Option<u32>| {
+            apply(
+                show,
+                &Command::AddSerial {
+                    name: "Desk".into(),
+                    port: port.into(),
+                    baud,
+                    shape: VirtualShape::Strip { count: 60 },
+                },
+            )
+        };
+        add(&mut show, "/dev/ttyUSB0", None).unwrap();
+        let d = show.devices[0].clone();
+        assert_eq!(
+            (d.kind, d.address.as_str(), d.baud(), d.pixel_count),
+            (DeviceKind::Serial, "/dev/ttyUSB0", 115_200, 60)
+        );
+        assert!(add(&mut show, "/dev/ttyUSB0", None).is_err(), "one light to a port");
+        assert!(add(&mut show, "COM3", Some(9600)).is_err(), "only the speeds offered");
+        assert!(add(&mut show, "rm -rf /", None).is_err());
+        add(&mut show, "COM3", Some(921_600)).unwrap();
+        let update = |id, address: Option<&str>, baud: Option<u32>, order: Option<ColourOrder>| Command::UpdateDevice {
+            id,
+            name: None,
+            enabled: None,
+            gamma: None,
+            brightness: None,
+            address: address.map(str::to_string),
+            universe: None,
+            order,
+            max_milliamps: None,
+            delay_ms: None,
+            dither: None,
+            baud,
+        };
+        apply(
+            &mut show,
+            &update(d.id, Some("/dev/ttyACM0"), Some(2_000_000), Some(ColourOrder::Grb)),
+        )
+        .unwrap();
+        let d = show.devices[0].clone();
+        assert_eq!(
+            (d.address.as_str(), d.baud, d.order),
+            ("/dev/ttyACM0", 2_000_000, ColourOrder::Grb)
+        );
+        assert!(
+            apply(&mut show, &update(d.id, Some("COM3"), None, None)).is_err(),
+            "taken by the other"
+        );
+        let mut mended = show.clone();
+        mended.repair();
+        assert_eq!(mended, show);
+        // A WLED device has no speed.
+        let mut wled = show_with_device();
+        let id = wled.devices[0].id;
+        assert!(apply(&mut wled, &update(id, None, Some(115_200), None)).is_err());
     }
 
     #[test]

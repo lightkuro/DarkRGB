@@ -25,6 +25,10 @@ pub enum DeviceKind {
     /// a computer. `universe` is its number in OpenRGB's list.
     #[serde(rename = "openrgb")]
     OpenRgb,
+    /// A strip on a serial port (a USB cable to an Arduino, an ESP or a
+    /// WLED board), sent the Adalight protocol. `address` is the port's
+    /// name and `baud` its speed.
+    Serial,
 }
 
 /// Something that shows pixels: a controller on the network, or a
@@ -79,7 +83,17 @@ pub struct Device {
     /// some of the time, so slow fades near black do not move in jumps.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dither: bool,
+    /// For a serial strip: bits a second. Zero is [`DEFAULT_BAUD`].
+    #[serde(default, skip_serializing_if = "is_zero32")]
+    pub baud: u32,
 }
+
+/// The speeds a serial strip can be sent at. Adalight sketches and WLED
+/// listen at 115200 unless told otherwise.
+pub const BAUDS: [u32; 8] = [
+    115_200, 230_400, 460_800, 500_000, 921_600, 1_000_000, 1_500_000, 2_000_000,
+];
+pub const DEFAULT_BAUD: u32 = 115_200;
 
 fn is_zero(n: &u16) -> bool {
     *n == 0
@@ -174,7 +188,7 @@ impl DeviceKind {
         match self {
             Self::Sacn => Some((1, 63999)),
             Self::Artnet => Some((0, 32767)),
-            Self::Wled | Self::Virtual | Self::OpenRgb => None,
+            Self::Wled | Self::Virtual | Self::OpenRgb | Self::Serial => None,
         }
     }
 
@@ -215,6 +229,7 @@ impl Device {
             max_milliamps: 0,
             delay_ms: 0,
             dither: false,
+            baud: 0,
         }
     }
 
@@ -223,12 +238,18 @@ impl Device {
     pub fn mend_output(&mut self) -> bool {
         let before = (self.order, self.max_milliamps, self.delay_ms);
         // WLED is told red, green, blue and has its own setting for the rest.
-        if !matches!(self.kind, DeviceKind::Sacn | DeviceKind::Artnet) {
+        if !matches!(self.kind, DeviceKind::Sacn | DeviceKind::Artnet | DeviceKind::Serial) {
             self.order = ColourOrder::Rgb;
         }
+        let baud = if self.kind == DeviceKind::Serial && BAUDS.contains(&self.baud) {
+            self.baud
+        } else {
+            0
+        };
+        let baud_changed = std::mem::replace(&mut self.baud, baud) != baud;
         self.max_milliamps = self.max_milliamps.min(MAX_MILLIAMPS);
         self.delay_ms = self.delay_ms.min(MAX_DEVICE_DELAY_MS);
-        before != (self.order, self.max_milliamps, self.delay_ms)
+        baud_changed || before != (self.order, self.max_milliamps, self.delay_ms)
     }
 
     /// Puts the first universe where the protocol allows it. Returns
@@ -262,6 +283,20 @@ impl Device {
             universe: index,
             ..Self::wled(name, address, port, pixel_count)
         }
+    }
+
+    /// A strip on a serial port, at `baud` bits a second.
+    pub fn serial(name: &str, port: &str, pixel_count: u32, baud: u32) -> Self {
+        Self {
+            kind: DeviceKind::Serial,
+            baud,
+            ..Self::wled(name, port, 0, pixel_count)
+        }
+    }
+
+    /// The speed a serial strip is sent at.
+    pub fn baud(&self) -> u32 {
+        if self.baud == 0 { DEFAULT_BAUD } else { self.baud }
     }
 
     /// A light that exists only in the preview.

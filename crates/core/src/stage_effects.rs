@@ -18,7 +18,7 @@ pub(crate) fn follows() -> Vec<EffectDef> {
 }
 
 pub(crate) fn hits_and_beats() -> Vec<EffectDef> {
-    vec![Alternate::def(), Beams::def(), Glitch::def()]
+    vec![Alternate::def(), Repeating::def(), Beams::def(), Glitch::def()]
 }
 
 pub(crate) fn ambient() -> Vec<EffectDef> {
@@ -143,6 +143,175 @@ impl Effect for Alternate {
             (true, false) => waiting.lerp(own, up),
             (false, _) => waiting,
         }
+    }
+}
+
+// ------------------------------------------------------------- Repeating
+
+/// Blocks of colour repeating along the lights, A B C A B C, where all the
+/// blocks of one colour flash together and the colours take turns.
+struct Repeating {
+    colours: [Rgb; 4],
+    count: usize,
+    by_percent: bool,
+    blocks: f32,
+    percent: f32,
+    gap: f32,
+    pace: usize,
+    speed: f32,
+    order: usize,
+    glow: f32,
+    soft: f32,
+    own: f64,
+    turn: i64,
+    within: f32,
+}
+
+impl Repeating {
+    const PACES: [&'static str; 4] = ["Every beat", "Twice a beat", "Every 2 beats", "Own speed"];
+    const PER_BEAT: [f32; 4] = [1.0, 2.0, 0.5, 0.0];
+    const ORDERS: [&'static str; 3] = ["One colour after another", "Back and forth", "All colours, then dark"];
+
+    fn def() -> EffectDef {
+        EffectDef {
+            info: EffectInfo {
+                id: "repeating",
+                name: "Alternating flash",
+                description: "Colours repeating along the lights, A B A B or A B C, each colour's blocks flashing in turn. Set how many blocks, or how long each is.",
+                category: HITS_AND_BEATS,
+                audio: true,
+                flash: FlashUse::Capped,
+                reacts: &[],
+                params: vec![
+                    ParamSpec::color("colour", "First colour", "#ff2030"),
+                    ParamSpec::color("second", "Second colour", "#2050ff"),
+                    ParamSpec::color("third", "Third colour (3 or 4 colours)", "#20ff60"),
+                    ParamSpec::color("fourth", "Fourth colour (4 colours)", "#ffc020"),
+                    ParamSpec::float("colours", "Colours in the pattern", 2.0, 4.0, 2.0),
+                    ParamSpec::choice("by", "Size the blocks by", &["How many", "Percent of the length"]),
+                    ParamSpec::float("blocks", "How many blocks", 2.0, 300.0, 12.0),
+                    ParamSpec::float("percent", "Each block, % of the length", 0.5, 50.0, 8.0),
+                    ParamSpec::choice("pace", "A turn lasts", &Self::PACES),
+                    ParamSpec::float("speed", "Own speed", 0.2, 10.0, 2.0),
+                    ParamSpec::choice("order", "Order", &Self::ORDERS),
+                    ParamSpec::float("glow", "Waiting blocks glow", 0.0, 0.6, 0.0),
+                    ParamSpec::float("gap", "Gap between blocks", 0.0, 0.8, 0.0).advanced(),
+                    ParamSpec::float("soft", "Fade", 0.0, 1.0, 0.0).advanced(),
+                ],
+            },
+            make: || {
+                Box::new(Repeating {
+                    colours: [
+                        Rgb::new(1.0, 0.12, 0.19),
+                        Rgb::new(0.12, 0.31, 1.0),
+                        Rgb::new(0.12, 1.0, 0.38),
+                        Rgb::new(1.0, 0.75, 0.12),
+                    ],
+                    count: 2,
+                    by_percent: false,
+                    blocks: 12.0,
+                    percent: 8.0,
+                    gap: 0.0,
+                    pace: 0,
+                    speed: 2.0,
+                    order: 0,
+                    glow: 0.0,
+                    soft: 0.0,
+                    own: 0.0,
+                    turn: 0,
+                    within: 0.0,
+                })
+            },
+        }
+    }
+
+    /// Turns in one round: each colour once, and for "All colours, then
+    /// dark" one more turn with everything off.
+    fn round(&self) -> i64 {
+        match self.order {
+            1 if self.count > 2 => 2 * self.count as i64 - 2,
+            2 => 2,
+            _ => self.count as i64,
+        }
+    }
+
+    /// Whether blocks of colour `k` are lit on turn `turn`.
+    fn lit(&self, k: usize, turn: i64) -> bool {
+        let t = turn.rem_euclid(self.round());
+        match self.order {
+            2 => t == 0,
+            1 if self.count > 2 => {
+                let n = self.count as i64;
+                let at = if t < n { t } else { 2 * n - 2 - t };
+                at == k as i64
+            }
+            _ => t == k as i64,
+        }
+    }
+}
+
+impl Effect for Repeating {
+    fn configure(&mut self, p: &ParamReader) {
+        self.colours = [
+            p.color("colour"),
+            p.color("second"),
+            p.color("third"),
+            p.color("fourth"),
+        ];
+        self.count = p.float("colours").round().clamp(2.0, 4.0) as usize;
+        self.by_percent = p.choice("by") == 1;
+        self.blocks = p.float("blocks").round().clamp(2.0, 300.0);
+        self.percent = p.float("percent").clamp(0.5, 50.0);
+        self.gap = p.float("gap").clamp(0.0, 0.8);
+        self.pace = p.choice("pace");
+        self.speed = p.float("speed");
+        self.order = p.choice("order");
+        self.glow = p.float("glow").clamp(0.0, 0.6);
+        self.soft = p.float("soft");
+    }
+
+    fn update(&mut self, ctx: &FrameCtx) {
+        // A colour flashes once a round, so the turns may come as fast as
+        // the flash limit times the turns in a round.
+        let most = ctx.flash_cap * self.round() as f32;
+        self.own += (ctx.dt * self.speed.min(most)) as f64;
+        let mut per_beat = Self::PER_BEAT[self.pace.min(3)];
+        let at = if per_beat > 0.0 && ctx.audio.bpm > 0.0 {
+            while per_beat * ctx.audio.bpm / 60.0 > most && per_beat > 1.0 / 16.0 {
+                per_beat /= 2.0;
+            }
+            ctx.beats * per_beat as f64
+        } else {
+            self.own
+        };
+        self.turn = at.floor() as i64;
+        self.within = (at - at.floor()) as f32;
+    }
+
+    fn shade(&self, x: f32, _y: f32, _ctx: &FrameCtx) -> Rgb {
+        let width = if self.by_percent {
+            self.percent / 100.0
+        } else {
+            1.0 / self.blocks
+        };
+        let place = x.clamp(0.0, 1.0) / width;
+        let block = (place.floor() as i64).max(0);
+        if place - place.floor() >= 1.0 - self.gap {
+            return Rgb::BLACK;
+        }
+        let k = block as usize % self.count;
+        let colour = self.colours[k];
+        let waiting = colour.scale(self.glow);
+        if !self.lit(k, self.turn) {
+            return waiting;
+        }
+        let edge = self.soft.clamp(0.0, 1.0) * 0.5;
+        let up = if edge > 0.0 {
+            smoothstep(0.0, edge, self.within) * (1.0 - smoothstep(1.0 - edge, 1.0, self.within))
+        } else {
+            1.0
+        };
+        waiting.lerp(colour, up)
     }
 }
 
@@ -1120,6 +1289,98 @@ mod tests {
             level: 0.6,
             ..AudioFeatures::default()
         }
+    }
+
+    #[test]
+    fn repeating_colours_flash_one_colour_after_another_at_the_density_asked() {
+        let (red, blue, green) = (
+            Rgb::from_hex("#ff2030").unwrap(),
+            Rgb::from_hex("#2050ff").unwrap(),
+            Rgb::from_hex("#20ff60").unwrap(),
+        );
+        // Twelve blocks: the left of block 0 is red, block 1 blue, block 2 red.
+        let mut fx = make("repeating", &with(&[]));
+        let row = |fx: &mut Box<dyn Effect>, t: f64, xs: &[f32]| -> Vec<Rgb> {
+            let c = ctx(t, music(t), true);
+            fx.update(&c);
+            xs.iter().map(|x| fx.shade(*x, 0.5, &c)).collect()
+        };
+        let xs = [0.5 / 12.0, 1.5 / 12.0, 2.5 / 12.0, 11.5 / 12.0];
+        assert_eq!(
+            row(&mut fx, 0.1, &xs),
+            [red, Rgb::BLACK, red, Rgb::BLACK],
+            "the reds flash first"
+        );
+        assert_eq!(
+            row(&mut fx, 0.6, &xs),
+            [Rgb::BLACK, blue, Rgb::BLACK, blue],
+            "then the blues"
+        );
+        assert_eq!(row(&mut fx, 1.1, &xs), [red, Rgb::BLACK, red, Rgb::BLACK]);
+
+        // By percent: blocks a quarter long, three colours in turn.
+        let three = with(&[
+            ("by", ParamValue::Text("Percent of the length".into())),
+            ("percent", ParamValue::Number(25.0)),
+            ("colours", ParamValue::Number(3.0)),
+        ]);
+        let mut fx = make("repeating", &three);
+        let xs = [0.1, 0.35, 0.6, 0.85];
+        assert_eq!(row(&mut fx, 0.1, &xs), [red, Rgb::BLACK, Rgb::BLACK, red]);
+        assert_eq!(row(&mut fx, 0.6, &xs), [Rgb::BLACK, blue, Rgb::BLACK, Rgb::BLACK]);
+        assert_eq!(row(&mut fx, 1.1, &xs), [Rgb::BLACK, Rgb::BLACK, green, Rgb::BLACK]);
+        assert_eq!(
+            row(&mut fx, 1.6, &xs),
+            [red, Rgb::BLACK, Rgb::BLACK, red],
+            "round again"
+        );
+
+        // Back and forth with three: red, blue, green, blue, red...
+        let mut fx = make(
+            "repeating",
+            &with(&[
+                ("colours", ParamValue::Number(3.0)),
+                ("order", ParamValue::Text("Back and forth".into())),
+            ]),
+        );
+        let lit: Vec<Rgb> = [0.1, 0.6, 1.1, 1.6, 2.1]
+            .iter()
+            .map(|t| {
+                let c = ctx(*t, music(*t), true);
+                fx.update(&c);
+                (0..3)
+                    .map(|k| fx.shade((k as f32 + 0.5) / 12.0, 0.5, &c))
+                    .find(|c| brightness(*c) > 0.5)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(lit, [red, blue, green, blue, red]);
+
+        // Waiting blocks can glow; a gap leaves the end of each block dark.
+        let mut fx = make(
+            "repeating",
+            &with(&[("glow", ParamValue::Number(0.25)), ("gap", ParamValue::Number(0.5))]),
+        );
+        let got = row(&mut fx, 0.1, &[1.2 / 12.0, 1.8 / 12.0]);
+        assert_eq!(got[0], blue.scale(0.25));
+        assert_eq!(got[1], Rgb::BLACK);
+
+        // The flash limit holds each colour to its rate: twice a beat at 120
+        // would flash each of two colours twice a second; a cap of one a
+        // second slows the turns.
+        let mut fx = make("repeating", &with(&[("pace", ParamValue::Text("Twice a beat".into()))]));
+        let mut flashes = 0;
+        let mut was = false;
+        for frame in 0..600 {
+            let t = frame as f64 / 60.0;
+            let mut c = ctx(t, music(t), true);
+            c.flash_cap = 1.0;
+            fx.update(&c);
+            let on = brightness(fx.shade(0.5 / 12.0, 0.5, &c)) > 0.5;
+            flashes += u32::from(on && !was);
+            was = on;
+        }
+        assert!(flashes <= 11, "{flashes} flashes in ten seconds");
     }
 
     #[test]

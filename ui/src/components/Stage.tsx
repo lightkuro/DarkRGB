@@ -41,7 +41,7 @@ import {
   useView,
 } from "../engine";
 import { StageRenderer, type View } from "../stageGl";
-import { AddByAddress, AddPixels, AngleField, FoundDevices } from "./DevicePanel";
+import { AddByAddress, AddPixels, AddSerial, AngleField, FoundDevices } from "./DevicePanel";
 import { shaping } from "./ShapeEditor";
 import { KindCards } from "./KindCards";
 import { clock } from "./Settings";
@@ -576,6 +576,7 @@ export function Stage() {
           <FoundDevices />
           <AddByAddress />
           <AddPixels />
+          <AddSerial />
           <div className="or">
             <span>or</span>
           </div>

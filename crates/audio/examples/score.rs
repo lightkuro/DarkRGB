@@ -71,18 +71,8 @@ fn main() {
     let mut sum_tight = 0.0f32;
     let (mut sum_f, mut with_ref) = (0.0f32, 0u32);
     println!(
-        "{:<30} {:>5} {:>6} {:>5} {:>5} {:>6} {:>6} {:>5} {:>4} {:>5}  {}",
-        "song",
-        "bpm",
-        "lock",
-        "acc1",
-        "acc2",
-        "mostly",
-        "beats",
-        "hits",
-        "secs",
-        "coast",
-        "kicks at/tight  bass/mid/high/level (mean, % near full)"
+        "{:<30} {:>5} {:>6} {:>5} {:>5} {:>6} {:>6} {:>5} {:>4} {:>5}  kicks at/tight  bass/mid/high/level (mean, % near full)",
+        "song", "bpm", "lock", "acc1", "acc2", "mostly", "beats", "hits", "secs", "coast",
     );
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
         let parts: Vec<&str> = line.split('\t').collect();

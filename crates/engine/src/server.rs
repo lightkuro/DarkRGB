@@ -92,6 +92,7 @@ fn router(shared: Arc<Shared>, access: Access) -> Router {
         .route("/api/movie/{id}", get(movie_download))
         .route("/api/preview/{effect}", get(effect_preview))
         .route("/api/access", get(access_handler))
+        .route("/api/serial-ports", get(serial_ports_handler))
         .route("/api/pair", post(pair_handler).layer(DefaultBodyLimit::max(1024)))
         .route(
             "/api/import",
@@ -362,6 +363,23 @@ async fn access_handler(
     json_response(StatusCode::OK, json!({ "paired": paired }))
 }
 
+/// The serial ports on this computer, for adding a strip on one.
+async fn serial_ports_handler(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !allowed(&headers, &state.access) || !may_control(&headers, peer, &state.access) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let ports = tokio::task::spawn_blocking(darkrgb_output::serial::ports)
+        .await
+        .unwrap_or_default();
+    let usb: Vec<&String> = ports.iter().filter(|(_, usb)| *usb).map(|(name, _)| name).collect();
+    let names: Vec<&String> = ports.iter().map(|(name, _)| name).collect();
+    json_response(StatusCode::OK, json!({ "ports": names, "usb": usb }))
+}
+
 /// Takes the pairing code typed on another device, and hands that device
 /// the cookie that lets it in.
 async fn pair_handler(
@@ -496,6 +514,7 @@ fn hello() -> String {
             // one that shows strongly, which is its body.
             "effect": l.layers.iter().find(|layer| layer.opacity >= 0.5).or(l.layers.last()).map(|layer| layer.effect),
         })).collect::<Vec<_>>(),
+        "bauds": darkrgb_core::layout::BAUDS,
         "packs": darkrgb_core::looks::PACKS.iter().map(|p| json!({
             "name": p.name,
             "description": p.description,

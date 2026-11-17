@@ -21,6 +21,7 @@ import {
   Search,
   Settings2,
   Trash2,
+  Usb,
   SlidersHorizontal,
   MousePointer2,
   LayoutList,
@@ -78,10 +79,101 @@ function statusOf(device: Device, stats: DeviceStats | undefined): { tone: strin
   if (device.kind === "openrgb") {
     return { tone: "ok", text: `Sending to OpenRGB at ${device.address}, its device ${(device.universe ?? 0) + 1}` };
   }
+  if (device.kind === "serial") {
+    return { tone: "ok", text: `Sending to ${device.address} at ${baudOf(device).toLocaleString()} baud` };
+  }
   return { tone: "ok", text: `Sending to ${device.address}` };
 }
 
 const PROTOCOLS = { sacn: "sACN", artnet: "Art-Net" } as const;
+
+const DEFAULT_BAUD = 115200;
+const BAUDS = [115200, 230400, 460800, 500000, 921600, 1000000, 1500000, 2000000];
+const baudOf = (device: Device) => (device.baud ? device.baud : DEFAULT_BAUD);
+
+/** The most frames a second a serial port carries for this many LEDs: ten bits a byte. */
+function serialRate(baud: number, leds: number): number {
+  return Math.floor(baud / 10 / (6 + 3 * leds));
+}
+
+/** The serial ports this computer has, asked of the engine. */
+function useSerialPorts(open: boolean): [string[], () => void, string[]] {
+  const [ports, setPorts] = useState<string[]>([]);
+  const [usb, setUsb] = useState<string[]>([]);
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    fetch("/api/serial-ports")
+      .then((r) => (r.ok ? r.json() : { ports: [] }))
+      .then((body: { ports?: string[]; usb?: string[] }) => {
+        if (!live) return;
+        setPorts(body.ports ?? []);
+        setUsb(body.usb ?? []);
+      })
+      .catch(() => live && setPorts([]));
+    return () => {
+      live = false;
+    };
+  }, [open, asked]);
+  return [ports, () => setAsked((n) => n + 1), usb];
+}
+
+/** Which port a serial strip is on, and how fast it is sent to. */
+function SerialPort({ device }: { device: Device }) {
+  const [port, setPort] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [ports] = useSerialPorts(true);
+  const change = async (update: { address?: string; baud?: number }) => {
+    const result = await engine.request({ type: "update_device", id: device.id, ...update });
+    setError(result.ok ? null : (result.error ?? "Could not change that."));
+  };
+  const commit = () => {
+    if (port !== null && port.trim() !== "" && port.trim() !== device.address) void change({ address: port.trim() });
+    setPort(null);
+  };
+  const baud = baudOf(device);
+  return (
+    <>
+      <label className="field inline">
+        <span>Port</span>
+        <input
+          type="text"
+          className="address"
+          aria-label="Serial port"
+          list={`ports-${device.id}`}
+          value={port ?? device.address}
+          onChange={(e) => setPort(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+        />
+        <datalist id={`ports-${device.id}`}>
+          {ports.map((p) => (
+            <option key={p} value={p} />
+          ))}
+        </datalist>
+      </label>
+      <label className="field inline">
+        <span>Speed</span>
+        <select aria-label="Speed" value={baud} onChange={(e) => void change({ baud: Number(e.target.value) })}>
+          {BAUDS.map((b) => (
+            <option key={b} value={b}>
+              {b.toLocaleString()} baud
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="hint">
+        At this speed {device.pixel_count} LEDs take at most {serialRate(baud, device.pixel_count)} frames a second.
+        The board's sketch must listen at the same speed.
+      </p>
+      {error && <p className="callout error">{error}</p>}
+    </>
+  );
+}
 
 /** "universe 1" or "universes 1 to 3". */
 function universesText(device: Device): string {
@@ -916,6 +1008,7 @@ function DeviceRow({
             </label>
           )}
           {(device.kind === "sacn" || device.kind === "artnet") && <PixelAddress device={device} />}
+          {device.kind === "serial" && <SerialPort device={device} />}
           {(virtual || full) && <ConnectHardware device={device} />}
           {!virtual && (
             <>
@@ -941,7 +1034,7 @@ function DeviceRow({
                     Gamma makes dim colours look right on LEDs. If colours look washed out, raise it; if dark
                     shades vanish, lower it.
                   </p>
-                  {(device.kind === "sacn" || device.kind === "artnet") && (
+                  {(device.kind === "sacn" || device.kind === "artnet" || device.kind === "serial") && (
                     <label className="field inline">
                       <span>Colour order</span>
                       <select
@@ -991,6 +1084,8 @@ function DeviceRow({
                 ? `${PROTOCOLS[device.kind]} · ${universesText(device)}`
                 : device.kind === "openrgb"
                   ? `OpenRGB · device ${(device.universe ?? 0) + 1}`
+                  : device.kind === "serial"
+                  ? `Serial · Adalight · ${baudOf(device).toLocaleString()} baud`
                   : device.version
                   ? `WLED ${device.version}`
                   : ""}
@@ -1288,6 +1383,125 @@ function AddOpenRgb() {
           </div>
         </form>
       )}
+    </div>
+  );
+}
+
+/**
+ * A strip on a serial port: an Arduino, an ESP or a WLED board on a USB
+ * cable, running a sketch that takes the Adalight protocol.
+ */
+export function AddSerial() {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [port, setPort] = useState("");
+  const [baud, setBaud] = useState(DEFAULT_BAUD);
+  const [count, setCount] = useState("60");
+  const [error, setError] = useState<string | null>(null);
+  const [ports, again, usb] = useSerialPorts(open);
+  // A board on USB is filled in; a port built into the computer rarely
+  // has a strip on it, so it is offered but not chosen.
+  useEffect(() => {
+    if (port === "" && usb.length > 0) setPort(usb[0] ?? "");
+  }, [usb, port]);
+  const opener = (
+    <button type="button" className="text-button connect-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <Usb size={13} /> Add a strip on a USB cable (serial)
+      <ChevronRight size={13} className="chevron" aria-hidden />
+    </button>
+  );
+  if (!open) return opener;
+  const valid = port.trim() !== "" && /^\d{1,6}$/.test(count) && Number(count) > 0;
+  const add = async () => {
+    addingLights();
+    const result = await engine.request({
+      type: "add_serial",
+      name: name.trim() || "Serial strip",
+      port: port.trim(),
+      baud,
+      shape: { type: "strip", count: Number(count) },
+    });
+    if (result.ok) {
+      setOpen(false);
+      setName("");
+      setError(null);
+    } else {
+      setError(result.error ?? "Could not add that strip.");
+    }
+  };
+  return (
+    <div className="connect open">
+      {opener}
+      <form
+        className="virtual-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (valid) void add();
+        }}
+      >
+        <p className="hint">
+          For a strip driven by an Arduino, an ESP or a WLED board plugged in by USB, running a sketch that takes the
+          Adalight protocol (WLED does, on its USB port). Not yet tried on a real strip: tell us how it goes.
+        </p>
+        <input type="text" maxLength={80} placeholder="Name (optional)" aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} />
+        <label className="field inline">
+          <span>Port</span>
+          <span className="pair">
+            <input
+              type="text"
+              maxLength={128}
+              list="serial-ports"
+              placeholder="/dev/ttyUSB0 or COM3"
+              aria-label="Serial port"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
+            />
+            <button type="button" className="text-button" onClick={again} title="Look for ports again">
+              Look again
+            </button>
+          </span>
+          <datalist id="serial-ports">
+            {ports.map((p) => (
+              <option key={p} value={p} />
+            ))}
+          </datalist>
+        </label>
+        {usb.length === 0 && (
+          <p className="hint">
+            No board found on USB. Plug it in, then choose Look again, or type the port's name
+            {ports.length > 0 ? ` (this computer has ${ports.join(", ")})` : ""}.
+          </p>
+        )}
+        <label className="field inline">
+          <span>Number of LEDs</span>
+          <input className="number" type="text" inputMode="numeric" aria-label="Number of LEDs" value={count} onChange={(e) => setCount(e.target.value)} />
+        </label>
+        <label className="field inline">
+          <span>Speed</span>
+          <select aria-label="Speed" value={baud} onChange={(e) => setBaud(Number(e.target.value))}>
+            {BAUDS.map((b) => (
+              <option key={b} value={b}>
+                {b.toLocaleString()} baud
+              </option>
+            ))}
+          </select>
+        </label>
+        {valid && (
+          <p className="hint">
+            At most {serialRate(baud, Number(count))} frames a second at this speed. Use the speed the sketch is set to.
+          </p>
+        )}
+        {error && <p className="callout error">{error}</p>}
+        <div className="form-actions">
+          <button type="button" className="text-button" onClick={() => setOpen(false)}>
+            Cancel
+          </button>
+          <button type="submit" className="button small" disabled={!valid}>
+            Add
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -1717,6 +1931,7 @@ export function DevicePanel() {
           </h2>
           <AddPixels />
           <AddOpenRgb />
+          <AddSerial />
           <h2>Without hardware</h2>
           <DemoSwitch />
           <AddVirtual />

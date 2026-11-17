@@ -85,6 +85,8 @@ export interface Hello {
   frame_rates: number[];
   /** Every starter scene there is. */
   looks: { name: string; description: string; mood?: Mood; effect?: string }[];
+  /** The speeds a serial strip can be sent at. */
+  bauds?: number[];
   /** Sets of six scenes for kinds of music: two calm, two steady, two big. */
   packs?: { name: string; description: string; looks: string[] }[];
   /** The kinds of show, and the starter scenes each gets. */
@@ -98,7 +100,7 @@ export interface Device {
   name: string;
   /** A virtual light exists only in the preview. sACN and Art-Net are
    *  pixel controllers that are sent universes of 170 LEDs. */
-  kind: "wled" | "virtual" | "sacn" | "artnet" | "openrgb";
+  kind: "wled" | "virtual" | "sacn" | "artnet" | "openrgb" | "serial";
   /** One of the built-in demo lights. */
   demo: boolean;
   address: string;
@@ -119,6 +121,8 @@ export interface Device {
   delay_ms?: number;
   /** Dim levels between two steps are made up over time. */
   dither?: boolean;
+  /** For a serial strip: bits a second. 0 or absent: 115200. */
+  baud?: number;
 }
 
 export type ColourOrder = "rgb" | "grb" | "brg" | "rbg" | "gbr" | "bgr";
@@ -707,6 +711,14 @@ export type Command =
       max_milliamps?: number;
       delay_ms?: number;
       dither?: boolean;
+      baud?: number;
+    }
+  | {
+      type: "add_serial";
+      name: string;
+      port: string;
+      baud?: number;
+      shape: { type: "strip"; count: number } | { type: "matrix"; cols: number; rows: number };
     }
   | {
       type: "add_pixels";

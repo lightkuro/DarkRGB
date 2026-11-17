@@ -831,9 +831,7 @@ impl Effect for Rain {
         }
         // Each drop's ripple, LedFx's own, centred where it landed.
         let width = RIPPLE[0].len();
-        for px in &mut self.shown {
-            *px = Rgb::BLACK;
-        }
+        self.shown.fill(Rgb::BLACK);
         for drop in &self.drops {
             let row = &RIPPLE[(drop.frame as usize).min(RIPPLE.len() - 1)];
             for (k, w) in row.iter().enumerate() {
@@ -920,9 +918,7 @@ impl Effect for Bands {
 
     fn update(&mut self, ctx: &FrameCtx) {
         melbank(&ctx.audio, &mut self.bands);
-        for px in &mut self.shown {
-            *px = Rgb::BLACK;
-        }
+        self.shown.fill(Rgb::BLACK);
         for (i, (start, end)) in split(N, self.count).enumerate() {
             let width = end - start;
             let level = max(&self.bands[start..end]);
@@ -1755,9 +1751,7 @@ impl Effect for Scan {
         if self.intensity {
             colour = colour.scale(self.power.min(1.0));
         }
-        for px in &mut self.shown {
-            *px = Rgb::BLACK;
-        }
+        self.shown.fill(Rgb::BLACK);
         for k in 0..self.count {
             let start = block * k as f32 + self.at;
             for i in start as usize..(start + width) as usize {
@@ -2492,25 +2486,25 @@ mod tests {
         ] {
             let mut quiet_fx = make(id, &Params::new());
             let mut loud_fx = make(id, &Params::new());
-            let picture = |fx: &Box<dyn Effect>, c: &FrameCtx| -> Vec<Rgb> {
+            let picture = |fx: &dyn Effect, c: &FrameCtx| -> Vec<Rgb> {
                 (0..40).map(|i| fx.shade(i as f32 / 39.0, 0.5, c)).collect()
             };
             let quiet = ctx(10.0, AudioFeatures::default());
             run(&mut quiet_fx, &quiet, 1);
-            let first = picture(&quiet_fx, &quiet);
+            let first = picture(quiet_fx.as_ref(), &quiet);
             assert!(
                 first.iter().any(|p| brightness(*p) > 0.1),
                 "{id} shows something in silence"
             );
             let later = ctx(13.0, AudioFeatures::default());
             run(&mut quiet_fx, &later, 180);
-            assert_ne!(picture(&quiet_fx, &later), first, "{id} moves");
+            assert_ne!(picture(quiet_fx.as_ref(), &later), first, "{id} moves");
             let loud = ctx(13.0, only(true, 1.0));
             run(&mut loud_fx, &ctx(10.0, AudioFeatures::default()), 1);
             run(&mut loud_fx, &loud, 180);
             assert_ne!(
-                picture(&loud_fx, &loud),
-                picture(&quiet_fx, &later),
+                picture(loud_fx.as_ref(), &loud),
+                picture(quiet_fx.as_ref(), &later),
                 "{id} hears the lows"
             );
         }

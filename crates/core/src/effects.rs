@@ -84,8 +84,8 @@ fn reacts_of(id: &str) -> &'static [&'static str] {
         | "lf_rain" | "lf_bands" | "lf_blocks" | "lf_spectrum" => BANDS3,
         "lf_power" => &["bass", "mids", "highs", "hits"],
         "lf_pitch_spectrum" => &["tune", "bass", "mids", "highs"],
-        "beat_pulse" | "sweep" | "chase" | "ripple" | "tiles" | "steps" | "lightning" | "alternate" | "beams"
-        | "strobe" | "scanner" | "marquee" | "lf_bar" | "lf_multibar" | "lf_bpm_strobe" => &["beat"],
+        "beat_pulse" | "sweep" | "chase" | "ripple" | "tiles" | "steps" | "lightning" | "alternate" | "repeating"
+        | "beams" | "strobe" | "scanner" | "marquee" | "lf_bar" | "lf_multibar" | "lf_bpm_strobe" => &["beat"],
         "lf_strobe" => &["beat", "hits"],
         "fire"
         | "rings"

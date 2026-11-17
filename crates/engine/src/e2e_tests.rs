@@ -223,6 +223,7 @@ fn blackout_and_disabling_a_device_stop_the_light() {
             max_milliamps: None,
             delay_ms: None,
             dither: None,
+            baud: None,
         })
         .unwrap();
     std::thread::sleep(Duration::from_millis(100));

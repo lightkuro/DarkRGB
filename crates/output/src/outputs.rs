@@ -13,6 +13,7 @@ use serde::Serialize;
 use crate::ddp;
 use crate::dmx::{self, artnet, sacn};
 use crate::openrgb;
+use crate::serial;
 
 /// Running totals for one device, shown in the UI.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -60,6 +61,8 @@ pub struct Outputs {
     spare: Vec<Vec<u8>>,
     /// Device id to its connection to an OpenRGB server.
     links: HashMap<u32, openrgb::Link>,
+    /// Device id to its open serial port.
+    ports: HashMap<u32, serial::Link>,
 }
 
 /// Sixteen bytes that differ each time the program starts.
@@ -90,6 +93,7 @@ impl Outputs {
             held: HashMap::new(),
             spare: Vec::new(),
             links: HashMap::new(),
+            ports: HashMap::new(),
         })
     }
 
@@ -107,6 +111,15 @@ impl Outputs {
                 .iter()
                 .any(|d| d.id == *id && d.kind == DeviceKind::OpenRgb && d.enabled)
         });
+        self.ports.retain(|id, link| {
+            show.devices.iter().any(|d| {
+                d.id == *id
+                    && d.kind == DeviceKind::Serial
+                    && d.enabled
+                    && d.address == link.port
+                    && d.baud() == link.baud
+            })
+        });
         self.held
             .retain(|id, _| show.devices.iter().any(|d| d.id == *id && d.delay_ms > 0));
         for device in &show.devices {
@@ -121,6 +134,13 @@ impl Outputs {
                 .get(&device.id)
                 .is_some_and(|(addr, port, _)| *addr == device.address && *port == device.port);
             if current {
+                continue;
+            }
+            // A serial port has no address on the network to look up.
+            if device.kind == DeviceKind::Serial {
+                let nowhere = SocketAddr::new(IpAddr::from([0, 0, 0, 0]), 0);
+                self.targets
+                    .insert(device.id, (device.address.clone(), device.port, Target::Ready(nowhere)));
                 continue;
             }
             let target = match device.address.parse::<IpAddr>() {
@@ -220,6 +240,16 @@ impl Outputs {
     fn transmit(&mut self, device: &Device, addr: SocketAddr, bytes: &[u8]) -> std::io::Result<()> {
         match device.kind {
             DeviceKind::Wled | DeviceKind::Virtual => self.sender.send_frame(addr, bytes).map(|_| ()),
+            DeviceKind::Serial => {
+                // A port of its own for each device, kept open on a
+                // thread of its own; opened again if its name or speed
+                // has changed (see `sync`).
+                self.ports
+                    .entry(device.id)
+                    .or_insert_with(|| serial::Link::new(&device.address, device.baud()))
+                    .send(bytes);
+                Ok(())
+            }
             DeviceKind::OpenRgb => {
                 // A connection of its own for each device, kept up on a
                 // thread of its own; made again if the address or the
@@ -296,9 +326,9 @@ impl Outputs {
                 }
             }
         }
-        // Frames for OpenRGB are sent from threads of their own: give
+        // Frames for OpenRGB and serial ports are sent from threads of their own: give
         // them a moment to go before the program ends.
-        if !self.links.is_empty() {
+        if !self.links.is_empty() || !self.ports.is_empty() {
             thread::sleep(Duration::from_millis(150));
         }
         self.buf = black;
