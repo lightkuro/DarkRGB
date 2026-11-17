@@ -2550,7 +2550,11 @@ mod tests {
         assert_eq!(show.scene_step(Some(b), -1, calm), Some(a));
         assert_eq!(show.scene_step(None, 1, calm), Some(a));
         assert_eq!(show.scene_step(None, -1, calm), Some(c));
-        assert_eq!(show.scene_step(Some(b), 1, |s| s.mood == Mood::Big), Some(b), "the only one");
+        assert_eq!(
+            show.scene_step(Some(b), 1, |s| s.mood == Mood::Big),
+            Some(b),
+            "the only one"
+        );
         assert_eq!(show.scene_step(Some(a), 1, |s| s.mood == Mood::Steady), None);
 
         // What suits which part of a song. The parts in between take

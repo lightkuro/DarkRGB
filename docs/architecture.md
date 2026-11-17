@@ -1,6 +1,6 @@
 # Architecture
 
-Decided on 2026-11-10, and kept up to date since; this describes version 0.10.0. The engine, the app window,
+Decided on 2026-11-10, and kept up to date since; this describes version 0.11.0. The engine, the app window,
 the UI, live mode, MIDI, the timeline and the device simulator exist. Sections say which parts are built. Items marked **(to verify)** are
 assumptions that the checks in [roadmap.md](roadmap.md) test.
 
@@ -356,6 +356,36 @@ which groups them in the picker.
 - Clock: a monotonic clock in audio-reactive and live modes; the audio playback position in timeline mode, so
   lights stay locked to the song.
 
+### Moving pictures
+
+A GIF or a piece of video is kept as a "movie": frames of at most 64 dots a side, each with the time it
+stays up (`crates/core/src/movie.rs`). A movie is far too big to live in a setting the way a still
+picture does, so a setting holds its id (a hash of its frames) and the frames live in a store shared by
+every effect, which the engine fills from files in a `movies` folder beside the songs. A show that names a
+movie this computer does not have plays a dim stand-in until it is chosen again.
+
+The engine decodes GIFs (`crates/engine/src/media.rs`, the `gif` crate). It does not decode video: the
+page already can, so the UI plays the file picture by picture, shrinks each to suit the largest matrix
+and posts the frames to `/api/movie?kind=frames`. No video codecs are built in, and whatever the browser
+or the app's webview plays can be used.
+
+### What an effect is told
+
+Besides the place being asked about, the time and the sound, an effect is told the shape of the lights it
+is on, whether they are a line, the flash limit it must keep to, and, since 0.11.0, which of its lights
+the place is on and how many there are (`FrameCtx.light`, `lights`). The sound carries the note that
+stands out (`pitch`, a place in the octave, and `tonal`, how clearly it is heard), found by filing every
+clear peak of the spectrum between 100 Hz and 2 kHz under the note it is nearest and taking the note with
+the most.
+
+### Changing scene
+
+A change of scene keeps the scene being left playing on a renderer of its own while the new one starts,
+and `Renderer::change_from` lets the old show through by one of seven rules (`Transition`): the same mix
+everywhere, or by each LED's place on the stage for the wipe and the iris, or LED by LED for the dissolve.
+Blur is not done on the finished picture but in the pattern: a softened effect is asked about several
+places around each one and the answers are mixed, so it works the same on a strip, a matrix or a stage.
+
 ## Audio with zero setup
 
 | OS | Method | Status |
@@ -487,6 +517,22 @@ shows a notice, and the count is in the stats.
 
 DMX fixtures (pars, moving heads) over Art-Net or sACN, Enttec DMX USB Pro, Philips Hue Entertainment, OpenRGB,
 Hyperion. None is needed for the first four milestones.
+
+### OpenRGB
+
+A device of kind `openrgb` is one of the devices of an OpenRGB server, which talks to the hardware of a
+computer (keyboards, memory, fans, motherboard headers) and takes colours over TCP, port 6742. The device's
+`universe` field holds its number in OpenRGB's list. `AddOpenRgb` asks the server what it has and adds
+each device with LEDs as a strip.
+
+The output (`crates/output/src/openrgb.rs`) is written from OpenRGB's SDK document, protocol version 0,
+which every server still speaks. Sending must never hold up a frame and TCP can, so each device has a
+thread of its own: it is handed the newest frame, sends at most forty a second, and reconnects by itself.
+A device's description differs between versions of OpenRGB in the middle (modes, zones), so only its two
+ends are read: the name at the start, and at the end a count of colours that closes the description
+exactly, preceded by a list of that many LEDs that ends exactly where the count begins.
+
+It has been tested against a stand-in server written from the same document, not against OpenRGB.
 
 ## Engine to UI protocol
 

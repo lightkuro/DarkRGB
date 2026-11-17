@@ -1,6 +1,6 @@
 # Roadmap
 
-Written on 2026-11-10, last updated 2026-11-16 for version 0.10.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
+Written on 2026-11-10, last updated 2026-11-17 for version 0.11.0. Order: audio-reactive first, then live control, then the timeline, then yard-scale
 features. The design targets room/desk setups (a few WLED devices, up to a few thousand pixels) and house/yard
 shows (many controllers, 5k to 50k pixels). See [architecture.md](architecture.md) for the design.
 
@@ -230,6 +230,15 @@ aside by the owner for now.
 end, blocks and slide. What that comparison leaves open, most useful first: more kinds of transition
 between scenes, a blur for any effect, animated GIFs on matrices, pitch, more kinds of device, and
 integrations such as Home Assistant.
+
+0.11.0 took up that list at the owner's word ("lets try to get all the features we are missing"): seven
+kinds of transition, blur, GIFs and video, the note in the music, nine effects, and OpenRGB as a kind of
+device. With it came the owner's own asks for playing live: a Next button that can keep to one kind of
+scene or follow the song, a Discard for changes made out of sight, number keys by place, zones by percent,
+and a Live view in panels that can be arranged. What is still open from the comparison, with the reason
+for each, is in the last column of the table in [research.md](research.md): the smart-home lamps (Nanoleaf,
+LIFX, Hue, Govee), serial strips, Home Assistant and MQTT (put off by the owner), screen colours, and
+other platforms. OpenRGB has only met a stand-in written from its protocol document.
 
 It also advised: stop adding features until a real device and real music have been through the loop; call
 autopilot's "bars" what they are (four beats from an arbitrary start) until there is a downbeat; reconsider

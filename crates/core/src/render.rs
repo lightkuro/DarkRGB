@@ -1536,7 +1536,9 @@ mod tests {
             );
         }
         let lit = |show: &Show| -> Vec<bool> { render(show).1.iter().map(|c| c.r > 0.5).collect() };
-        let expected = [true, true, true, true, false, false, false, false, true, true, true, true];
+        let expected = [
+            true, true, true, true, false, false, false, false, true, true, true, true,
+        ];
         // However the pattern is laid: across the stage, on each light,
         // or end to end.
         assert_eq!(lit(&show), expected);
@@ -1739,9 +1741,17 @@ mod tests {
         // A fade is the same mix everywhere.
         assert!(half(Transition::Fade).iter().all(|px| (px.g - 0.5).abs() < 1e-5));
         // Brightening never dips below either scene.
-        assert!(half(Transition::Brighten).iter().all(|px| px.r >= 0.999 && px.g >= 0.999));
+        assert!(
+            half(Transition::Brighten)
+                .iter()
+                .all(|px| px.r >= 0.999 && px.g >= 0.999)
+        );
         // Through black is dark half way, through white is white.
-        assert!(half(Transition::ThroughBlack).iter().all(|px| px.r < 1e-5 && px.g < 1e-5));
+        assert!(
+            half(Transition::ThroughBlack)
+                .iter()
+                .all(|px| px.r < 1e-5 && px.g < 1e-5)
+        );
         assert_eq!(half(Transition::ThroughWhite), [Rgb::WHITE; 10]);
         // A wipe has reached the left end and not the right.
         let wipe = half(Transition::Wipe);

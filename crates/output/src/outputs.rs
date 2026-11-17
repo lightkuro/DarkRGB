@@ -102,8 +102,11 @@ impl Outputs {
         self.targets.retain(|id, _| show.devices.iter().any(|d| d.id == *id));
         self.stats.retain(|id, _| show.devices.iter().any(|d| d.id == *id));
         self.sequences.retain(|id, _| show.devices.iter().any(|d| d.id == *id));
-        self.links
-            .retain(|id, _| show.devices.iter().any(|d| d.id == *id && d.kind == DeviceKind::OpenRgb && d.enabled));
+        self.links.retain(|id, _| {
+            show.devices
+                .iter()
+                .any(|d| d.id == *id && d.kind == DeviceKind::OpenRgb && d.enabled)
+        });
         self.held
             .retain(|id, _| show.devices.iter().any(|d| d.id == *id && d.delay_ms > 0));
         for device in &show.devices {

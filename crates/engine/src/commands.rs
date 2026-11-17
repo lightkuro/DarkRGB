@@ -209,11 +209,7 @@ fn checked_clip(show: &Show, start: f32, length: f32, what: ClipKind) -> Result<
             // to do once, not things to hold.
             if matches!(
                 pad.action,
-                Action::Scene { .. }
-                    | Action::TapTempo
-                    | Action::NextScene
-                    | Action::PrevScene
-                    | Action::NextOf { .. }
+                Action::Scene { .. } | Action::TapTempo | Action::NextScene | Action::PrevScene | Action::NextOf { .. }
             ) {
                 return Err("that pad cannot be put on the timeline".into());
             }
@@ -2491,7 +2487,10 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
                 }
             }
             // The usual ones in the usual order are kept as "not arranged".
-            let usual = seen.iter().map(String::as_str).eq(LIVE_PANELS[..DEFAULT_LIVE_PANELS].iter().copied());
+            let usual = seen
+                .iter()
+                .map(String::as_str)
+                .eq(LIVE_PANELS[..DEFAULT_LIVE_PANELS].iter().copied());
             show.live.panels = if usual { Vec::new() } else { seen };
             Ok(())
         }
@@ -4990,7 +4989,9 @@ mod tests {
                 },
                 75 => Command::ArrangeLive {
                     panels: (0..r.next() % 5)
-                        .map(|_| ["scenes", "pads", "song", "faders", "nope", "next"][r.next() as usize % 6].to_string())
+                        .map(|_| {
+                            ["scenes", "pads", "song", "faders", "nope", "next"][r.next() as usize % 6].to_string()
+                        })
                         .collect(),
                 },
                 54 => Command::SetSchedule {

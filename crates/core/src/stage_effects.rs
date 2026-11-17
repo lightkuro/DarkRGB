@@ -232,7 +232,11 @@ impl Effect for Beams {
         let swing = (sweeps.fract() as f32 * std::f32::consts::TAU).sin();
         let n = self.count as usize;
         for i in 0..n {
-            let place = if n > 1 { i as f32 / (n - 1) as f32 * 2.0 - 1.0 } else { 0.0 };
+            let place = if n > 1 {
+                i as f32 / (n - 1) as f32 * 2.0 - 1.0
+            } else {
+                0.0
+            };
             self.aim[i] = match self.movement {
                 0 => swing,
                 1 => {
@@ -330,7 +334,11 @@ impl Notes {
                 audio: true,
                 flash: FlashUse::None,
                 params: vec![
-                    ParamSpec::choice("mode", "Shown as", &["A wash", "A trail from the middle", "A trail from one end"]),
+                    ParamSpec::choice(
+                        "mode",
+                        "Shown as",
+                        &["A wash", "A trail from the middle", "A trail from one end"],
+                    ),
                     ParamSpec::float("speed", "Trail speed", 0.1, 3.0, 0.8),
                     ParamSpec::float("calm", "Smoothness", 0.0, 1.0, 0.3),
                     ParamSpec::bool("loud", "Brightness follows the sound", true),
@@ -380,7 +388,11 @@ impl Effect for Notes {
         self.pure += (audio.tonal - self.pure) * rate.max(0.05);
         let level = if self.loud { audio.level } else { 1.0 };
         let floor = self.floor.clamp(0.0, 1.0);
-        let value = if audio.active || !self.loud { floor + (1.0 - floor) * level } else { 0.0 };
+        let value = if audio.active || !self.loud {
+            floor + (1.0 - floor) * level
+        } else {
+            0.0
+        };
         self.now = Rgb::from_hsv(
             self.hue + self.shift / 360.0,
             0.3 + 0.7 * self.pure.clamp(0.0, 1.0),
@@ -565,7 +577,11 @@ impl Effect for Glitch {
         // Bars across the picture; each is torn into a few pieces, and
         // only some pieces light. A strip is one bar torn into more.
         let bar = if ctx.flat { 0 } else { (y * 9.0) as u32 };
-        let pieces = if ctx.flat { 14.0 } else { 3.0 + (hash2(bar, self.seed) * 5.0).floor() };
+        let pieces = if ctx.flat {
+            14.0
+        } else {
+            3.0 + (hash2(bar, self.seed) * 5.0).floor()
+        };
         let slip = hash2(bar ^ 0x9E37, self.seed);
         let piece = ((x + slip) * pieces) as u32;
         let dice = hash2(bar * 31 + piece, self.seed ^ 0x5bd1);
@@ -668,7 +684,11 @@ impl Effect for Film {
         } else {
             (self.played / length).rem_euclid(1.0)
         };
-        let through = if self.bounce { 1.0 - (2.0 * through - 1.0).abs() } else { through };
+        let through = if self.bounce {
+            1.0 - (2.0 * through - 1.0).abs()
+        } else {
+            through
+        };
         self.frame = movie.frame_at(through.min(0.999_99) * length);
     }
 
@@ -1117,7 +1137,11 @@ mod tests {
         assert_eq!(at(&mut fx, 0.1, 0), (red, red));
         assert_eq!(at(&mut fx, 0.1, 1), (Rgb::BLACK, Rgb::BLACK));
         assert_eq!(at(&mut fx, 0.6, 1), (blue, blue));
-        assert_eq!(at(&mut fx, 0.6, 2), (Rgb::BLACK, Rgb::BLACK), "the third light goes with the first");
+        assert_eq!(
+            at(&mut fx, 0.6, 2),
+            (Rgb::BLACK, Rgb::BLACK),
+            "the third light goes with the first"
+        );
 
         // Three taking turns is a chase from light to light.
         let three = with(&[
@@ -1152,7 +1176,10 @@ mod tests {
             flashes += u32::from(on && !was);
             was = on;
         }
-        assert!(flashes <= 10, "{flashes} flashes in ten seconds with a limit of one a second");
+        assert!(
+            flashes <= 10,
+            "{flashes} flashes in ten seconds with a limit of one a second"
+        );
         assert!(flashes >= 4, "still taking turns: {flashes}");
     }
 
@@ -1166,10 +1193,12 @@ mod tests {
         fx.update(&still);
         assert!(brightness(fx.shade(0.5, 0.5, &still)) > 0.6);
         assert!(brightness(fx.shade(0.1, 0.5, &still)) < 0.01);
-        let reach = |fx: &Box<dyn Effect>, c: &FrameCtx, y: f32| {
-            (0..200).filter(|i| brightness(fx.shade(*i as f32 / 200.0, y, c)) > 0.05).count()
+        let reach = |fx: &dyn Effect, c: &FrameCtx, y: f32| {
+            (0..200)
+                .filter(|i| brightness(fx.shade(*i as f32 / 200.0, y, c)) > 0.05)
+                .count()
         };
-        assert!(reach(&fx, &still, 0.9) > reach(&fx, &still, 0.2));
+        assert!(reach(&*fx, &still, 0.9) > reach(&*fx, &still, 0.2));
         // A quarter of a sweep on (one beat of four) it leans right; three
         // quarters on, left.
         let lean = |fx: &mut Box<dyn Effect>, t: f64| {
@@ -1184,10 +1213,13 @@ mod tests {
         assert!(lean(&mut fx, 0.5) > 0.7, "{}", lean(&mut fx, 0.5));
         assert!(lean(&mut fx, 1.5) < 0.3, "{}", lean(&mut fx, 1.5));
         // Hung below, the lamp is at the bottom.
-        let below = with(&[("count", ParamValue::Number(1.0)), ("from", ParamValue::Text("Below".into()))]);
+        let below = with(&[
+            ("count", ParamValue::Number(1.0)),
+            ("from", ParamValue::Text("Below".into())),
+        ]);
         let mut fx = make("beams", &below);
         fx.update(&still);
-        assert!(reach(&fx, &still, 0.1) > reach(&fx, &still, 0.8));
+        assert!(reach(&*fx, &still, 0.1) > reach(&*fx, &still, 0.8));
 
         // On a strip each beam is a pool of light that moves.
         let mut fx = make("beams", &one);
@@ -1264,7 +1296,10 @@ mod tests {
         }
         let (near, far) = (fx.shade(0.02, 0.5, &c), fx.shade(0.95, 0.5, &c));
         assert!(near.g > 0.5, "the new note has arrived: {near:?}");
-        assert!(far.r > 0.9 && far.g < 0.1, "the old one is still on its way out: {far:?}");
+        assert!(
+            far.r > 0.9 && far.g < 0.1,
+            "the old one is still on its way out: {far:?}"
+        );
         // From the middle, both ends show the same.
         let middle = with(&[("mode", ParamValue::Text("A trail from the middle".into()))]);
         let mut fx = make("notes", &middle);
@@ -1311,10 +1346,12 @@ mod tests {
         let mut fx = make("glitch", &with(&[("amount", ParamValue::Number(1.0))]));
         let quiet = ctx(0.0, AudioFeatures::default(), false);
         fx.update(&quiet);
-        let lit = |fx: &Box<dyn Effect>, c: &FrameCtx| {
-            (0..400).filter(|i| brightness(fx.shade((i % 20) as f32 / 20.0, (i / 20) as f32 / 20.0, c)) > 0.05).count()
+        let lit = |fx: &dyn Effect, c: &FrameCtx| {
+            (0..400)
+                .filter(|i| brightness(fx.shade((i % 20) as f32 / 20.0, (i / 20) as f32 / 20.0, c)) > 0.05)
+                .count()
         };
-        assert_eq!(lit(&fx, &quiet), 0, "nothing until something hits");
+        assert_eq!(lit(&*fx, &quiet), 0, "nothing until something hits");
         let hit = AudioFeatures {
             active: true,
             onset: 1.0,
@@ -1322,20 +1359,22 @@ mod tests {
         };
         let struck = ctx(0.0, hit, false);
         fx.update(&struck);
-        assert_eq!(lit(&fx, &struck), 400, "everything breaks up at full amount");
+        assert_eq!(lit(&*fx, &struck), 400, "everything breaks up at full amount");
         // A second later it has gone.
         for _ in 0..60 {
             fx.update(&quiet);
         }
-        assert_eq!(lit(&fx, &quiet), 0);
+        assert_eq!(lit(&*fx, &quiet), 0);
         // At a lower amount only some of it lights, and on a strip too.
         let mut fx = make("glitch", &with(&[]));
         fx.update(&quiet);
         fx.update(&struck);
-        let some = lit(&fx, &struck);
+        let some = lit(&*fx, &struck);
         assert!(some > 40 && some < 360, "{some} of 400");
         let strip = ctx(0.0, hit, true);
-        let along = (0..200).filter(|i| brightness(fx.shade(*i as f32 / 200.0, 0.5, &strip)) > 0.05).count();
+        let along = (0..200)
+            .filter(|i| brightness(fx.shade(*i as f32 / 200.0, 0.5, &strip)) > 0.05)
+            .count();
         assert!(along > 10 && along < 190, "{along} of 200");
         // Hits every tenth of a second with a limit of two flashes a
         // second: no more than two glitches a second.
@@ -1407,7 +1446,11 @@ mod tests {
         for _ in 0..40 {
             fx.update(&quiet);
             for i in 0..256 {
-                brightest = brightest.max(brightness(fx.shade((i % 16) as f32 / 16.0, (i / 16) as f32 / 16.0, &quiet)));
+                brightest = brightest.max(brightness(fx.shade(
+                    (i % 16) as f32 / 16.0,
+                    (i / 16) as f32 / 16.0,
+                    &quiet,
+                )));
             }
         }
         assert!(brightest > 0.1 && brightest <= 0.25, "{brightest}");
@@ -1419,10 +1462,12 @@ mod tests {
         let mut fx = make("lava", &with(&[]));
         let c = ctx(0.0, AudioFeatures::default(), false);
         fx.update(&c);
-        let picture = |fx: &Box<dyn Effect>, c: &FrameCtx| -> Vec<f32> {
-            (0..900).map(|i| brightness(fx.shade((i % 30) as f32 / 30.0, (i / 30) as f32 / 30.0, c))).collect()
+        let picture = |fx: &dyn Effect, c: &FrameCtx| -> Vec<f32> {
+            (0..900)
+                .map(|i| brightness(fx.shade((i % 30) as f32 / 30.0, (i / 30) as f32 / 30.0, c)))
+                .collect()
         };
-        let first = picture(&fx, &c);
+        let first = picture(&*fx, &c);
         let lit = first.iter().filter(|v| **v > 0.5).count();
         let dark = first.iter().filter(|v| **v < 0.02).count();
         assert!(lit > 40 && dark > 200, "{lit} lit, {dark} dark of 900");
@@ -1430,11 +1475,14 @@ mod tests {
         for _ in 0..300 {
             fx.update(&c);
         }
-        assert_ne!(picture(&fx, &c), first);
+        assert_ne!(picture(&*fx, &c), first);
         // Bass makes the blobs bigger.
-        let mut fx = make("lava", &with(&[("react", ParamValue::Number(1.0)), ("speed", ParamValue::Number(0.02))]));
+        let mut fx = make(
+            "lava",
+            &with(&[("react", ParamValue::Number(1.0)), ("speed", ParamValue::Number(0.02))]),
+        );
         fx.update(&c);
-        let small = picture(&fx, &c).iter().filter(|v| **v > 0.5).count();
+        let small = picture(&*fx, &c).iter().filter(|v| **v > 0.5).count();
         let bass = AudioFeatures {
             active: true,
             bass: 1.0,
@@ -1444,7 +1492,7 @@ mod tests {
         for _ in 0..60 {
             fx.update(&loud);
         }
-        assert!(picture(&fx, &loud).iter().filter(|v| **v > 0.5).count() > small);
+        assert!(picture(&*fx, &loud).iter().filter(|v| **v > 0.5).count() > small);
         // A strip gets a slice of it.
         let strip = ctx(0.0, AudioFeatures::default(), true);
         assert!((0..200).any(|i| brightness(fx.shade(i as f32 / 200.0, 0.5, &strip)) > 0.5));
@@ -1464,10 +1512,10 @@ mod tests {
         }
         // Somewhere in the first column there is a head with a tail above
         // it that gets dimmer the further up it goes.
-        let column = |fx: &Box<dyn Effect>, c: &FrameCtx| -> Vec<Rgb> {
+        let column = |fx: &dyn Effect, c: &FrameCtx| -> Vec<Rgb> {
             (0..200).map(|row| fx.shade(0.1, row as f32 / 200.0, c)).collect()
         };
-        let now = column(&fx, &c);
+        let now = column(&*fx, &c);
         let head = (0..200).max_by(|a, b| now[*a].r.total_cmp(&now[*b].r)).unwrap();
         assert!(now[head].r > 0.3, "the head is nearly white: {:?}", now[head]);
         if head >= 30 {
@@ -1479,7 +1527,7 @@ mod tests {
         for _ in 0..6 {
             fx.update(&c);
         }
-        assert_ne!(column(&fx, &c), now);
+        assert_ne!(column(&*fx, &c), now);
         // A strip is one column.
         let strip = ctx(0.0, AudioFeatures::default(), true);
         assert!((0..200).any(|i| brightness(fx.shade(i as f32 / 200.0, 0.5, &strip)) > 0.3));
@@ -1489,7 +1537,7 @@ mod tests {
     fn life_goes_on_by_its_rules_and_never_dies_out_for_good() {
         let mut fx = make("life", &with(&[("react", ParamValue::Bool(false))]));
         let c = ctx(0.0, AudioFeatures::default(), false);
-        let alive = |fx: &Box<dyn Effect>, c: &FrameCtx| -> usize {
+        let alive = |fx: &dyn Effect, c: &FrameCtx| -> usize {
             let mut n = 0;
             for row in 0..28 {
                 for col in 0..28 {
@@ -1500,14 +1548,14 @@ mod tests {
             n
         };
         fx.update(&c);
-        let start = alive(&fx, &c);
+        let start = alive(&*fx, &c);
         assert!(start > 100, "a board scattered with life to begin with: {start}");
         // Ten minutes on there is still life, and it has changed.
         let mut counts = Vec::new();
         for frame in 0..36_000 {
             fx.update(&c);
             if frame % 600 == 0 {
-                counts.push(alive(&fx, &c));
+                counts.push(alive(&*fx, &c));
             }
         }
         assert!(counts.iter().all(|n| *n > 10), "{counts:?}");

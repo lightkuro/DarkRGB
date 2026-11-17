@@ -834,12 +834,17 @@ function About() {
         {hello?.build ? ` (build ${hello.build})` : ""}
       </p>
       <p className="hint">
-        A light show controller for WLED devices and for sACN and Art-Net pixel controllers. Free software under
+        A light show controller for WLED devices, sACN and Art-Net pixel controllers, and OpenRGB. Free software under
         the GNU General Public License, version 3 or later: you may use, study, share and change it.
       </p>
       <p className="hint">
         It is built with other people's free software. Their licences are in the file THIRD-PARTY-LICENSES.txt
         that comes with each download.
+      </p>
+      <p className="hint">
+        Thanks to LedFx (GPL-3.0), which darkRGB has been measured against: zones, transitions, blur, colour from
+        the note, the GIF player and several effects are here because LedFx has them. None of its code is used.
+        Thanks also to WLED and to OpenRGB.
       </p>
       <h3>What's new</h3>
       <div className="notes-body">

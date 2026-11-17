@@ -29,12 +29,12 @@ Or start blank. The kind of show only decides what it begins with; everything ca
 
 ## Status
 
-Version 0.10.0, in development. Audio-reactive mode and live control are both complete enough to run a show
-with: twenty-five ready-made scenes, thirty effects, pads, keys and MIDI controllers, autopilot, any slider
-tied to the music, and undo. The timeline plays, records and edits, and has not yet been used for a whole
-show by anyone. This version is about finding your way round: help built in, effects chosen from moving
-tiles, a scene manager with sets of scenes, changing a scene without playing it, and lights that can be
-planned on screen and connected to hardware later.
+Version 0.11.0, in development. Audio-reactive mode and live control are both complete enough to run a show
+with: twenty-five ready-made scenes, thirty-nine effects, pads, keys and MIDI controllers, autopilot, any
+slider tied to the music, and undo. The timeline plays, records and edits, and has not yet been used for a
+whole show by anyone. This version closes much of the gap with LedFx (transitions, blur, the note in the
+music, a GIF and video player, more effects, OpenRGB) and adds ways to play live: Next by the kind of scene
+or by the song, and a Live view whose panels you arrange.
 
 **Nothing here has yet met real LEDs or real music.** Every check so far used simulated devices and a
 synthetic test song. An outside review of 0.6.0 put that first among its concerns; see
@@ -102,11 +102,17 @@ What works today:
 - Scenes, master brightness and blackout. Autopilot changes scene every few bars and when the song changes,
   choosing calm scenes for quiet parts and big ones for drops. When the music stops, the lights can wait in a
   scene of your choosing.
+- Next and Previous, going to the next scene in the list, the next of the same kind (quiet, in between,
+  big), or one that suits the part of the song playing now. Seven ways for one scene to give way to the
+  next: fade, brighten, through black or white, wipe, iris, dissolve.
 - Pads and keys for scenes, effects, folders, groups, blackout, tap tempo, a hand-fired beat, next and previous
   scene, and freeze. A press can switch its thing, act only while held, or fire the effect's reaction.
-- A Live view with all the pads, set up in place and usable by touch, with faders for speed, sensitivity and
-  anything you link to them. Colour pads recolour everything that is playing; pads can be spread over four
-  pages; an XY pad bends two settings with one finger.
+- A Live view made of panels you can move, hide and add, with all the pads, set up in place and usable by
+  touch, and faders for speed, sensitivity and anything you link to them. Pads go in named groups and over
+  four pages; colour pads recolour everything that is playing; an XY pad bends two settings with one finger.
+- GIFs and pieces of video on a matrix, at their own speed or in time with the music.
+- The lights in and around a computer (keyboards, memory, fans) through OpenRGB, beside WLED, sACN and
+  Art-Net.
 - MIDI controllers: any pad can learn a note, and knobs and faders can drive brightness, speed, sensitivity
   and the four faders.
 - A phone or tablet on the same network as a remote, after giving a six-digit code shown on the computer.
@@ -169,6 +175,18 @@ into a 16 by 16 sign with its wiring drawn:
 ![A strip in three named zones with different effects on the edges and the middle](docs/images/zones.png)
 
 ![A matrix's wiring: a drawing of the LED order, snaked, first LED bottom left](docs/images/wiring.png)
+
+New in 0.11.0. Next can keep to one kind of scene or follow the song; the Live view is made of panels you
+arrange, with pads in groups of your own; a GIF or a piece of video plays on a matrix; and nine more
+effects, among them lights that take turns and beams that sway like moving heads:
+
+![The menu beside Next: in order, the same kind, or by the song](docs/images/next.png)
+
+![The Live view being arranged: panels with move and hide buttons, and pads in a group called Flashes](docs/images/live-panels.png)
+
+![A video playing on a matrix, chosen where the effect's settings are](docs/images/movie.png)
+
+![Take turns, Stage beams, Note colours, Waterfall, Glitch, Lava lamp, Code rain and Life](docs/images/effects-0-11.png)
 
 The beat in the Live view: four boxes for the bar, the tempo, and the corrections beside it:
 
@@ -275,6 +293,15 @@ docs/            research, architecture, roadmap
 - [docs/architecture.md](docs/architecture.md): the stack and the core design.
 - [docs/roadmap.md](docs/roadmap.md): what is proven, what comes next, open decisions.
 - [CHANGELOG.md](CHANGELOG.md): what's new in each version.
+
+## Thanks
+
+To [LedFx](https://github.com/LedFx/LedFx) (GPL-3.0), whose features darkRGB has been measured against
+since 0.10.0: zones, the ways of laying an effect on lights, blocks, transitions between scenes, blur,
+pitch to colour, the GIF player and several effects were added because LedFx has them. No LedFx code is
+used here; the list of what was taken, changed and left out is in [docs/research.md](docs/research.md).
+To [WLED](https://kno.wled.ge), which most of the lights this was written for run, and to
+[OpenRGB](https://openrgb.org), whose published protocol the computer-lights output follows.
 
 ## Licence
 

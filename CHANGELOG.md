@@ -1,6 +1,52 @@
 # What's new
 
-## 0.10.0 (in development)
+## 0.11.0 (in development)
+
+Closing the gap with LedFx, and more ways to play a show live. What was taken from LedFx, what was changed
+on the way and what was left out is listed in [docs/research.md](docs/research.md).
+
+Scenes and playing live
+
+- **Next.** A Next button, with Previous, in the scenes bar and in the Live view. It can go to the next
+  scene in the list, to the next of the same kind, or to one that suits the part of the song playing
+  right now. The small arrow beside it chooses, and can jump straight to the next scene for quiet,
+  in-between or big parts.
+- What a scene suits is set in its menu: **Any part**, **Quiet parts**, **In between** (new) or **Big
+  parts**. Autopilot goes by the same.
+- **Discard.** A scene changed without playing it can be put back as it was when you opened it.
+- Number keys can play the scenes of the set in use by their place (key 1 the first, key 2 the second)
+  instead of each scene keeping a key of its own. Settings, Live and keys; offered once you have sets.
+- Seven ways for one scene to give way to the next: a fade, brighten, through black, through white, a
+  wipe across the stage, an iris from its middle, and a dissolve. Settings, Live and keys, once scene
+  changes fade.
+- The Live view is made of panels. Under **Customize** each can be moved earlier or later or hidden,
+  and hidden ones added back. New panels: **Next scene**, and **The song right now** (tempo, how big this
+  part is, and the note). The faders and switches are a panel too.
+- Pads can be put in named groups: pick a pad under Customize and type a group's name.
+
+Effects
+
+- Nine new effects. **Take turns**: halves of a light, or whole lights, flashing one after another.
+  **Stage beams**: beams that sway, cross and fan like moving heads. **Note colours**: the colour follows
+  the tune. **Waterfall**: the sound's low to high notes falling down a matrix. **Glitch**, **Lava lamp**,
+  **Code rain**, **Life**, and **Moving picture**.
+- **Moving picture** plays a GIF or a piece of video on a matrix, at its own speed or one showing to so
+  many beats. Choose the file where the effect's settings are. Video is read by the page itself, so any
+  file your browser plays will do; up to the first minute is kept, without sound.
+- darkRGB now hears the note that stands out in the music. Any slider can follow it ("The note being
+  played"), so any effect's hue can follow the tune.
+- **Blur** softens any effect (full layout).
+
+Lights
+
+- Zones can be cut by percent as well as by numbers of LEDs, with an "Ends and middle" shortcut.
+- A matrix's wiring can be set up in WLED or here. A matrix that WLED reports is left to WLED; choose
+  "Here, in darkRGB" to describe it yourself and keep WLED as one plain strip.
+- A computer's own lights: keyboards, memory, fans and the like, through the free OpenRGB program. In the
+  Lights panel choose **Add a computer's own lights (OpenRGB)**. Written from OpenRGB's published
+  protocol and checked against a stand-in for it; it has not met OpenRGB itself yet.
+
+## 0.10.0
 
 More ways to say what your lights are and how a pattern lies on them. Several came from a comparison with
 LedFx; see [docs/research.md](docs/research.md).

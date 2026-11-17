@@ -53,6 +53,7 @@ const TOPICS: Topic[] = [
         list: [
           "WLED devices on your network appear under \"Add a WLED device\". Press Add. If none appear, type the device's IP address, or scan the network.",
           "sACN and Art-Net pixel controllers: choose \"Add an sACN or Art-Net controller\" and give the address, the first universe and the number of LEDs.",
+          "A computer's own lights (keyboards, memory, fans): start the free OpenRGB program on that computer, switch on its SDK server, and choose \"Add a computer's own lights (OpenRGB)\".",
           "Virtual lights exist only on screen. Choose \"Add a virtual light\", pick a strip or a matrix and its size.",
           "Demo lights are a ready-made set of virtual lights. One switch adds or removes them.",
         ],
@@ -103,6 +104,9 @@ const TOPICS: Topic[] = [
           "After changing a scene, the heading reads \"changed since it was saved\". \"Save changes to…\" keeps the change; pressing the scene's button again throws it away.",
         ],
       },
+      { head: "Next, and what a scene suits" },
+      "Next and Previous are in the scenes bar and in the Live view. The small arrow beside Next chooses where it goes: the next scene in the list, the next of the same kind, or one that suits the part of the song playing right now. Say what a scene suits in its own menu: any part, quiet parts, in between, or big parts. Autopilot goes by the same.",
+      "In Settings, under Live and keys, a change of scene can fade, and the fade can look seven ways: a fade, brighten, through black, through white, a wipe, an iris, a dissolve. With sets of scenes, the number keys can play the scenes of the set in use by their place instead of each scene keeping its own key.",
       { head: "Changing a scene without playing it" },
       "Open the arrow beside a scene and choose \"Change it without playing it\", or use Change in the scene manager. The scene opens in the right panel and the stage shows it, while your real lights go on playing what they were. Press Done to keep the changes, or \"Put it on the lights\" to play it.",
       { head: "The scene manager" },
@@ -127,6 +131,8 @@ const TOPICS: Topic[] = [
       "An effect is one thing happening on the lights: a spectrum, a pulse on the beat, falling snow. A scene is a stack of them; those higher in the list are drawn over those below.",
       { head: "Adding one" },
       "Press \"Add an effect\". Each tile shows what the effect looks like; point at one, or press its ⓘ, to see it move and read what it does. Sections fold from their headings, and the same button closes the list again.",
+      { head: "Pictures that move" },
+      "The effect \"Moving picture\" plays a GIF or a piece of video on a matrix. Choose the file in the effect's settings. It can play at its own speed, or one showing to one, two, four or eight beats. Of a video, up to the first minute is kept, without sound. Files you have used are listed there to choose again.",
       { head: "Its settings" },
       {
         list: [
@@ -142,12 +148,12 @@ const TOPICS: Topic[] = [
       {
         list: [
           "Angle: turn the pattern, in steps of 45° with the two buttons.",
-          "In the full layout: Spin, Mirror, Repeat, Kaleidoscope, Slide along, Blocks (several LEDs act as one), a spread from light to light, and Colour shift.",
+          "In the full layout: Spin, Mirror, Repeat, Kaleidoscope, Slide along, Blocks (several LEDs act as one), Blur (softens it), a spread from light to light, and Colour shift.",
           "Laid on the lights (full layout, for an effect on more than one light): across the stage, by where the lights are; on each light, every light getting the whole effect; or end to end, one line through every LED in the order they are wired.",
         ],
       },
       { head: "Sliders that follow the music" },
-      "In the full layout, the small wave beside a slider ties it to something: loudness, bass, mids, highs, the beat, hits, the song's energy, a shape in time with the music, or a fader in the Live view. \"By how much\" sets the range and Smoothing calms it.",
+      "In the full layout, the small wave beside a slider ties it to something: loudness, bass, mids, highs, the beat, hits, the song's energy, the note being played, a shape in time with the music, or a fader in the Live view. Tie Colour shift to the note and any effect's colours follow the tune. \"By how much\" sets the range and Smoothing calms it.",
       { head: "Folders" },
       "\"New folder\" makes a folder; drag effects onto it. A folder switches or dims everything in it at once, \"Everything inside plays on\" points all its effects at the same lights, and \"Everything inside listens to\" gives them all the same part of the sound. A folder can be kept through scene changes, for things you play by hand.",
       { head: "Listing by lights" },
@@ -184,6 +190,8 @@ const TOPICS: Topic[] = [
           "Customize sets the pads up: give a pad a key, change what a press does, add a pad for any effect, folder or group, or a ready-made flash, strobe or colour.",
           "Blackout, tap tempo, fire a beat, next and previous scene, and freeze all have pads and keys.",
           "Faders: speed, sound sensitivity, and four more that any slider can follow.",
+          "The view is made of panels. Under Customize, the arrows on a panel move it earlier or later and the eye hides it; hidden panels are listed at the bottom to add back. \"The song right now\" shows the tempo, how big this part of the song is, and the note.",
+          "Pads go in groups of your own: under Customize pick a pad and type a group's name. Pads with the same name sit together under it.",
           "Colour pads recolour everything that is playing. Pads can be spread over four pages.",
         ],
       },

@@ -996,11 +996,7 @@ impl Shared {
         // are things to do, not things to hold.
         let never = matches!(
             action,
-            Action::Scene { .. }
-                | Action::TapTempo
-                | Action::NextScene
-                | Action::PrevScene
-                | Action::NextOf { .. }
+            Action::Scene { .. } | Action::TapTempo | Action::NextScene | Action::PrevScene | Action::NextOf { .. }
         );
         if !recording || never {
             return false;
@@ -1319,7 +1315,9 @@ impl Shared {
                     let show = self.show.lock().unwrap();
                     let playing = if blind { last } else { show.current_scene().or(last) };
                     let from = waiting.or(playing);
-                    let mood = from.and_then(|id| show.scenes.iter().find(|s| s.id == id)).map(|s| s.mood);
+                    let mood = from
+                        .and_then(|id| show.scenes.iter().find(|s| s.id == id))
+                        .map(|s| s.mood);
                     let way = show.live.next;
                     let chosen = match action {
                         Action::NextOf { mood } => show.scene_step(from, step, |s| s.mood == mood),
@@ -1546,7 +1544,11 @@ impl Shared {
                 let _ = crate::commands::apply(&mut show, &Command::UpdateScene { id: editing });
             }
             let playing = on_air.unwrap_or_else(|| (show.layers.clone(), show.layer_groups.clone()));
-            let from = show.scenes.iter().find(|s| s.id == id).map(|s| (s.layers.clone(), s.groups.clone()));
+            let from = show
+                .scenes
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| (s.layers.clone(), s.groups.clone()));
             show.recall_scene(id);
             (before, playing, from)
         };
@@ -1704,10 +1706,18 @@ impl Shared {
     /// and ones with no LEDs, are passed over.
     fn add_open_rgb(&self, address: &str) -> Result<Option<String>, String> {
         use darkrgb_output::openrgb;
-        let address = if address.trim().is_empty() { "127.0.0.1" } else { address };
+        let address = if address.trim().is_empty() {
+            "127.0.0.1"
+        } else {
+            address
+        };
         let (host, port) = wled::parse_address(address)?;
         // No port given reads as the web's; OpenRGB has its own.
-        let port = if address.trim().rsplit_once(':').is_some() { port } else { openrgb::PORT };
+        let port = if address.trim().rsplit_once(':').is_some() {
+            port
+        } else {
+            openrgb::PORT
+        };
         let found = openrgb::list(&host, port, Duration::from_secs(3))?;
         if found.is_empty() {
             return Err("OpenRGB answered, but it has found no devices of its own yet".into());
@@ -1728,7 +1738,10 @@ impl Shared {
                 continue;
             }
             let name = commands::name(&controller.name, "The name").unwrap_or_else(|_| "OpenRGB device".into());
-            show.add_device(Device::open_rgb(&name, &host, port, leds, controller.index as u16), None);
+            show.add_device(
+                Device::open_rgb(&name, &host, port, leds, controller.index as u16),
+                None,
+            );
             added += 1;
         }
         if show.validate().is_err() {

@@ -59,7 +59,7 @@ pub fn update_leds(out: &mut Vec<u8>, device: u32, rgb: &[u8]) {
     header(out, device, UPDATE_LEDS, size);
     out.extend_from_slice(&size.to_le_bytes());
     out.extend_from_slice(&(leds as u16).to_le_bytes());
-    for led in rgb.chunks_exact(3).take(leds) {
+    for led in rgb.as_chunks::<3>().0.iter().take(leds) {
         out.extend_from_slice(&[led[0], led[1], led[2], 0]);
     }
 }
@@ -137,7 +137,9 @@ pub fn describe(data: &[u8]) -> Option<(String, u32)> {
         // An LED takes at least six bytes, which bounds where its list
         // can begin.
         let last_start = colours.saturating_sub(2 + 6 * n);
-        (after_name..=last_start).rev().any(|start| word(start) == *n && leds_fill(*n, start + 2, colours))
+        (after_name..=last_start)
+            .rev()
+            .any(|start| word(start) == *n && leds_fill(*n, start + 2, colours))
     })?;
     Some((name, leds as u32))
 }
@@ -250,12 +252,14 @@ fn run(shared: &(Mutex<Waiting>, Condvar), addr: SocketAddr, device: u32) {
             // the frames in between go.
             if stream.is_none() && tried.elapsed() >= Duration::from_secs(1) {
                 tried = Instant::now();
-                stream = TcpStream::connect_timeout(&addr, Duration::from_millis(800)).ok().and_then(|mut s| {
-                    let _ = s.set_write_timeout(Some(Duration::from_millis(500)));
-                    let _ = s.set_nodelay(true);
-                    greeting(&mut packet, Some(device));
-                    s.write_all(&packet).ok().map(|()| s)
-                });
+                stream = TcpStream::connect_timeout(&addr, Duration::from_millis(800))
+                    .ok()
+                    .and_then(|mut s| {
+                        let _ = s.set_write_timeout(Some(Duration::from_millis(500)));
+                        let _ = s.set_nodelay(true);
+                        greeting(&mut packet, Some(device));
+                        s.write_all(&packet).ok().map(|()| s)
+                    });
             }
             if let Some(open) = &mut stream {
                 update_leds(&mut packet, device, &frame);
@@ -330,7 +334,11 @@ mod tests {
             // and a digit before the end of a name reads as a number.
             for leds in [0u16, 1, 4, 16, 52, 87, 300] {
                 let data = description("Shiny keyboard", leds, with_vendor);
-                assert_eq!(describe(&data), Some(("Shiny keyboard".into(), leds as u32)), "{leds} LEDs");
+                assert_eq!(
+                    describe(&data),
+                    Some(("Shiny keyboard".into(), leds as u32)),
+                    "{leds} LEDs"
+                );
             }
         }
         assert_eq!(describe(&[]), None);
@@ -401,10 +409,7 @@ mod tests {
 
     #[test]
     fn devices_are_listed_and_frames_reach_the_one_they_are_for() {
-        let (addr, got) = server(vec![
-            description("Keyboard", 87, true),
-            description("Memory", 8, true),
-        ]);
+        let (addr, got) = server(vec![description("Keyboard", 87, true), description("Memory", 8, true)]);
         let found = list("127.0.0.1", addr.port(), Duration::from_secs(2)).unwrap();
         assert_eq!(
             found,
@@ -460,7 +465,10 @@ mod tests {
             }
         });
         let error = list("127.0.0.1", addr.port(), Duration::from_secs(1)).unwrap_err();
-        assert!(error.contains("not OpenRGB") || error.contains("stopped answering"), "{error}");
+        assert!(
+            error.contains("not OpenRGB") || error.contains("stopped answering"),
+            "{error}"
+        );
         // A link to nowhere takes frames and does nothing with them.
         let link = Link::new(SocketAddr::from(([127, 0, 0, 1], port)), 0);
         for _ in 0..5 {

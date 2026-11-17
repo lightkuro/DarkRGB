@@ -531,7 +531,11 @@ impl Analyzer {
                 // curve through this bin and its neighbours, in decibels.
                 let (la, lb, lc) = (a.max(1e-12).ln(), b.ln(), c.max(1e-12).ln());
                 let bend = la - 2.0 * lb + lc;
-                let shift = if bend < -1e-6 { (0.5 * (la - lc) / bend).clamp(-0.5, 0.5) } else { 0.0 };
+                let shift = if bend < -1e-6 {
+                    (0.5 * (la - lc) / bend).clamp(-0.5, 0.5)
+                } else {
+                    0.0
+                };
                 let hz = (k as f32 + shift) * hz_per_bin;
                 let semitones = 12.0 * (hz / MIDDLE_C_HZ).log2();
                 let nearest = semitones.round();
@@ -544,16 +548,19 @@ impl Analyzer {
         // Follow over about a tenth of a second, so one odd frame does
         // not change the note.
         let rate = 1.0 - (-1.0 / (self.step_rate * 0.10)).exp();
-        for class in 0..12 {
-            let share = if total > 0.0 { now[class] / total } else { 0.0 };
-            self.chroma[class] += (share - self.chroma[class]) * rate;
+        for (kept, heard) in self.chroma.iter_mut().zip(now) {
+            let share = if total > 0.0 { heard / total } else { 0.0 };
+            *kept += (share - *kept) * rate;
         }
         let (best, most) = self
             .chroma
             .iter()
             .copied()
             .enumerate()
-            .fold((0, 0.0f32), |best, (class, share)| if share > best.1 { (class, share) } else { best });
+            .fold(
+                (0, 0.0f32),
+                |best, (class, share)| if share > best.1 { (class, share) } else { best },
+            );
         // Another note has to be clearly ahead to take over, so two notes
         // sounding together do not flicker between each other.
         if best != self.note && most > self.chroma[self.note] * 1.25 {
@@ -1411,7 +1418,11 @@ mod tests {
             assert!(heard.tonal > 0.9, "{hz} Hz: {}", heard.tonal);
         }
         // Other notes, other sample rates, and a note between two keys.
-        for (sr, hz, expected) in [(48_000, 261.63, 0.0), (44_100, 329.63, 4.0 / 12.0), (48_000, 508.36, 11.5 / 12.0)] {
+        for (sr, hz, expected) in [
+            (48_000, 261.63, 0.0),
+            (44_100, 329.63, 4.0 / 12.0),
+            (48_000, 508.36, 11.5 / 12.0),
+        ] {
             let mut analyzer = Analyzer::new(sr);
             feed(&mut analyzer, &sine(hz, 0.3, 1.0, sr));
             let pitch = analyzer.features().pitch;
@@ -1423,7 +1434,11 @@ mod tests {
         feed(&mut analyzer, &sine(261.63, 0.3, 0.6, SR));
         assert!(analyzer.features().pitch < 0.02);
         feed(&mut analyzer, &sine(392.0, 0.3, 0.2, SR));
-        assert!((analyzer.features().pitch - 7.0 / 12.0).abs() < 0.02, "G: {}", analyzer.features().pitch);
+        assert!(
+            (analyzer.features().pitch - 7.0 / 12.0).abs() < 0.02,
+            "G: {}",
+            analyzer.features().pitch
+        );
         // Noise has no note, and silence leaves the last note standing
         // while saying nothing is heard.
         let mut seed = 0x1234_5678u32;

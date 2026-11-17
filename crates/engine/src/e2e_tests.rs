@@ -700,10 +700,12 @@ fn a_scene_can_be_changed_while_the_lights_play_another() {
     );
 
     // Done: the change is kept in Blue, and the panel is back on Red.
-    shared.execute(&Command::FinishEdit {
+    shared
+        .execute(&Command::FinishEdit {
             play: false,
             discard: false,
-        }).unwrap();
+        })
+        .unwrap();
     {
         let show = shared.show.lock().unwrap();
         let kept = show.scenes.iter().find(|s| s.id == blue).unwrap();
@@ -712,10 +714,14 @@ fn a_scene_can_be_changed_while_the_lights_play_another() {
     }
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(colour_at(&sim), [255, 0, 0]);
-    assert!(shared.execute(&Command::FinishEdit {
-            play: false,
-            discard: false,
-        }).is_err());
+    assert!(
+        shared
+            .execute(&Command::FinishEdit {
+                play: false,
+                discard: false,
+            })
+            .is_err()
+    );
     // Changed again and put on the lights this time.
     shared.execute(&Command::EditScene { id: blue }).unwrap();
     colour("#ffffff");

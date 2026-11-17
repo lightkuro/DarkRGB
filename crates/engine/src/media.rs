@@ -63,9 +63,13 @@ pub fn from_gif(name: &str, bytes: &[u8]) -> Result<Movie, String> {
                 }
             }
         }
-        for (dot, out) in canvas.chunks_exact(4).zip(flat.chunks_exact_mut(3)) {
+        for (dot, out) in canvas.as_chunks::<4>().0.iter().zip(flat.as_chunks_mut::<3>().0) {
             // Nothing drawn yet shows as black.
-            out.copy_from_slice(if dot[3] > 0 { &dot[..3] } else { &[0, 0, 0] });
+            *out = if dot[3] > 0 {
+                [dot[0], dot[1], dot[2]]
+            } else {
+                [0, 0, 0]
+            };
         }
         let (w, h, small) = movie::shrink(width as u32, height as u32, 1, &flat);
         (small_w, small_h) = (w, h);
@@ -147,8 +151,15 @@ impl Shared {
             if path.extension().and_then(|e| e.to_str()) != Some(EXT) {
                 continue;
             }
-            let too_big = entry.metadata().map(|m| m.len() as usize > MAX_UPLOAD_BYTES).unwrap_or(true);
-            match (!too_big).then(|| std::fs::read(&path).ok()).flatten().and_then(|b| Movie::read(&b)) {
+            let too_big = entry
+                .metadata()
+                .map(|m| m.len() as usize > MAX_UPLOAD_BYTES)
+                .unwrap_or(true);
+            match (!too_big)
+                .then(|| std::fs::read(&path).ok())
+                .flatten()
+                .and_then(|b| Movie::read(&b))
+            {
                 Some(movie) => {
                     movie::put(movie);
                 }
@@ -260,7 +271,11 @@ mod tests {
         let movie = from_gif("Big", &out).unwrap();
         assert_eq!((movie.width, movie.height), (64, 32));
         assert_eq!(movie.dot(0, 63, 31), [0, 255, 0]);
-        assert_eq!(movie.delays, [DEFAULT_DELAY_MS], "no time given means a tenth of a second");
+        assert_eq!(
+            movie.delays,
+            [DEFAULT_DELAY_MS],
+            "no time given means a tenth of a second"
+        );
     }
 
     #[test]
@@ -271,7 +286,10 @@ mod tests {
         let shared = Shared::new(Show::default(), Some(dir.join("show.json")), None);
         let kept = shared.store_movie("flag.gif", "gif", &two_frame_gif()).unwrap();
         let id = kept["id"].as_str().unwrap().to_string();
-        assert_eq!((kept["name"].as_str(), kept["frames"].as_u64()), (Some("flag.gif"), Some(2)));
+        assert_eq!(
+            (kept["name"].as_str(), kept["frames"].as_u64()),
+            (Some("flag.gif"), Some(2))
+        );
         assert!(shared.movies_status().iter().any(|m| m["id"] == id.as_str()));
         let file = shared.movies_dir().unwrap().join(format!("{id}.{EXT}"));
         assert!(file.is_file());

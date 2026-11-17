@@ -61,7 +61,8 @@ impl Movie {
     /// The colour of one dot of one frame.
     pub fn dot(&self, frame: usize, x: u32, y: u32) -> [u8; 3] {
         let (x, y) = (x.min(self.width - 1), y.min(self.height - 1));
-        let at = (frame.min(self.frames() - 1) * (self.width * self.height) as usize + (y * self.width + x) as usize) * 3;
+        let at =
+            (frame.min(self.frames() - 1) * (self.width * self.height) as usize + (y * self.width + x) as usize) * 3;
         [self.rgb[at], self.rgb[at + 1], self.rgb[at + 2]]
     }
 
@@ -116,7 +117,8 @@ impl Movie {
         let height = u16::from_le_bytes([rest[2], rest[3]]) as u32;
         let frames = u32::from_le_bytes([rest[4], rest[5], rest[6], rest[7]]) as usize;
         let rest = &rest[8..];
-        if !(1..=MAX_SIDE).contains(&width) || !(1..=MAX_SIDE).contains(&height) || !(1..=MAX_FRAMES).contains(&frames) {
+        if !(1..=MAX_SIDE).contains(&width) || !(1..=MAX_SIDE).contains(&height) || !(1..=MAX_FRAMES).contains(&frames)
+        {
             return None;
         }
         // Checked before anything is copied, so a file that lies about
@@ -126,8 +128,10 @@ impl Movie {
         }
         let (delays, rgb) = rest.split_at(frames * 2);
         let delays = delays
-            .chunks_exact(2)
-            .map(|d| u16::from_le_bytes([d[0], d[1]]).clamp(MIN_DELAY_MS, MAX_DELAY_MS))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|d| u16::from_le_bytes(*d).clamp(MIN_DELAY_MS, MAX_DELAY_MS))
             .collect();
         let movie = Self {
             name,
