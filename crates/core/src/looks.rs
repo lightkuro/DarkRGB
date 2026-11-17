@@ -204,17 +204,18 @@ pub const LOOKS: &[Look] = &[
     },
     Look {
         name: "Riff",
-        description: "Red for the bass, orange for the guitars, white for the cymbals, growing from the middle.",
+        description: "A rust-red bar that swells with the bass, with orange sparks for the guitars and drums.",
         mood: Mood::Steady,
         layers: &[LookLayer {
             blend: Blend::Normal,
             ..layer(
-                "lf_energy",
+                "lf_power",
                 &[
-                    ("color_lows", T("#ff1000")),
-                    ("color_mids", T("#ff7000")),
-                    ("color_high", T("#ffffff")),
-                    ("sensitivity", N(0.6)),
+                    ("gradient", T("lf_rust")),
+                    ("sparks", T("#ffa040")),
+                    ("bass_decay", N(0.08)),
+                    ("sparks_decay", N(0.1)),
+                    ("blur", N(2.0)),
                 ],
             )
         }],
@@ -401,7 +402,11 @@ pub const LOOKS: &[Look] = &[
             },
             layer(
                 "lf_pitch_spectrum",
-                &[("gradient", T("lf_borealis")), ("fade", N(0.08))],
+                &[
+                    ("gradient", T("lf_borealis")),
+                    ("fade", N(0.08)),
+                    ("responsiveness", N(0.03)),
+                ],
             ),
         ],
     },
@@ -435,18 +440,17 @@ pub const LOOKS: &[Look] = &[
     },
     Look {
         name: "Warm lift",
-        description: "Soft bars of warm colour growing from the middle with the lows, mids and highs.",
+        description: "Warm colours cascading in from the sides, a new one on every beat.",
         mood: Mood::Big,
         layers: &[LookLayer {
             blend: Blend::Normal,
             ..layer(
-                "lf_energy",
+                "lf_multibar",
                 &[
-                    ("color_lows", T("#ff4000")),
-                    ("color_mids", T("#ffa000")),
-                    ("color_high", T("#fff0c0")),
-                    ("blur", N(8.0)),
-                    ("sensitivity", N(0.4)),
+                    ("gradient", T("lf_sunset")),
+                    ("mode", T("Cascade")),
+                    ("ease", T("Both")),
+                    ("step", N(0.0625)),
                 ],
             )
         }],
@@ -1291,7 +1295,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_look_there_is_lights_a_strip_and_a_matrix() {
+        for matrix in [false, true] {
+            lights_up_with(Kind::Custom, matrix, |show| {
+                for l in LOOKS {
+                    show.add_look(l);
+                }
+            });
+        }
+    }
+
     fn lights_up(kind: Kind, matrix: bool) {
+        lights_up_with(kind, matrix, |show| {
+            show.add_looks();
+        });
+    }
+
+    fn lights_up_with(kind: Kind, matrix: bool, add: impl Fn(&mut Show)) {
         let mut show = Show {
             kind,
             ..Show::default()
@@ -1301,7 +1322,7 @@ mod tests {
         } else {
             show.add_device(Device::wled("strip", "127.0.0.1", 4048, 60), None);
         }
-        show.add_looks();
+        add(&mut show);
         let loud = AudioFeatures {
             level: 0.9,
             bass: 0.9,
