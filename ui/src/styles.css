@@ -4255,3 +4255,23 @@ input.number {
 .scene-actions .spacer {
   flex: 1;
 }
+
+/* ----------------------------------------------------- moving pictures */
+
+.movie-actions {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.movie-actions select,
+.movie-actions .button {
+  width: 100%;
+  min-width: 0;
+}
+
+.movie-actions .button {
+  white-space: normal;
+  text-align: left;
+}

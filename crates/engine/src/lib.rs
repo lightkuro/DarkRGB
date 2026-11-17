@@ -12,6 +12,7 @@ pub mod diagnostics;
 mod e2e_tests;
 pub mod library;
 pub mod live;
+pub mod media;
 pub mod midi;
 pub mod pairing;
 pub mod render_loop;
@@ -124,6 +125,7 @@ impl Engine {
             library.set_current(path);
         }
         let shared = Shared::with_library(show, save_path, notice, library);
+        shared.load_movies();
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)

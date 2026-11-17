@@ -11,6 +11,7 @@ mod extra_effects;
 pub mod font;
 pub mod layout;
 pub mod looks;
+pub mod movie;
 mod more_effects;
 pub mod params;
 pub mod picture;

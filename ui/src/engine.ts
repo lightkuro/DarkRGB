@@ -13,7 +13,7 @@ export interface ParamSpec {
   label: string;
   /** Hidden until the user switches advanced settings on. */
   advanced: boolean;
-  kind: "float" | "color" | "bool" | "choice" | "palette" | "words" | "picture";
+  kind: "float" | "color" | "bool" | "choice" | "palette" | "words" | "picture" | "movie";
   min?: number;
   max?: number;
   step?: number;
@@ -600,6 +600,18 @@ export interface Library {
   shows: ShowEntry[];
   patterns: SavedPattern[];
   palettes: SavedPalette[];
+  /** Moving pictures kept on the engine's computer: GIFs and pieces of video. */
+  movies?: MovieEntry[];
+}
+
+/** A moving picture there is to choose from. */
+export interface MovieEntry {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  frames: number;
+  seconds: number;
 }
 
 export interface AudioFeatures {
@@ -805,6 +817,7 @@ export type Command =
   | { type: "add_look"; name: string }
   | { type: "edit_scene"; id: number }
   | { type: "finish_edit"; play: boolean; discard?: boolean }
+  | { type: "remove_movie"; id: string }
   | { type: "add_scene_set"; name: string }
   | { type: "rename_scene_set"; id: number; name: string }
   | { type: "remove_scene_set"; id: number }
@@ -1078,6 +1091,27 @@ class Engine {
       const response = await fetch(`/api/song?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
       if (response.status === 413) return { ok: false, error: "That file is too large to be a song." };
       return (await response.json()) as CommandResult;
+    } catch {
+      return { ok: false, error: "Could not reach the engine." };
+    }
+  }
+
+  /**
+   * Hands the engine a moving picture to keep: a GIF as it is, or frames
+   * this page made from a video.
+   */
+  async uploadMovie(
+    name: string,
+    kind: "gif" | "frames",
+    body: Blob | Uint8Array,
+  ): Promise<{ ok: boolean; error?: string; movie?: MovieEntry }> {
+    try {
+      const response = await fetch(`/api/movie?kind=${kind}&name=${encodeURIComponent(name)}`, {
+        method: "POST",
+        body: body as BodyInit,
+      });
+      if (response.status === 413) return { ok: false, error: "That file is too large." };
+      return (await response.json()) as { ok: boolean; error?: string; movie?: MovieEntry };
     } catch {
       return { ok: false, error: "Could not reach the engine." };
     }

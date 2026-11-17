@@ -39,6 +39,8 @@ pub enum ParamKind {
     Picture {
         max: u32,
     },
+    /// A moving picture, named by its id (see `movie.rs`).
+    Movie,
 }
 
 /// Describes one parameter so the UI can build a control for it.
@@ -122,6 +124,16 @@ impl ParamSpec {
                 max: crate::picture::MAX_SIDE,
             },
             default: ParamValue::Text(crate::picture::DEFAULT.to_string()),
+            advanced: false,
+        }
+    }
+
+    pub fn movie(id: &'static str, label: &'static str) -> Self {
+        Self {
+            id,
+            label,
+            kind: ParamKind::Movie,
+            default: ParamValue::Text(crate::movie::BUILT_IN.to_string()),
             advanced: false,
         }
     }
@@ -217,6 +229,11 @@ impl<'a> ParamReader<'a> {
 
     /// A picture, as the setting holds it.
     pub fn picture(&self, id: &str) -> &'a str {
+        self.text(id)
+    }
+
+    /// A moving picture's id.
+    pub fn movie(&self, id: &str) -> &'a str {
         self.text(id)
     }
 

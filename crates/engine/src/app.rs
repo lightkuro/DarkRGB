@@ -377,6 +377,7 @@ impl Shared {
                 self.library_rev.send_modify(|r| *r += 1);
                 return Ok(None);
             }
+            Command::RemoveMovie { id } => return self.remove_movie(id),
             Command::Undo => return self.step_history(true),
             Command::Redo => return self.step_history(false),
             Command::MidiLearn { target } => {
@@ -534,6 +535,7 @@ impl Shared {
                     "shows": shows,
                     "patterns": patterns,
                     "palettes": saved.palettes,
+                    "movies": self.movies_status(),
                 })
             }
             None => serde_json::json!({
@@ -543,6 +545,7 @@ impl Shared {
                 "shows": [],
                 "patterns": [],
                 "palettes": [],
+                "movies": self.movies_status(),
             }),
         }
     }

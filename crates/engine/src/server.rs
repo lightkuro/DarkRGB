@@ -85,6 +85,11 @@ fn router(shared: Arc<Shared>, access: Access) -> Router {
             post(song_upload).layer(DefaultBodyLimit::max(MAX_SONG_BYTES)),
         )
         .route("/api/song/{file}", get(song_download))
+        .route(
+            "/api/movie",
+            post(movie_upload).layer(DefaultBodyLimit::max(crate::media::MAX_UPLOAD_BYTES)),
+        )
+        .route("/api/movie/{id}", get(movie_download))
         .route("/api/preview/{effect}", get(effect_preview))
         .route("/api/access", get(access_handler))
         .route("/api/pair", post(pair_handler).layer(DefaultBodyLimit::max(1024)))
@@ -142,6 +147,57 @@ async fn song_upload(
     match outcome {
         Ok(note) => json_response(StatusCode::OK, json!({ "ok": true, "note": note })),
         Err(error) => json_response(StatusCode::BAD_REQUEST, json!({ "ok": false, "error": error })),
+    }
+}
+
+/// Takes a moving picture: a GIF as it is (`kind=gif`), or frames the
+/// page made from a video (`kind=frames`). Who may send one is checked
+/// as for a show file.
+async fn movie_upload(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    body: Bytes,
+) -> Response {
+    let asked_here = allowed(&headers, &state.access) && headers.get(header::ORIGIN).is_some();
+    if !asked_here || !may_control(&headers, peer, &state.access) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let name = query.get("name").cloned().unwrap_or_default();
+    let kind = query.get("kind").cloned().unwrap_or_default();
+    let shared = state.shared.clone();
+    // Decoding a GIF takes a moment: kept off the tasks that serve the preview.
+    let outcome = tokio::task::spawn_blocking(move || shared.store_movie(&name, &kind, &body))
+        .await
+        .unwrap_or_else(|_| Err("the moving picture could not be kept".into()));
+    match outcome {
+        Ok(movie) => json_response(StatusCode::OK, json!({ "ok": true, "movie": movie })),
+        Err(error) => json_response(StatusCode::BAD_REQUEST, json!({ "ok": false, "error": error })),
+    }
+}
+
+/// Hands a kept moving picture to the page, which shows a small copy of
+/// it where one is chosen.
+async fn movie_download(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if !allowed(&headers, &state.access) || !may_control(&headers, peer, &state.access) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match state.shared.movie_bytes(&id) {
+        Some(movie) => (
+            [
+                (header::CONTENT_TYPE, "application/octet-stream"),
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+            ],
+            movie.write(),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 

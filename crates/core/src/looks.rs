@@ -693,6 +693,7 @@ mod tests {
                         (ParamKind::Bool, Value::Bool(_)) => true,
                         (ParamKind::Words { max }, Value::Text(t)) => t.chars().count() <= *max,
                         (ParamKind::Picture { .. }, Value::Text(t)) => crate::picture::Picture::parse(t).is_some(),
+                        (ParamKind::Movie, Value::Text(t)) => crate::movie::id_ok(t),
                         _ => false,
                     };
                     assert!(ok, "{}: {} = {value:?} is not valid for {}", look.name, id, part.effect);

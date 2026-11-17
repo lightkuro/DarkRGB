@@ -289,6 +289,10 @@ pub enum Command {
     ClearTimeline,
     /// Lets go of the timeline's song. Its clips stay.
     RemoveSong,
+    /// Forgets a moving picture kept on this computer.
+    RemoveMovie {
+        id: String,
+    },
     /// Adds or removes the built-in demo lights.
     SetDemo {
         enabled: bool,
@@ -1180,6 +1184,10 @@ fn checked_param(effect: &str, param: &str, value: &ParamValue) -> Result<ParamV
         (ParamKind::Picture { .. }, ParamValue::Text(v)) => Picture::parse(v)
             .map(|picture| ParamValue::Text(picture.write()))
             .ok_or_else(|| format!("that is not a picture of at most {MAX_SIDE} by {MAX_SIDE} dots")),
+        // A moving picture is named by its id. One that is not kept on
+        // this computer is still a valid choice: a show can come from
+        // another, and the effect plays its stand-in until the movie does.
+        (ParamKind::Movie, ParamValue::Text(v)) if darkrgb_core::movie::id_ok(v) => Ok(ParamValue::Text(v.clone())),
         // Words: what was typed, without control characters, cut to length.
         (ParamKind::Words { max }, ParamValue::Text(v)) => Ok(ParamValue::Text(
             v.chars().filter(|c| !c.is_control()).take(*max).collect(),
@@ -1381,7 +1389,8 @@ fn change(show: &mut Show, command: &Command) -> Result<(), String> {
             show.timeline.song = None;
             Ok(())
         }
-        Command::Trigger { .. }
+        Command::RemoveMovie { .. }
+        | Command::Trigger { .. }
         | Command::Perform { .. }
         | Command::Tap
         | Command::Hit

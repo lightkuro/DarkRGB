@@ -9,7 +9,9 @@ use crate::effect::{
     AMBIENT, Effect, EffectDef, EffectInfo, FOLLOWS_SOUND, FlashUse, FrameCtx, HITS_AND_BEATS, HitWatch, hash2,
     smoothstep,
 };
+use crate::movie::{self, Movie};
 use crate::params::{ParamReader, ParamSpec};
+use std::sync::Arc;
 
 pub(crate) fn follows() -> Vec<EffectDef> {
     vec![Notes::def(), Waterfall::def()]
@@ -20,7 +22,7 @@ pub(crate) fn hits_and_beats() -> Vec<EffectDef> {
 }
 
 pub(crate) fn ambient() -> Vec<EffectDef> {
-    vec![Lava::def(), CodeRain::def(), Life::def()]
+    vec![Film::def(), Lava::def(), CodeRain::def(), Life::def()]
 }
 
 // ------------------------------------------------------------- Alternate
@@ -573,6 +575,135 @@ impl Effect for Glitch {
         self.palette
             .sample(hash2(piece, bar ^ self.seed))
             .scale(self.left.sqrt())
+    }
+}
+
+// ----------------------------------------------------------------- Movie
+
+struct Film {
+    /// The id the movie was looked up by, to see when it changes.
+    source: String,
+    movie: Option<Arc<Movie>>,
+    /// Frames since the movie was last looked for, while it is missing.
+    waited: u32,
+    speed: f32,
+    pace: usize,
+    keep_shape: bool,
+    bounce: bool,
+    /// Seconds into the showing, on the effect's own clock.
+    played: f32,
+    frame: usize,
+}
+
+impl Film {
+    const PACES: [&'static str; 5] = ["Its own time", "1 beat", "2 beats", "4 beats", "8 beats"];
+    const BEATS: [f32; 5] = [0.0, 1.0, 2.0, 4.0, 8.0];
+
+    fn def() -> EffectDef {
+        EffectDef {
+            info: EffectInfo {
+                id: "movie",
+                name: "Moving picture",
+                description: "A GIF or a piece of video on a matrix, played round and round, at its own speed or in time with the music.",
+                category: AMBIENT,
+                audio: false,
+                flash: FlashUse::None,
+                params: vec![
+                    ParamSpec::movie("movie", "Moving picture"),
+                    ParamSpec::float("speed", "Speed", 0.1, 4.0, 1.0),
+                    ParamSpec::choice("pace", "One showing takes", &Self::PACES),
+                    ParamSpec::choice("fit", "Fit", &["Stretch to fill", "Keep its shape"]),
+                    ParamSpec::bool("bounce", "There and back", false).advanced(),
+                ],
+            },
+            make: || {
+                Box::new(Film {
+                    source: String::new(),
+                    movie: None,
+                    waited: 0,
+                    speed: 1.0,
+                    pace: 0,
+                    keep_shape: false,
+                    bounce: false,
+                    played: 0.0,
+                    frame: 0,
+                })
+            },
+        }
+    }
+}
+
+impl Effect for Film {
+    fn configure(&mut self, p: &ParamReader) {
+        let source = p.movie("movie");
+        // Compared first: this runs every frame and the movie seldom
+        // changes. One that is not there is looked for again about once
+        // a second, in case it has just been sent.
+        self.waited += 1;
+        if self.source != source || (self.movie.is_none() && self.waited > 60) {
+            self.waited = 0;
+            if self.source != source {
+                self.played = 0.0;
+            }
+            self.source = source.to_string();
+            self.movie = movie::get(source);
+        }
+        self.speed = p.float("speed");
+        self.pace = p.choice("pace");
+        self.keep_shape = p.choice("fit") == 1;
+        self.bounce = p.bool("bounce");
+    }
+
+    fn update(&mut self, ctx: &FrameCtx) {
+        self.played += ctx.dt * self.speed;
+        let Some(movie) = &self.movie else {
+            return;
+        };
+        let length = movie.seconds().max(1e-3);
+        let beats = Self::BEATS[self.pace.min(4)];
+        // How far through one showing, 0..1: by the music's own count
+        // when there is one to go by, else by the effect's clock.
+        let through = if beats > 0.0 && ctx.audio.bpm > 0.0 {
+            (ctx.beats / beats as f64).rem_euclid(1.0) as f32
+        } else {
+            (self.played / length).rem_euclid(1.0)
+        };
+        let through = if self.bounce { 1.0 - (2.0 * through - 1.0).abs() } else { through };
+        self.frame = movie.frame_at(through.min(0.999_99) * length);
+    }
+
+    fn shade(&self, x: f32, y: f32, ctx: &FrameCtx) -> Rgb {
+        // A movie that is not kept on this computer shows as the built-in
+        // one, dimmed, so the lights say something is missing.
+        let (movie, level) = match &self.movie {
+            Some(movie) => (movie.clone(), 1.0),
+            None => match movie::get(movie::BUILT_IN) {
+                Some(stand_in) => (stand_in, 0.25),
+                None => return Rgb::BLACK,
+            },
+        };
+        let frame = if self.movie.is_some() {
+            self.frame
+        } else {
+            movie.frame_at(self.played)
+        };
+        let (mut u, mut v) = (x, y);
+        if ctx.flat {
+            // A strip has one row of lights: it shows the middle row.
+            v = 0.5;
+        } else if self.keep_shape {
+            let (own, room) = (movie.width as f32 / movie.height as f32, ctx.aspect.max(0.01));
+            if own > room {
+                v = (y - 0.5) * (own / room) + 0.5;
+            } else {
+                u = (x - 0.5) * (room / own) + 0.5;
+            }
+        }
+        if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
+            return Rgb::BLACK;
+        }
+        let [r, g, b] = movie.dot(frame, (u * movie.width as f32) as u32, (v * movie.height as f32) as u32);
+        Rgb::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0).scale(level)
     }
 }
 
@@ -1221,6 +1352,66 @@ mod tests {
             was = now;
         }
         assert!((5..=10).contains(&glitches), "{glitches} in five seconds");
+    }
+
+    #[test]
+    fn a_moving_picture_plays_its_frames_in_its_own_time_or_the_musics() {
+        // Two frames of two dots: red then blue on the left, dark on the
+        // right; the first up for a tenth of a second, the second three.
+        let id = movie::put(Movie {
+            name: "Blink".into(),
+            width: 2,
+            height: 1,
+            delays: vec![100, 300],
+            rgb: vec![255, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0],
+        });
+        let chosen = ("movie", ParamValue::Text(id.clone()));
+        let mut fx = make("movie", &with(std::slice::from_ref(&chosen)));
+        let quiet = ctx(0.0, AudioFeatures::default(), false);
+        let (red, blue) = (Rgb::new(1.0, 0.0, 0.0), Rgb::new(0.0, 0.0, 1.0));
+        let mut seen = Vec::new();
+        for _ in 0..24 {
+            fx.update(&quiet);
+            seen.push(fx.shade(0.2, 0.5, &quiet));
+            assert_eq!(fx.shade(0.8, 0.5, &quiet), Rgb::BLACK);
+        }
+        // Six frames of red (a tenth of a second at sixty a second),
+        // eighteen of blue, and round again.
+        assert_eq!(seen.iter().filter(|c| **c == red).count(), 6, "{seen:?}");
+        assert_eq!(seen.iter().filter(|c| **c == blue).count(), 18);
+        assert_eq!(seen[0], red);
+        fx.update(&quiet);
+        assert_eq!(fx.shade(0.2, 0.5, &quiet), red, "round again");
+
+        // One showing to a beat: at 120 the red quarter lasts an eighth
+        // of a second wherever the effect's own clock is.
+        let timed = with(&[chosen.clone(), ("pace", ParamValue::Text("1 beat".into()))]);
+        let mut fx = make("movie", &timed);
+        let at = |fx: &mut Box<dyn Effect>, t: f64| {
+            let c = ctx(t, music(t), false);
+            fx.update(&c);
+            fx.shade(0.2, 0.5, &c)
+        };
+        assert_eq!(at(&mut fx, 0.05), red);
+        assert_eq!(at(&mut fx, 0.2), blue);
+        assert_eq!(at(&mut fx, 0.55), red);
+        assert_eq!(at(&mut fx, 0.05), red, "the music's count decides");
+
+        // A strip shows the middle row; a movie that is not here shows
+        // the stand-in, dimmed, until it arrives.
+        let strip = ctx(0.0, AudioFeatures::default(), true);
+        assert_eq!(fx.shade(0.2, 0.9, &strip), fx.shade(0.2, 0.1, &strip));
+        let missing = with(&[("movie", ParamValue::Text("0123456789abcdef".into()))]);
+        let mut fx = make("movie", &missing);
+        let mut brightest = 0.0f32;
+        for _ in 0..40 {
+            fx.update(&quiet);
+            for i in 0..256 {
+                brightest = brightest.max(brightness(fx.shade((i % 16) as f32 / 16.0, (i / 16) as f32 / 16.0, &quiet)));
+            }
+        }
+        assert!(brightest > 0.1 && brightest <= 0.25, "{brightest}");
+        movie::remove(&id);
     }
 
     #[test]

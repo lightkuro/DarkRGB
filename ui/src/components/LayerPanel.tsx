@@ -59,6 +59,7 @@ import {
 import { KeyAssign, Keycap } from "./Keys";
 import { ANGLE, HUE, LinkedSlider, STRENGTH } from "./Links";
 import { ConfirmButton, IconButton, NameField, Slider, Switch, useDismiss } from "./ui";
+import { MovieField } from "./MovieField";
 import { PictureField } from "./PictureField";
 import { EffectPicker } from "./EffectTiles";
 import { NameButton, SceneHead } from "./ScenePanel";
@@ -392,6 +393,8 @@ function ParamControl({ layer, spec, full }: { layer: Layer; spec: ParamSpec; fu
       return <PalettePicker label={spec.label} value={String(value)} onChange={set} />;
     case "picture":
       return <PictureField spec={spec} value={String(value)} layer={layer.id} />;
+    case "movie":
+      return <MovieField spec={spec} value={String(value)} layer={layer.id} />;
     case "words":
       return (
         <label className="field">
