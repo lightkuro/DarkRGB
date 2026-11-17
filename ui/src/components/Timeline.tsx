@@ -316,6 +316,7 @@ export function TimelineView() {
     begin(e, { kind: "move", grabbed: clip.id, at: timeAt(e), starts });
   };
 
+  const [dropping, setDropping] = useState(false);
   const chooseSong = async (file: File | undefined) => {
     if (!file) return;
     setBusy(true);
@@ -344,7 +345,26 @@ export function TimelineView() {
   };
 
   return (
-    <section className="timeline" aria-label="Timeline">
+    <section
+      className={`timeline${dropping ? " dropping" : ""}`}
+      aria-label="Timeline"
+      onDragOver={(e) => {
+        if ([...e.dataTransfer.items].some((i) => i.kind === "file")) {
+          e.preventDefault();
+          setDropping(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDropping(false);
+      }}
+      onDrop={(e) => {
+        const file = [...e.dataTransfer.files][0];
+        if (!file) return;
+        e.preventDefault();
+        setDropping(false);
+        void chooseSong(file);
+      }}
+    >
       <div className="timeline-bar">
         <Transport />
         <div className="tool-group">
@@ -405,6 +425,22 @@ export function TimelineView() {
           </ConfirmButton>
         )}
       </div>
+      {!timeline.song && (
+        <div className="song-drop">
+          <Music size={22} aria-hidden />
+          <div>
+            <strong>Add a song</strong>
+            <p className="hint">
+              Drop an MP3, WAV, OGG or FLAC file anywhere here, or choose one. It plays from this window when you press
+              Play, the lights hear it like any other sound, and the timeline takes its length and tempo.
+            </p>
+          </div>
+          <button type="button" className="button" disabled={busy} onClick={() => fileInput.current?.click()}>
+            {busy ? "Taking the song…" : "Choose a song…"}
+          </button>
+        </div>
+      )}
+      {dropping && <div className="drop-hint">Let go to use this song</div>}
       {info?.blocked && <p className="callout">Click anywhere in this window to let the song play.</p>}
       {info?.state === "failed" && <p className="callout error">This computer could not play that song file. The timeline still runs, in silence. WAV, OGG and FLAC files work everywhere.</p>}
 

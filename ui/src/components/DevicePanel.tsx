@@ -21,6 +21,10 @@ import {
   Search,
   Settings2,
   Trash2,
+  SlidersHorizontal,
+  MousePointer2,
+  LayoutList,
+  Power,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -44,10 +48,12 @@ import {
   type Fixture,
   type LightGroup,
   type Show,
+  stageModePref,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
 import { shaping } from "./ShapeEditor";
 import { ConfirmButton, IconButton, NameField, Slider, Switch } from "./ui";
+import { openMenu, SEPARATOR } from "./ContextMenu";
 
 function describe(fixtures: Fixture[], device: Device): string {
   const own = fixtures.filter((f) => f.device === device.id);
@@ -833,7 +839,23 @@ function DeviceRow({
             if (!e.shiftKey) setOpen(!open);
           }}
           aria-expanded={open}
-          title="Settings for this light. Shift+click to pick several."
+          title="Settings for this light. Shift+click to pick several. Right-click for more."
+          onContextMenu={(e) =>
+            openMenu(
+              e,
+              [
+                { label: open ? "Close its settings" : "Open its settings", icon: <SlidersHorizontal size={13} />, action: () => setOpen(!open) },
+                { label: "Pick it on the stage", icon: <MousePointer2 size={13} />, action: () => select(own.map((f) => f.id)) },
+                { label: "See it light by light", icon: <LayoutList size={13} />, action: () => stageModePref.set("lights") },
+                ...(device.kind !== "virtual"
+                  ? [{ label: device.enabled ? "Pause sending to it" : "Send to it again", icon: <Power size={13} />, action: () => engine.send({ type: "update_device", id: device.id, enabled: !device.enabled }) }]
+                  : []),
+                SEPARATOR,
+                { label: "Remove the light", icon: <Trash2 size={13} />, danger: true, action: () => engine.send({ type: "remove_device", id: device.id }) },
+              ],
+              device.name,
+            )
+          }
         >
           {!onGrip && <ChevronRight size={14} className="chevron" />}
           {matrix ? <Grid3x3 size={15} aria-hidden /> : <Minus size={15} aria-hidden />}

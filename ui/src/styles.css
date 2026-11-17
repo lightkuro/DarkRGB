@@ -4580,3 +4580,85 @@ input.number {
   max-height: 60vh;
   overflow-y: auto;
 }
+
+/* ------------------------------------- live: pad editor by its pad, dragging */
+
+.pads {
+  position: relative;
+}
+
+.pad-popover {
+  position: absolute;
+  z-index: 25;
+  width: min(460px, calc(100% - 16px));
+  box-shadow: var(--shadow);
+  border-radius: var(--radius);
+}
+
+.pad-popover .pad-editor {
+  max-width: none;
+}
+
+.pad-popover-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+}
+
+.pad-group h2.draggable {
+  cursor: grab;
+}
+
+.pad-group h2 .grip {
+  margin-right: 4px;
+  color: var(--faint);
+}
+
+.pad.editing[draggable="true"] {
+  cursor: grab;
+}
+
+/* ---------------------------------------------- timeline: adding a song */
+
+.song-drop {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 8px 12px;
+  padding: 14px 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.song-drop > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.song-drop .hint {
+  margin: 2px 0 0;
+}
+
+.timeline {
+  position: relative;
+}
+
+.timeline.dropping {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+.drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+  pointer-events: none;
+}

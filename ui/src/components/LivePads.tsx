@@ -23,8 +23,11 @@ import {
   Sparkles,
   Trash2,
   Zap,
+  GripVertical,
+  Keyboard,
+  X,
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   engine,
   onPage,
@@ -53,6 +56,7 @@ import { Slider, Switch, useDismiss } from "./ui";
 import { Transport } from "./Timeline";
 import { BeatBar } from "./Beat";
 import { NEXT_WAYS } from "./Settings";
+import { openMenu, SEPARATOR } from "./ContextMenu";
 
 const setSpeed = perFrame((speed: number) => engine.quiet({ type: "set_live", speed }));
 const setSensitivity = perFrame((sensitivity: number) => engine.quiet({ type: "set_audio", sensitivity }));
@@ -203,10 +207,19 @@ interface PadProps {
   /** Customizing: a click selects the pad instead of pressing it. */
   editing?: boolean;
   selected?: boolean;
-  onSelect?: () => void;
+  onSelect?: (el: HTMLElement) => void;
+  /** Right-click: what can be done with this pad. */
+  onMenu?: (e: React.MouseEvent) => void;
+  /** While customizing, a pad that can be moved is dragged by these. */
+  drag?: {
+    onDragStart: (e: React.DragEvent) => void;
+    onDragOver: (e: React.DragEvent) => void;
+    onDrop: (e: React.DragEvent) => void;
+    onDragEnd: () => void;
+  };
 }
 
-function Pad({ action, show, hello, note, lit, waiting, tone, editing, selected, onSelect }: PadProps) {
+function Pad({ action, show, hello, note, lit, waiting, tone, editing, selected, onSelect, onMenu, drag }: PadProps) {
   const live = useLive();
   const binding = show.bindings.find((b) => sameAction(b.action, action));
   const held = binding ? live.held.includes(binding.id) : false;
@@ -248,7 +261,16 @@ function Pad({ action, show, hello, note, lit, waiting, tone, editing, selected,
   );
   if (editing) {
     return (
-      <button type="button" className={classes} aria-pressed={selected} onClick={onSelect}>
+      <button
+        type="button"
+        className={classes}
+        aria-pressed={selected}
+        onClick={(e) => onSelect?.(e.currentTarget)}
+        onContextMenu={onMenu}
+        draggable={drag !== undefined}
+        title={drag ? "Drag to move it, or into another group. Click to set it up." : undefined}
+        {...drag}
+      >
         {body}
       </button>
     );
@@ -257,6 +279,7 @@ function Pad({ action, show, hello, note, lit, waiting, tone, editing, selected,
     <button
       type="button"
       className={classes}
+      onContextMenu={onMenu}
       disabled={missing}
       aria-pressed={on}
       title={
@@ -597,6 +620,23 @@ export function LivePads() {
   const current = useCurrentScene();
   const [customizing, setCustomizing] = useState(false);
   const [selected, setSelected] = useState<Action | null>(null);
+  // Where the editor of the pad being set up sits: under that pad, in the
+  // scrolling area, so it moves with it.
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
+  const area = useRef<HTMLElement>(null);
+  const popover = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<{ kind: "pad" | "panel"; id: string } | null>(null);
+  useEffect(() => {
+    popover.current?.scrollIntoView({ block: "nearest" });
+  }, [anchor]);
+  useEffect(() => {
+    if (!selected) return;
+    const close = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSelected(null);
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [selected]);
   if (!show || !hello) return null;
 
   const page = show.live.page ?? 1;
@@ -609,8 +649,99 @@ export function LivePads() {
   const edit = (action: Action) => ({
     editing: customizing,
     selected: isSelected(action),
-    onSelect: () => setSelected(isSelected(action) ? null : action),
+    onSelect: (el: HTMLElement) => {
+      if (isSelected(action)) return setSelected(null);
+      const box = area.current?.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
+      if (box && area.current) {
+        const width = Math.min(460, box.width - 16);
+        setAnchor({
+          top: rect.bottom - box.top + area.current.scrollTop + 6,
+          left: Math.max(8, Math.min(rect.left - box.left, box.width - width - 8)),
+        });
+      }
+      setSelected(action);
+    },
+    onMenu: (e: React.MouseEvent) => padMenu(e, action),
   });
+  const binding = (action: Action) => show.bindings.find((b) => sameAction(b.action, action));
+  // Right-click on any pad: set it up, or the quick things.
+  const padMenu = (e: React.MouseEvent, action: Action) => {
+    const b = binding(action);
+    const { name } = describe(action, show, hello);
+    const target = e.currentTarget as HTMLElement;
+    openMenu(
+      e,
+      [
+        {
+          label: "Set it up",
+          icon: <Pencil size={13} />,
+          action: () => {
+            setCustomizing(true);
+            // Placed once the pads have redrawn for customizing.
+            requestAnimationFrame(() => edit(action).onSelect(target));
+          },
+        },
+        ...(b?.key
+          ? [{ label: "Take its key away", icon: <Keyboard size={13} />, action: () => engine.send({ type: "clear_key", id: b.id }) }]
+          : []),
+        ...(b && PAD_KINDS.includes(action.type)
+          ? [SEPARATOR, { label: "Remove the pad", icon: <Trash2 size={13} />, danger: true, action: () => engine.send({ type: "unbind", id: b.id }) }]
+          : []),
+      ],
+      name,
+    );
+  };
+  // Dragging a pad: before another pad, into its group; or onto a group's
+  // empty space, to its end.
+  const ordered = show.bindings.map((b) => b.id);
+  const movePad = (id: number, before: number | null, section: string) => {
+    const moving = show.bindings.find((b) => b.id === id);
+    if (!moving) return;
+    const order = ordered.filter((x) => x !== id);
+    if (before !== null && before !== id) {
+      order.splice(order.indexOf(before), 0, id);
+    } else {
+      // After the last pad of the group, or at the end.
+      const last = [...show.bindings].reverse().find((b) => b.id !== id && (b.section ?? "") === section && PAD_KINDS.includes(b.action.type));
+      order.splice(last ? order.indexOf(last.id) + 1 : order.length, 0, id);
+    }
+    engine.send({ type: "arrange_pads", order });
+    if ((moving.section ?? "") !== section) engine.send({ type: "set_pad_section", id, section });
+  };
+  const padDrag = (b: { id: number; section?: string }) =>
+    customizing
+      ? {
+          onDragStart: (e: React.DragEvent) => {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", `pad:${b.id}`);
+            setDragging({ kind: "pad", id: String(b.id) });
+          },
+          onDragOver: (e: React.DragEvent) => {
+            if (dragging?.kind === "pad") e.preventDefault();
+          },
+          onDrop: (e: React.DragEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (dragging?.kind === "pad") movePad(Number(dragging.id), b.id, b.section ?? "");
+            setDragging(null);
+          },
+          onDragEnd: () => setDragging(null),
+        }
+      : undefined;
+  const groupDrop = (section: string) =>
+    customizing
+      ? {
+          onDragOver: (e: React.DragEvent) => {
+            if (dragging?.kind === "pad") e.preventDefault();
+          },
+          onDrop: (e: React.DragEvent) => {
+            e.preventDefault();
+            if (dragging?.kind === "pad") movePad(Number(dragging.id), null, section);
+            setDragging(null);
+          },
+        }
+      : {};
   // The pad being set up may have been removed meanwhile.
   const selectedExists =
     selected !== null &&
@@ -635,7 +766,30 @@ export function LivePads() {
     const at = shown.indexOf(id);
     const name = PANELS.find((p) => p.id === id)?.name ?? id;
     return (
-      <h2>
+      <h2
+        draggable={customizing}
+        className={customizing ? "draggable" : undefined}
+        title={customizing ? "Drag to move this panel" : undefined}
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", `panel:${id}`);
+          setDragging({ kind: "panel", id });
+        }}
+        onDragEnd={() => setDragging(null)}
+        onDragOver={(e) => {
+          if (dragging?.kind === "panel") e.preventDefault();
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (dragging?.kind === "panel" && dragging.id !== id) {
+            const next = shown.filter((p) => p !== dragging.id);
+            next.splice(next.indexOf(id), 0, dragging.id);
+            arrange(next);
+          }
+          setDragging(null);
+        }}
+      >
+        {customizing && <GripVertical size={13} className="grip" aria-hidden />}
         {name}
         {extra}
         {customizing && (
@@ -669,7 +823,7 @@ export function LivePads() {
   );
 
   return (
-    <section className={`pads ${customizing ? "customizing" : ""}`} aria-label="Live pads">
+    <section className={`pads ${customizing ? "customizing" : ""}`} aria-label="Live pads" ref={area}>
       <div className="pads-bar">
         <button
           type="button"
@@ -710,13 +864,18 @@ export function LivePads() {
         )}
       </div>
       {customizing && selected && selectedExists && (
-        <PadEditor
-          key={`${selected.type}-${"id" in selected ? selected.id : ""}`}
-          action={selected}
-          show={show}
-          hello={hello}
-          movable={PAD_KINDS.includes(selected.type)}
-        />
+        <div className="pad-popover" ref={popover} style={anchor ?? { top: 40, left: 8 }}>
+          <button type="button" className="icon-button pad-popover-close" aria-label="Close" onClick={() => setSelected(null)}>
+            <X size={14} />
+          </button>
+          <PadEditor
+            key={`${selected.type}-${"id" in selected ? selected.id : ""}`}
+            action={selected}
+            show={show}
+            hello={hello}
+            movable={PAD_KINDS.includes(selected.type)}
+          />
+        </div>
       )}
 
       {shown.map((panel) => {
@@ -856,9 +1015,9 @@ export function LivePads() {
       <Fragment key="pads">
         <div className="pad-group">
           {head("pads")}
-          <div className="pad-grid">
+          <div className="pad-grid" {...groupDrop("")}>
             {loose.map((binding) => (
-              <Pad key={binding.id} action={binding.action} show={show} hello={hello} {...edit(binding.action)} />
+              <Pad key={binding.id} action={binding.action} show={show} hello={hello} {...edit(binding.action)} drag={padDrag(binding)} />
             ))}
             {customizing && <AddPad show={show} hello={hello} onAdded={setSelected} />}
           </div>
@@ -872,11 +1031,11 @@ export function LivePads() {
         {sections.map((section) => (
           <div className="pad-group" key={section}>
             <h2>{section}</h2>
-            <div className="pad-grid">
+            <div className="pad-grid" {...groupDrop(section)}>
               {pads
                 .filter((b) => b.section === section)
                 .map((binding) => (
-                  <Pad key={binding.id} action={binding.action} show={show} hello={hello} {...edit(binding.action)} />
+                  <Pad key={binding.id} action={binding.action} show={show} hello={hello} {...edit(binding.action)} drag={padDrag(binding)} />
                 ))}
             </div>
           </div>

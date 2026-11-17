@@ -19,6 +19,7 @@ import {
   ZapOff,
   EyeOff,
   LayoutList,
+  Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
@@ -44,6 +45,7 @@ import { AddByAddress, AddPixels, AngleField, FoundDevices } from "./DevicePanel
 import { shaping } from "./ShapeEditor";
 import { KindCards } from "./KindCards";
 import { clock } from "./Settings";
+import { openMenu, SEPARATOR } from "./ContextMenu";
 
 type Drag =
   | { kind: "pan"; startX: number; startY: number; view: View; moved: boolean }
@@ -466,6 +468,19 @@ export function Stage() {
                   const moving = isPicked ? chosen : [f];
                   if (!isPicked) select([f.id]);
                   begin(e, { kind: "move", startX: e.clientX, startY: e.clientY, fixtures: moving });
+                }}
+                onContextMenu={(e) => {
+                  if (!isPicked) select([f.id]);
+                  openMenu(
+                    e,
+                    [
+                      { label: "Turn a quarter turn", icon: <RotateCw size={13} />, action: () => engine.send({ type: "update_fixture", id: f.id, rotation: (f.rotation + 90) % 360 }) },
+                      { label: "See it light by light", icon: <LayoutList size={13} />, action: () => stageModePref.set("lights") },
+                      SEPARATOR,
+                      { label: "Remove the light", icon: <Trash2 size={13} />, danger: true, action: () => engine.send({ type: "remove_device", id: f.device }) },
+                    ],
+                    f.name,
+                  );
                 }}
                 onDoubleClick={() => {
                   // The whole group this light is filed under.

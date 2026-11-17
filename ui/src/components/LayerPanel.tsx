@@ -26,6 +26,7 @@ import {
   SlidersHorizontal,
   Trash2,
   X,
+  LayoutList,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -57,6 +58,7 @@ import {
   type Show,
   openEffect,
   useOpenEffect,
+  stageModePref,
 } from "../engine";
 import { KeyAssign, Keycap } from "./Keys";
 import { ANGLE, HUE, LinkedSlider, STRENGTH } from "./Links";
@@ -65,6 +67,7 @@ import { MovieField } from "./MovieField";
 import { PictureField } from "./PictureField";
 import { EffectPicker } from "./EffectTiles";
 import { NameButton, SceneHead } from "./ScenePanel";
+import { openMenu, SEPARATOR } from "./ContextMenu";
 
 export { EffectPicker };
 
@@ -1521,7 +1524,27 @@ export function LayerPanel() {
           drag?.kind === "layer" && drag.id === layer.id ? "lifted" : ""
         } ${dropClass(`l:${layer.id}`)}`}
       >
-        <div className="layer-row">
+        <div
+          className="layer-row"
+          onContextMenu={(e) =>
+            openMenu(
+              e,
+              [
+                { label: isOpen ? "Close its settings" : "Open its settings", icon: <SlidersHorizontal size={13} />, action: () => setOpen(isOpen ? null : layer.id) },
+                {
+                  label: layer.enabled ? "Switch it off" : "Switch it on",
+                  icon: layer.enabled ? <EyeOff size={13} /> : <Eye size={13} />,
+                  action: () => engine.send({ type: "update_layer", id: layer.id, enabled: !layer.enabled }),
+                },
+                { label: "Make a copy", icon: <Copy size={13} />, action: () => engine.send({ type: "duplicate_layer", id: layer.id }) },
+                { label: "See the lights one by one", icon: <LayoutList size={13} />, action: () => stageModePref.set("lights") },
+                SEPARATOR,
+                { label: "Remove it", icon: <Trash2 size={13} />, danger: true, action: () => engine.send({ type: "remove_layer", id: layer.id }) },
+              ],
+              title,
+            )
+          }
+        >
           {canDrag && (
             <span
               className="grip"

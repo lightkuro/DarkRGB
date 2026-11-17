@@ -13,6 +13,7 @@ import {
   SkipForward,
   Sparkles,
   Trash2,
+  Play,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -33,6 +34,7 @@ import { KeyAssign, Keycap } from "./Keys";
 import { NEXT_WAYS } from "./Settings";
 import { NameButton, managingScenes } from "./ScenePanel";
 import { ConfirmButton, NameField, Switch, useDismiss } from "./ui";
+import { openMenu, SEPARATOR } from "./ContextMenu";
 
 function SaveScene() {
   return (
@@ -331,6 +333,21 @@ export function ScenesBar() {
                 title={waiting ? `${scene.name} starts on the beat` : `Switch to ${scene.name}`}
                 aria-pressed={playing === scene.id}
                 onClick={() => engine.send({ type: "recall_scene", id: scene.id })}
+                onContextMenu={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  openMenu(
+                    e,
+                    [
+                      { label: "Play it", icon: <Play size={13} />, action: () => engine.send({ type: "recall_scene", id: scene.id }) },
+                      { label: "Change it without playing it", icon: <Pencil size={13} />, action: () => engine.send({ type: "edit_scene", id: scene.id }) },
+                      { label: "Update it with what is playing", icon: <RefreshCw size={13} />, action: () => engine.send({ type: "save_scene", name: scene.name }) },
+                      { label: "Name, key and kind…", icon: <ChevronUp size={13} />, action: () => setMenu({ id: scene.id, left: Math.max(8, Math.min(rect.left - 120, window.innerWidth - 300)) }) },
+                      SEPARATOR,
+                      { label: "Delete it", icon: <Trash2 size={13} />, danger: true, action: () => engine.send({ type: "delete_scene", id: scene.id }) },
+                    ],
+                    scene.name,
+                  );
+                }}
               >
                 {byPlace && place < 9 ? (
                   <kbd className="keycap" title={`Number key ${place + 1} plays it while this set is in use`}>
